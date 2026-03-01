@@ -194,9 +194,9 @@ defmodule ExDataSketch.Codec do
 
   defp decode_body(version, sketch_id, <<params_len::unsigned-little-32, rest::binary>>) do
     case rest do
-      <<params::binary-size(params_len), state_len::unsigned-little-32, rest2::binary>> ->
+      <<params::binary-size(^params_len), state_len::unsigned-little-32, rest2::binary>> ->
         case rest2 do
-          <<state::binary-size(state_len)>> ->
+          <<state::binary-size(^state_len)>> ->
             {:ok,
              %{
                version: version,
@@ -205,7 +205,7 @@ defmodule ExDataSketch.Codec do
                state: state
              }}
 
-          <<_state::binary-size(state_len), _trailing::binary>> ->
+          <<_state::binary-size(^state_len), _trailing::binary>> ->
             {:error, DeserializationError.exception(reason: "trailing bytes after state segment")}
 
           _ ->

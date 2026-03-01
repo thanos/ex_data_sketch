@@ -37,6 +37,12 @@ defmodule ExDataSketch.HLL do
   - `:p` - precision parameter, integer 4..16 (default: 14)
   - `:backend` - backend module (default: `ExDataSketch.Backend.Pure`)
 
+  ## Merge Properties
+
+  HLL merge is **associative** and **commutative** (register-wise max).
+  This means sketches can be merged in any order or grouping and produce the
+  same result, making HLL safe for parallel and distributed aggregation.
+
   ## Phase 0 Status
 
   All functions are stubs that raise `ExDataSketch.Errors.NotImplementedError`.
@@ -139,7 +145,7 @@ defmodule ExDataSketch.HLL do
   register-wise maximum, which corresponds to the union of the two input
   multisets.
 
-  Returns the merged sketch. Raises `ExDataSketch.Errors.IncompatibleSketches`
+  Returns the merged sketch. Raises `ExDataSketch.Errors.IncompatibleSketchesError`
   if the sketches have different parameters.
 
   ## Examples
@@ -159,7 +165,7 @@ defmodule ExDataSketch.HLL do
         %__MODULE__{state: state_b, opts: opts_b}
       ) do
     if opts_a[:p] != opts_b[:p] do
-      raise Errors.IncompatibleSketches,
+      raise Errors.IncompatibleSketchesError,
         reason: "HLL precision mismatch: #{opts_a[:p]} vs #{opts_b[:p]}"
     end
 
@@ -297,12 +303,88 @@ defmodule ExDataSketch.HLL do
     Errors.not_implemented!(__MODULE__, "deserialize_datasketches")
   end
 
+  @doc """
+  Creates a new HLL sketch from an enumerable of items.
+
+  Equivalent to `new(opts) |> update_many(enumerable)`.
+
+  ## Options
+
+  Same as `new/1`.
+
+  ## Examples
+
+      iex> try do
+      ...>   ExDataSketch.HLL.from_enumerable(["a", "b", "c"])
+      ...> rescue
+      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
+      ...> end
+      "ExDataSketch.Backend.Pure.hll_new is not yet implemented"
+
+  """
+  @spec from_enumerable(Enumerable.t(), keyword()) :: t()
+  def from_enumerable(enumerable, opts \\ []) do
+    new(opts) |> update_many(enumerable)
+  end
+
+  @doc """
+  Merges a non-empty enumerable of HLL sketches into one.
+
+  Raises `Enum.EmptyError` if the enumerable is empty.
+
+  ## Examples
+
+      iex> try do
+      ...>   ExDataSketch.HLL.merge_many([ExDataSketch.HLL.new()])
+      ...> rescue
+      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
+      ...> end
+      "ExDataSketch.Backend.Pure.hll_new is not yet implemented"
+
+  """
+  @spec merge_many(Enumerable.t()) :: t()
+  def merge_many(sketches) do
+    Enum.reduce(sketches, fn sketch, acc -> merge(acc, sketch) end)
+  end
+
+  @doc """
+  Returns a 2-arity reducer function suitable for `Enum.reduce/3` and similar.
+
+  The returned function calls `update/2` on each item.
+
+  ## Examples
+
+      iex> is_function(ExDataSketch.HLL.reducer(), 2)
+      true
+
+  """
+  @spec reducer() :: (term(), t() -> t())
+  def reducer do
+    fn item, sketch -> update(sketch, item) end
+  end
+
+  @doc """
+  Returns a 2-arity merge function suitable for combining sketches.
+
+  The returned function calls `merge/2` on two sketches.
+
+  ## Examples
+
+      iex> is_function(ExDataSketch.HLL.merger(), 2)
+      true
+
+  """
+  @spec merger(keyword()) :: (t(), t() -> t())
+  def merger(_opts \\ []) do
+    fn a, b -> merge(a, b) end
+  end
+
   # -- Private --
 
   defp validate_p!(p) when is_integer(p) and p >= @min_p and p <= @max_p, do: :ok
 
   defp validate_p!(p) do
-    raise Errors.InvalidOption,
+    raise Errors.InvalidOptionError,
       option: :p,
       value: p,
       message: "p must be an integer between #{@min_p} and #{@max_p}, got: #{inspect(p)}"

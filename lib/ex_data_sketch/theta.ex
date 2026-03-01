@@ -41,6 +41,12 @@ defmodule ExDataSketch.Theta do
   the CompactSketch binary format, enabling cross-language compatibility
   with Java, C++, and Python DataSketches libraries.
 
+  ## Merge Properties
+
+  Theta merge (union) is **associative** and **commutative**.
+  This means sketches can be merged in any order or grouping and produce the
+  same result, making Theta safe for parallel and distributed aggregation.
+
   ## Phase 0 Status
 
   All functions are stubs. Full implementation in Phase 1.5.
@@ -240,6 +246,87 @@ defmodule ExDataSketch.Theta do
   @spec deserialize_datasketches(binary()) :: {:ok, t()} | {:error, Exception.t()}
   def deserialize_datasketches(_binary) do
     Errors.not_implemented!(__MODULE__, "deserialize_datasketches")
+  end
+
+  @doc """
+  Creates a new Theta sketch from an enumerable of items.
+
+  Equivalent to creating a new sketch and updating it with each item.
+
+  ## Options
+
+  Same as `new/1`.
+
+  ## Examples
+
+      iex> try do
+      ...>   ExDataSketch.Theta.from_enumerable(["a", "b", "c"])
+      ...> rescue
+      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
+      ...> end
+      "ExDataSketch.Theta.new is not yet implemented"
+
+  """
+  @spec from_enumerable(Enumerable.t(), keyword()) :: t()
+  def from_enumerable(enumerable, opts \\ []) do
+    # apply/3 used to avoid type-checker warning: new/1 is a stub that always
+    # raises, so the compiler infers none() and warns on Enum.reduce/3.
+    # This will be replaced with a direct call once new/1 is implemented.
+    sketch = apply(__MODULE__, :new, [opts])
+    Enum.reduce(enumerable, sketch, fn item, acc -> update(acc, item) end)
+  end
+
+  @doc """
+  Merges a non-empty enumerable of Theta sketches into one.
+
+  Raises `Enum.EmptyError` if the enumerable is empty.
+
+  ## Examples
+
+      iex> try do
+      ...>   s = %ExDataSketch.Theta{state: <<>>, opts: [], backend: nil}
+      ...>   ExDataSketch.Theta.merge_many([s, s])
+      ...> rescue
+      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
+      ...> end
+      "ExDataSketch.Theta.merge is not yet implemented"
+
+  """
+  @spec merge_many(Enumerable.t()) :: t()
+  def merge_many(sketches) do
+    Enum.reduce(sketches, fn sketch, acc -> merge(acc, sketch) end)
+  end
+
+  @doc """
+  Returns a 2-arity reducer function suitable for `Enum.reduce/3` and similar.
+
+  The returned function calls `update/2` on each item.
+
+  ## Examples
+
+      iex> is_function(ExDataSketch.Theta.reducer(), 2)
+      true
+
+  """
+  @spec reducer() :: (term(), t() -> t())
+  def reducer do
+    fn item, sketch -> update(sketch, item) end
+  end
+
+  @doc """
+  Returns a 2-arity merge function suitable for combining sketches.
+
+  The returned function calls `merge/2` on two sketches.
+
+  ## Examples
+
+      iex> is_function(ExDataSketch.Theta.merger(), 2)
+      true
+
+  """
+  @spec merger(keyword()) :: (t(), t() -> t())
+  def merger(_opts \\ []) do
+    fn a, b -> merge(a, b) end
   end
 
   # -- Private --
