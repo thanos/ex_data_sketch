@@ -23,3 +23,5 @@ ex_data_sketch-*.tar
 /tmp/
 
 /priv/plts
+
+/bench/output/

@@ -6,84 +6,361 @@ defmodule ExDataSketch.Backend.Pure do
   Elixir/Erlang standard library functions. It is always available and
   serves as the default backend.
 
-  ## Phase 0 Status
-
-  All functions are currently stubs that raise `ExDataSketch.Errors.NotImplementedError`.
-  Full implementations will be provided in Phase 1.
-
   ## Implementation Notes
 
   - All state is stored as Elixir binaries with documented layouts.
   - Operations are pure: input binary in, new binary out. No side effects.
-  - Batch operations (`update_many`) process all items in a single pass
-    to minimize binary copying.
+  - Batch operations (`update_many`) decode the register/counter array to a
+    tuple for O(1) access, fold over all items, then re-encode once to
+    minimize binary copying.
   """
 
   @behaviour ExDataSketch.Backend
 
-  alias ExDataSketch.Errors
+  import Bitwise
 
-  # -- HLL --
+  @mask64 0xFFFFFFFFFFFFFFFF
+
+  # ============================================================
+  # HLL Implementation
+  # ============================================================
 
   @impl true
   @spec hll_new(keyword()) :: binary()
-  def hll_new(_opts) do
-    Errors.not_implemented!(__MODULE__, "hll_new")
+  def hll_new(opts) do
+    p = Keyword.fetch!(opts, :p)
+    m = 1 <<< p
+    registers = :binary.copy(<<0>>, m)
+    <<1::unsigned-8, p::unsigned-8, 0::unsigned-little-16, registers::binary>>
   end
 
   @impl true
   @spec hll_update(binary(), non_neg_integer(), keyword()) :: binary()
-  def hll_update(_state_bin, _hash64, _opts) do
-    Errors.not_implemented!(__MODULE__, "hll_update")
+  def hll_update(state_bin, hash64, opts) do
+    p = Keyword.fetch!(opts, :p)
+    m = 1 <<< p
+
+    bucket = hash64 >>> (64 - p)
+    remaining = hash64 &&& (1 <<< (64 - p)) - 1
+    rank = count_leading_zeros(remaining, 64 - p) + 1
+
+    <<header::binary-size(4), registers::binary-size(^m)>> = state_bin
+
+    # Read current register value and set max
+    <<before::binary-size(^bucket), old_val::unsigned-8, after_bytes::binary>> = registers
+
+    if rank > old_val do
+      <<header::binary, before::binary, rank::unsigned-8, after_bytes::binary>>
+    else
+      state_bin
+    end
   end
 
   @impl true
   @spec hll_update_many(binary(), [non_neg_integer()], keyword()) :: binary()
-  def hll_update_many(_state_bin, _hashes, _opts) do
-    Errors.not_implemented!(__MODULE__, "hll_update_many")
+  def hll_update_many(state_bin, hashes, opts) do
+    p = Keyword.fetch!(opts, :p)
+    m = 1 <<< p
+    bits = 64 - p
+
+    <<header::binary-size(4), registers::binary-size(^m)>> = state_bin
+
+    # Decode registers to a tuple for O(1) access
+    reg_tuple = registers |> :binary.bin_to_list() |> List.to_tuple()
+
+    # Fold over all hashes
+    remaining_mask = (1 <<< (64 - p)) - 1
+
+    reg_tuple =
+      List.foldl(hashes, reg_tuple, fn hash64, acc ->
+        bucket = hash64 >>> (64 - p)
+        remaining = hash64 &&& remaining_mask
+        rank = count_leading_zeros(remaining, bits) + 1
+        old_val = elem(acc, bucket)
+
+        if rank > old_val do
+          put_elem(acc, bucket, rank)
+        else
+          acc
+        end
+      end)
+
+    # Re-encode tuple to binary
+    new_registers = reg_tuple |> Tuple.to_list() |> :erlang.list_to_binary()
+    <<header::binary, new_registers::binary>>
   end
 
   @impl true
   @spec hll_merge(binary(), binary(), keyword()) :: binary()
-  def hll_merge(_a_bin, _b_bin, _opts) do
-    Errors.not_implemented!(__MODULE__, "hll_merge")
+  def hll_merge(a_bin, b_bin, opts) do
+    p = Keyword.fetch!(opts, :p)
+    m = 1 <<< p
+
+    <<header_a::binary-size(4), regs_a::binary-size(^m)>> = a_bin
+    <<_header_b::binary-size(4), regs_b::binary-size(^m)>> = b_bin
+
+    merged =
+      zip_max_binary(regs_a, regs_b)
+      |> IO.iodata_to_binary()
+
+    <<header_a::binary, merged::binary>>
   end
 
   @impl true
   @spec hll_estimate(binary(), keyword()) :: float()
-  def hll_estimate(_state_bin, _opts) do
-    Errors.not_implemented!(__MODULE__, "hll_estimate")
+  def hll_estimate(state_bin, opts) do
+    p = Keyword.fetch!(opts, :p)
+    m = 1 <<< p
+
+    <<_header::binary-size(4), registers::binary-size(^m)>> = state_bin
+
+    # Compute raw estimate: alpha * m^2 / sum(2^(-register_i))
+    alpha = alpha(m)
+
+    {sum, zeros} =
+      binary_fold(registers, {0.0, 0}, fn val, {s, z} ->
+        new_z = if val == 0, do: z + 1, else: z
+        {s + :math.pow(2.0, -val), new_z}
+      end)
+
+    raw_estimate = alpha * m * m / sum
+
+    cond do
+      # Small range correction with linear counting
+      raw_estimate <= 2.5 * m and zeros > 0 ->
+        m * :math.log(m / zeros)
+
+      # Large range correction (effectively unreachable with 64-bit hashes)
+      raw_estimate > 0x100000000000000 / 30 ->
+        -0x10000000000000000 * :math.log(1.0 - raw_estimate / 0x10000000000000000)
+
+      true ->
+        raw_estimate
+    end
   end
 
-  # -- CMS --
+  # -- HLL Helpers --
+
+  @doc false
+  def count_leading_zeros(_value, 0), do: 0
+
+  def count_leading_zeros(0, n), do: n
+
+  def count_leading_zeros(value, n) do
+    # Number of bits needed to represent value
+    num_bits = num_bits(value)
+    n - num_bits
+  end
+
+  defp num_bits(0), do: 0
+
+  defp num_bits(value) do
+    do_num_bits(value, 0)
+  end
+
+  defp do_num_bits(0, acc), do: acc
+  defp do_num_bits(v, acc), do: do_num_bits(v >>> 1, acc + 1)
+
+  defp alpha(16), do: 0.673
+  defp alpha(32), do: 0.697
+  defp alpha(64), do: 0.709
+  defp alpha(m) when m >= 128, do: 0.7213 / (1.0 + 1.079 / m)
+
+  defp zip_max_binary(<<>>, <<>>), do: []
+
+  defp zip_max_binary(<<a::unsigned-8, rest_a::binary>>, <<b::unsigned-8, rest_b::binary>>) do
+    [max(a, b) | zip_max_binary(rest_a, rest_b)]
+  end
+
+  defp binary_fold(<<>>, acc, _fun), do: acc
+
+  defp binary_fold(<<byte::unsigned-8, rest::binary>>, acc, fun) do
+    binary_fold(rest, fun.(byte, acc), fun)
+  end
+
+  # ============================================================
+  # CMS Implementation
+  # ============================================================
+
+  # Golden ratio constant for hash family
+  @golden64 0x9E3779B97F4A7C15
 
   @impl true
   @spec cms_new(keyword()) :: binary()
-  def cms_new(_opts) do
-    Errors.not_implemented!(__MODULE__, "cms_new")
+  def cms_new(opts) do
+    width = Keyword.fetch!(opts, :width)
+    depth = Keyword.fetch!(opts, :depth)
+    counter_width = Keyword.fetch!(opts, :counter_width)
+    counter_bytes = div(counter_width, 8)
+
+    counters = :binary.copy(<<0>>, width * depth * counter_bytes)
+
+    <<1::unsigned-8, width::unsigned-little-32, depth::unsigned-little-16,
+      counter_width::unsigned-8, 0::unsigned-8, counters::binary>>
   end
 
   @impl true
   @spec cms_update(binary(), non_neg_integer(), pos_integer(), keyword()) :: binary()
-  def cms_update(_state_bin, _hash64, _increment, _opts) do
-    Errors.not_implemented!(__MODULE__, "cms_update")
+  def cms_update(state_bin, hash64, increment, opts) do
+    width = Keyword.fetch!(opts, :width)
+    depth = Keyword.fetch!(opts, :depth)
+    counter_width = Keyword.fetch!(opts, :counter_width)
+    counter_bytes = div(counter_width, 8)
+    max_counter = (1 <<< counter_width) - 1
+    header_size = 9
+    data_size = width * depth * counter_bytes
+
+    <<header::binary-size(^header_size), counters::binary-size(^data_size)>> = state_bin
+
+    # Decode counters to tuple for efficient update
+    counter_tuple = decode_counters_to_tuple(counters, counter_bytes)
+
+    counter_tuple =
+      Enum.reduce(0..(depth - 1), counter_tuple, fn row, acc ->
+        col = cms_row_index(hash64, row, width)
+        idx = row * width + col
+        old_val = elem(acc, idx)
+        new_val = min(old_val + increment, max_counter)
+        put_elem(acc, idx, new_val)
+      end)
+
+    new_counters = encode_counters_from_tuple(counter_tuple, counter_bytes)
+    <<header::binary, new_counters::binary>>
   end
 
   @impl true
   @spec cms_update_many(binary(), [{non_neg_integer(), pos_integer()}], keyword()) :: binary()
-  def cms_update_many(_state_bin, _pairs, _opts) do
-    Errors.not_implemented!(__MODULE__, "cms_update_many")
+  def cms_update_many(state_bin, pairs, opts) do
+    width = Keyword.fetch!(opts, :width)
+    depth = Keyword.fetch!(opts, :depth)
+    counter_width = Keyword.fetch!(opts, :counter_width)
+    counter_bytes = div(counter_width, 8)
+    max_counter = (1 <<< counter_width) - 1
+    header_size = 9
+    data_size = width * depth * counter_bytes
+
+    <<header::binary-size(^header_size), counters::binary-size(^data_size)>> = state_bin
+
+    counter_tuple = decode_counters_to_tuple(counters, counter_bytes)
+
+    counter_tuple =
+      List.foldl(pairs, counter_tuple, fn {hash64, increment}, acc ->
+        Enum.reduce(0..(depth - 1), acc, fn row, inner_acc ->
+          col = cms_row_index(hash64, row, width)
+          idx = row * width + col
+          old_val = elem(inner_acc, idx)
+          new_val = min(old_val + increment, max_counter)
+          put_elem(inner_acc, idx, new_val)
+        end)
+      end)
+
+    new_counters = encode_counters_from_tuple(counter_tuple, counter_bytes)
+    <<header::binary, new_counters::binary>>
   end
 
   @impl true
   @spec cms_merge(binary(), binary(), keyword()) :: binary()
-  def cms_merge(_a_bin, _b_bin, _opts) do
-    Errors.not_implemented!(__MODULE__, "cms_merge")
+  def cms_merge(a_bin, b_bin, opts) do
+    width = Keyword.fetch!(opts, :width)
+    depth = Keyword.fetch!(opts, :depth)
+    counter_width = Keyword.fetch!(opts, :counter_width)
+    counter_bytes = div(counter_width, 8)
+    max_counter = (1 <<< counter_width) - 1
+    header_size = 9
+    total_counters = width * depth
+    data_size = total_counters * counter_bytes
+
+    <<header_a::binary-size(^header_size), counters_a::binary-size(^data_size)>> = a_bin
+    <<_header_b::binary-size(^header_size), counters_b::binary-size(^data_size)>> = b_bin
+
+    list_a = decode_counters_to_list(counters_a, counter_bytes)
+    list_b = decode_counters_to_list(counters_b, counter_bytes)
+
+    merged =
+      Enum.zip_with(list_a, list_b, fn a, b -> min(a + b, max_counter) end)
+
+    new_counters = encode_counters_from_list(merged, counter_bytes)
+    <<header_a::binary, new_counters::binary>>
   end
 
   @impl true
   @spec cms_estimate(binary(), non_neg_integer(), keyword()) :: non_neg_integer()
-  def cms_estimate(_state_bin, _hash64, _opts) do
-    Errors.not_implemented!(__MODULE__, "cms_estimate")
+  def cms_estimate(state_bin, hash64, opts) do
+    width = Keyword.fetch!(opts, :width)
+    depth = Keyword.fetch!(opts, :depth)
+    counter_width = Keyword.fetch!(opts, :counter_width)
+    counter_bytes = div(counter_width, 8)
+    header_size = 9
+
+    <<_header::binary-size(^header_size), counters::binary>> = state_bin
+
+    # Read each row's counter via direct binary offset (no full decode)
+    Enum.reduce(0..(depth - 1), :infinity, fn row, min_val ->
+      col = cms_row_index(hash64, row, width)
+      offset = (row * width + col) * counter_bytes
+      val = decode_single_counter(counters, offset, counter_bytes)
+      min(min_val, val)
+    end)
+  end
+
+  # -- CMS Helpers --
+
+  defp cms_row_index(hash64, row, width) do
+    rem(hash64 + row * @golden64 &&& @mask64, width)
+  end
+
+  defp decode_counters_to_tuple(binary, 4) do
+    do_decode_32(binary, [])
+    |> :lists.reverse()
+    |> List.to_tuple()
+  end
+
+  defp decode_counters_to_tuple(binary, 8) do
+    do_decode_64(binary, [])
+    |> :lists.reverse()
+    |> List.to_tuple()
+  end
+
+  defp decode_counters_to_list(binary, 4), do: do_decode_32(binary, []) |> :lists.reverse()
+  defp decode_counters_to_list(binary, 8), do: do_decode_64(binary, []) |> :lists.reverse()
+
+  defp do_decode_32(<<>>, acc), do: acc
+
+  defp do_decode_32(<<val::unsigned-little-32, rest::binary>>, acc) do
+    do_decode_32(rest, [val | acc])
+  end
+
+  defp do_decode_64(<<>>, acc), do: acc
+
+  defp do_decode_64(<<val::unsigned-little-64, rest::binary>>, acc) do
+    do_decode_64(rest, [val | acc])
+  end
+
+  defp encode_counters_from_tuple(tuple, counter_bytes) do
+    tuple
+    |> Tuple.to_list()
+    |> encode_counters_from_list(counter_bytes)
+  end
+
+  defp encode_counters_from_list(list, 4) do
+    list
+    |> Enum.map(fn val -> <<val::unsigned-little-32>> end)
+    |> IO.iodata_to_binary()
+  end
+
+  defp encode_counters_from_list(list, 8) do
+    list
+    |> Enum.map(fn val -> <<val::unsigned-little-64>> end)
+    |> IO.iodata_to_binary()
+  end
+
+  defp decode_single_counter(binary, offset, 4) do
+    <<_::binary-size(^offset), val::unsigned-little-32, _::binary>> = binary
+    val
+  end
+
+  defp decode_single_counter(binary, offset, 8) do
+    <<_::binary-size(^offset), val::unsigned-little-64, _::binary>> = binary
+    val
   end
 end

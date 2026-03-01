@@ -62,13 +62,10 @@ defmodule ExDataSketch do
 
   ## Examples
 
-      iex> try do
-      ...>   sketch = ExDataSketch.HLL.new()
-      ...>   ExDataSketch.update_many(sketch, ["a", "b"])
-      ...> rescue
-      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
-      ...> end
-      "ExDataSketch.Backend.Pure.hll_new is not yet implemented"
+      iex> sketch = ExDataSketch.HLL.new(p: 10)
+      iex> sketch = ExDataSketch.update_many(sketch, ["a", "b"])
+      iex> ExDataSketch.HLL.estimate(sketch) > 0.0
+      true
 
   """
   @spec update_many(HLL.t() | CMS.t(), Enumerable.t()) :: HLL.t() | CMS.t()

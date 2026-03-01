@@ -56,11 +56,6 @@ defmodule ExDataSketch.CMS do
   CMS merge is **associative** and **commutative** (element-wise counter addition).
   This means sketches can be merged in any order or grouping and produce the
   same result, making CMS safe for parallel and distributed aggregation.
-
-  ## Phase 0 Status
-
-  All functions are stubs that raise `ExDataSketch.Errors.NotImplementedError`.
-  Full implementation in Phase 1.
   """
 
   alias ExDataSketch.{Backend, Codec, Errors, Hash}
@@ -89,12 +84,9 @@ defmodule ExDataSketch.CMS do
 
   ## Examples
 
-      iex> try do
-      ...>   ExDataSketch.CMS.new()
-      ...> rescue
-      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
-      ...> end
-      "ExDataSketch.Backend.Pure.cms_new is not yet implemented"
+      iex> sketch = ExDataSketch.CMS.new()
+      iex> ExDataSketch.CMS.estimate(sketch, "anything")
+      0
 
   """
   @spec new(keyword()) :: t()
@@ -127,12 +119,9 @@ defmodule ExDataSketch.CMS do
 
   ## Examples
 
-      iex> try do
-      ...>   ExDataSketch.CMS.new() |> ExDataSketch.CMS.update("hello")
-      ...> rescue
-      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
-      ...> end
-      "ExDataSketch.Backend.Pure.cms_new is not yet implemented"
+      iex> sketch = ExDataSketch.CMS.new() |> ExDataSketch.CMS.update("hello")
+      iex> ExDataSketch.CMS.estimate(sketch, "hello")
+      1
 
   """
   @spec update(t(), term(), pos_integer()) :: t()
@@ -155,12 +144,9 @@ defmodule ExDataSketch.CMS do
 
   ## Examples
 
-      iex> try do
-      ...>   ExDataSketch.CMS.new() |> ExDataSketch.CMS.update_many(["a", "b", "c"])
-      ...> rescue
-      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
-      ...> end
-      "ExDataSketch.Backend.Pure.cms_new is not yet implemented"
+      iex> sketch = ExDataSketch.CMS.new() |> ExDataSketch.CMS.update_many(["a", "b", "a"])
+      iex> ExDataSketch.CMS.estimate(sketch, "a")
+      2
 
   """
   @spec update_many(t(), Enumerable.t()) :: t()
@@ -186,13 +172,11 @@ defmodule ExDataSketch.CMS do
 
   ## Examples
 
-      iex> try do
-      ...>   a = ExDataSketch.CMS.new()
-      ...>   ExDataSketch.CMS.merge(a, a)
-      ...> rescue
-      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
-      ...> end
-      "ExDataSketch.Backend.Pure.cms_new is not yet implemented"
+      iex> a = ExDataSketch.CMS.new() |> ExDataSketch.CMS.update("x", 3)
+      iex> b = ExDataSketch.CMS.new() |> ExDataSketch.CMS.update("x", 5)
+      iex> merged = ExDataSketch.CMS.merge(a, b)
+      iex> ExDataSketch.CMS.estimate(merged, "x")
+      8
 
   """
   @spec merge(t(), t()) :: t()
@@ -217,12 +201,9 @@ defmodule ExDataSketch.CMS do
 
   ## Examples
 
-      iex> try do
-      ...>   ExDataSketch.CMS.new() |> ExDataSketch.CMS.estimate("hello")
-      ...> rescue
-      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
-      ...> end
-      "ExDataSketch.Backend.Pure.cms_new is not yet implemented"
+      iex> sketch = ExDataSketch.CMS.new() |> ExDataSketch.CMS.update("hello", 5)
+      iex> ExDataSketch.CMS.estimate(sketch, "hello")
+      5
 
   """
   @spec estimate(t(), term()) :: non_neg_integer()
@@ -236,12 +217,9 @@ defmodule ExDataSketch.CMS do
 
   ## Examples
 
-      iex> try do
-      ...>   ExDataSketch.CMS.new() |> ExDataSketch.CMS.size_bytes()
-      ...> rescue
-      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
-      ...> end
-      "ExDataSketch.Backend.Pure.cms_new is not yet implemented"
+      iex> sketch = ExDataSketch.CMS.new(width: 100, depth: 3, counter_width: 32)
+      iex> ExDataSketch.CMS.size_bytes(sketch)
+      1209
 
   """
   @spec size_bytes(t()) :: non_neg_integer()
@@ -254,12 +232,11 @@ defmodule ExDataSketch.CMS do
 
   ## Examples
 
-      iex> try do
-      ...>   ExDataSketch.CMS.new() |> ExDataSketch.CMS.serialize()
-      ...> rescue
-      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
-      ...> end
-      "ExDataSketch.Backend.Pure.cms_new is not yet implemented"
+      iex> sketch = ExDataSketch.CMS.new(width: 100, depth: 3, counter_width: 32)
+      iex> binary = ExDataSketch.CMS.serialize(sketch)
+      iex> <<"EXSK", _rest::binary>> = binary
+      iex> byte_size(binary) > 0
+      true
 
   """
   @spec serialize(t()) :: binary()
@@ -313,11 +290,12 @@ defmodule ExDataSketch.CMS do
   ## Examples
 
       iex> try do
-      ...>   ExDataSketch.CMS.new() |> ExDataSketch.CMS.serialize_datasketches()
+      ...>   sketch = %ExDataSketch.CMS{state: <<>>, opts: [], backend: nil}
+      ...>   ExDataSketch.CMS.serialize_datasketches(sketch)
       ...> rescue
       ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
       ...> end
-      "ExDataSketch.Backend.Pure.cms_new is not yet implemented"
+      "ExDataSketch.CMS.serialize_datasketches is not yet implemented"
 
   """
   @spec serialize_datasketches(t()) :: binary()
@@ -356,12 +334,9 @@ defmodule ExDataSketch.CMS do
 
   ## Examples
 
-      iex> try do
-      ...>   ExDataSketch.CMS.from_enumerable(["a", "b", "c"])
-      ...> rescue
-      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
-      ...> end
-      "ExDataSketch.Backend.Pure.cms_new is not yet implemented"
+      iex> sketch = ExDataSketch.CMS.from_enumerable(["a", "b", "a"])
+      iex> ExDataSketch.CMS.estimate(sketch, "a")
+      2
 
   """
   @spec from_enumerable(Enumerable.t(), keyword()) :: t()
@@ -376,12 +351,11 @@ defmodule ExDataSketch.CMS do
 
   ## Examples
 
-      iex> try do
-      ...>   ExDataSketch.CMS.merge_many([ExDataSketch.CMS.new()])
-      ...> rescue
-      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
-      ...> end
-      "ExDataSketch.Backend.Pure.cms_new is not yet implemented"
+      iex> a = ExDataSketch.CMS.new() |> ExDataSketch.CMS.update("x")
+      iex> b = ExDataSketch.CMS.new() |> ExDataSketch.CMS.update("x")
+      iex> merged = ExDataSketch.CMS.merge_many([a, b])
+      iex> ExDataSketch.CMS.estimate(merged, "x")
+      2
 
   """
   @spec merge_many(Enumerable.t()) :: t()

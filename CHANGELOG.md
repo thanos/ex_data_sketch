@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Pure Elixir HLL implementation (new, update, update_many, merge, estimate).
+- Pure Elixir CMS implementation (new, update, update_many, merge, estimate).
+- Deterministic test vectors for HLL and CMS.
+- Real Benchee benchmarks for HLL and CMS.
 - Project skeleton with directory structure and dependencies.
 - Public API stubs for HLL, CMS, and Theta sketch modules.
 - ExDataSketch-native binary codec (EXSK format).
