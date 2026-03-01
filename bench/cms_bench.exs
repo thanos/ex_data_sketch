@@ -1,35 +1,51 @@
 # CMS Benchmark Suite
 #
-# Run with: mix run bench/cms_bench.exs
-#
-# Phase 0: Stub benchmarks that demonstrate the intended structure.
-# Full benchmarks will be populated in Phase 1.
+# Run with: MIX_ENV=dev mix run bench/cms_bench.exs
+
+alias ExDataSketch.CMS
 
 IO.puts("ExDataSketch CMS Benchmark")
 IO.puts("==========================")
 IO.puts("Elixir: #{System.version()}")
 IO.puts("OTP: #{System.otp_release()}")
+IO.puts("")
 
-IO.puts("")
-IO.puts("Phase 0: CMS implementation is stubbed.")
-IO.puts("Benchmarks will be added in Phase 1 after full implementation.")
-IO.puts("")
-IO.puts("Planned benchmark scenarios:")
-IO.puts("  - cms_update (width=2048, depth=5, single item)")
-IO.puts("  - cms_update_many (width=2048, depth=5, 1000 items)")
-IO.puts("  - cms_update_many (width=2048, depth=5, 100_000 items)")
-IO.puts("  - cms_merge (width=2048, depth=5)")
-IO.puts("  - cms_estimate (width=2048, depth=5)")
+# Pre-generate data outside the benchmark closure
+sketch_default = CMS.new()
+
+sketch_populated =
+  CMS.from_enumerable(for(i <- 0..999, do: "item_#{i}"))
+
+sketch_for_merge_a =
+  CMS.from_enumerable(for(i <- 0..4999, do: "a_#{i}"))
+
+sketch_for_merge_b =
+  CMS.from_enumerable(for(i <- 0..4999, do: "b_#{i}"))
 
 File.mkdir_p!("bench/output")
 
-File.write!(
-  "bench/output/cms_bench.json",
-  Jason.encode!(%{
-    "scenarios" => [],
-    "phase" => "stub",
-    "note" => "Phase 0 stub. No benchmarks run."
-  })
+Benchee.run(
+  %{
+    "cms_update (single item)" => fn ->
+      CMS.update(sketch_default, "bench_item")
+    end,
+    "cms_update_many (1k items)" => fn ->
+      CMS.update_many(sketch_default, for(i <- 0..999, do: "item_#{i}"))
+    end,
+    "cms_update_many (100k items)" => fn ->
+      CMS.update_many(sketch_default, for(i <- 0..99_999, do: "item_#{i}"))
+    end,
+    "cms_merge" => fn ->
+      CMS.merge(sketch_for_merge_a, sketch_for_merge_b)
+    end,
+    "cms_estimate" => fn ->
+      CMS.estimate(sketch_populated, "item_42")
+    end
+  },
+  warmup: 1,
+  time: 3,
+  formatters: [
+    Benchee.Formatters.Console,
+    {Benchee.Formatters.JSON, file: "bench/output/cms_bench.json"}
+  ]
 )
-
-IO.puts("\nStub output written to bench/output/cms_bench.json")

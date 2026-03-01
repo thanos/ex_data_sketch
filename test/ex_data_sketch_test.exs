@@ -4,19 +4,15 @@ defmodule ExDataSketchTest do
 
   describe "update_many/2" do
     test "delegates to HLL.update_many for HLL structs" do
-      assert_raise ExDataSketch.Errors.NotImplementedError,
-                   ~r/hll_new is not yet implemented/,
-                   fn ->
-                     ExDataSketch.HLL.new() |> ExDataSketch.update_many(["a", "b"])
-                   end
+      sketch = ExDataSketch.HLL.new(p: 10)
+      updated = ExDataSketch.update_many(sketch, ["a", "b"])
+      assert ExDataSketch.HLL.estimate(updated) > 0.0
     end
 
     test "delegates to CMS.update_many for CMS structs" do
-      assert_raise ExDataSketch.Errors.NotImplementedError,
-                   ~r/cms_new is not yet implemented/,
-                   fn ->
-                     ExDataSketch.CMS.new() |> ExDataSketch.update_many(["a", "b"])
-                   end
+      sketch = ExDataSketch.CMS.new()
+      updated = ExDataSketch.update_many(sketch, ["a", "b", "a"])
+      assert ExDataSketch.CMS.estimate(updated, "a") == 2
     end
   end
 end

@@ -42,11 +42,6 @@ defmodule ExDataSketch.HLL do
   HLL merge is **associative** and **commutative** (register-wise max).
   This means sketches can be merged in any order or grouping and produce the
   same result, making HLL safe for parallel and distributed aggregation.
-
-  ## Phase 0 Status
-
-  All functions are stubs that raise `ExDataSketch.Errors.NotImplementedError`.
-  Full implementation in Phase 1.
   """
 
   alias ExDataSketch.{Backend, Codec, Errors, Hash}
@@ -74,12 +69,11 @@ defmodule ExDataSketch.HLL do
 
   ## Examples
 
-      iex> try do
-      ...>   ExDataSketch.HLL.new()
-      ...> rescue
-      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
-      ...> end
-      "ExDataSketch.Backend.Pure.hll_new is not yet implemented"
+      iex> sketch = ExDataSketch.HLL.new(p: 10)
+      iex> sketch.opts
+      [p: 10]
+      iex> ExDataSketch.HLL.size_bytes(sketch)
+      1028
 
   """
   @spec new(keyword()) :: t()
@@ -100,12 +94,9 @@ defmodule ExDataSketch.HLL do
 
   ## Examples
 
-      iex> try do
-      ...>   ExDataSketch.HLL.new() |> ExDataSketch.HLL.update("hello")
-      ...> rescue
-      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
-      ...> end
-      "ExDataSketch.Backend.Pure.hll_new is not yet implemented"
+      iex> sketch = ExDataSketch.HLL.new(p: 10) |> ExDataSketch.HLL.update("hello")
+      iex> ExDataSketch.HLL.estimate(sketch) > 0.0
+      true
 
   """
   @spec update(t(), term()) :: t()
@@ -123,12 +114,9 @@ defmodule ExDataSketch.HLL do
 
   ## Examples
 
-      iex> try do
-      ...>   ExDataSketch.HLL.new() |> ExDataSketch.HLL.update_many(["a", "b", "c"])
-      ...> rescue
-      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
-      ...> end
-      "ExDataSketch.Backend.Pure.hll_new is not yet implemented"
+      iex> sketch = ExDataSketch.HLL.new(p: 10) |> ExDataSketch.HLL.update_many(["a", "b", "c"])
+      iex> ExDataSketch.HLL.estimate(sketch) > 0.0
+      true
 
   """
   @spec update_many(t(), Enumerable.t()) :: t()
@@ -150,13 +138,11 @@ defmodule ExDataSketch.HLL do
 
   ## Examples
 
-      iex> try do
-      ...>   a = ExDataSketch.HLL.new()
-      ...>   ExDataSketch.HLL.merge(a, a)
-      ...> rescue
-      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
-      ...> end
-      "ExDataSketch.Backend.Pure.hll_new is not yet implemented"
+      iex> a = ExDataSketch.HLL.new(p: 10) |> ExDataSketch.HLL.update("x")
+      iex> b = ExDataSketch.HLL.new(p: 10) |> ExDataSketch.HLL.update("y")
+      iex> merged = ExDataSketch.HLL.merge(a, b)
+      iex> ExDataSketch.HLL.estimate(merged) >= ExDataSketch.HLL.estimate(a)
+      true
 
   """
   @spec merge(t(), t()) :: t()
@@ -181,12 +167,8 @@ defmodule ExDataSketch.HLL do
 
   ## Examples
 
-      iex> try do
-      ...>   ExDataSketch.HLL.new() |> ExDataSketch.HLL.estimate()
-      ...> rescue
-      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
-      ...> end
-      "ExDataSketch.Backend.Pure.hll_new is not yet implemented"
+      iex> ExDataSketch.HLL.new(p: 10) |> ExDataSketch.HLL.estimate()
+      0.0
 
   """
   @spec estimate(t()) :: float()
@@ -199,12 +181,8 @@ defmodule ExDataSketch.HLL do
 
   ## Examples
 
-      iex> try do
-      ...>   ExDataSketch.HLL.new() |> ExDataSketch.HLL.size_bytes()
-      ...> rescue
-      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
-      ...> end
-      "ExDataSketch.Backend.Pure.hll_new is not yet implemented"
+      iex> ExDataSketch.HLL.new(p: 10) |> ExDataSketch.HLL.size_bytes()
+      1028
 
   """
   @spec size_bytes(t()) :: non_neg_integer()
@@ -220,12 +198,11 @@ defmodule ExDataSketch.HLL do
 
   ## Examples
 
-      iex> try do
-      ...>   ExDataSketch.HLL.new() |> ExDataSketch.HLL.serialize()
-      ...> rescue
-      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
-      ...> end
-      "ExDataSketch.Backend.Pure.hll_new is not yet implemented"
+      iex> sketch = ExDataSketch.HLL.new(p: 10)
+      iex> binary = ExDataSketch.HLL.serialize(sketch)
+      iex> <<"EXSK", _rest::binary>> = binary
+      iex> byte_size(binary) > 0
+      true
 
   """
   @spec serialize(t()) :: binary()
@@ -271,11 +248,12 @@ defmodule ExDataSketch.HLL do
   ## Examples
 
       iex> try do
-      ...>   ExDataSketch.HLL.new() |> ExDataSketch.HLL.serialize_datasketches()
+      ...>   sketch = %ExDataSketch.HLL{state: <<>>, opts: [p: 14], backend: nil}
+      ...>   ExDataSketch.HLL.serialize_datasketches(sketch)
       ...> rescue
       ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
       ...> end
-      "ExDataSketch.Backend.Pure.hll_new is not yet implemented"
+      "ExDataSketch.HLL.serialize_datasketches is not yet implemented"
 
   """
   @spec serialize_datasketches(t()) :: binary()
@@ -314,12 +292,9 @@ defmodule ExDataSketch.HLL do
 
   ## Examples
 
-      iex> try do
-      ...>   ExDataSketch.HLL.from_enumerable(["a", "b", "c"])
-      ...> rescue
-      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
-      ...> end
-      "ExDataSketch.Backend.Pure.hll_new is not yet implemented"
+      iex> sketch = ExDataSketch.HLL.from_enumerable(["a", "b", "c"], p: 10)
+      iex> ExDataSketch.HLL.estimate(sketch) > 0.0
+      true
 
   """
   @spec from_enumerable(Enumerable.t(), keyword()) :: t()
@@ -334,12 +309,11 @@ defmodule ExDataSketch.HLL do
 
   ## Examples
 
-      iex> try do
-      ...>   ExDataSketch.HLL.merge_many([ExDataSketch.HLL.new()])
-      ...> rescue
-      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
-      ...> end
-      "ExDataSketch.Backend.Pure.hll_new is not yet implemented"
+      iex> a = ExDataSketch.HLL.new(p: 10) |> ExDataSketch.HLL.update("x")
+      iex> b = ExDataSketch.HLL.new(p: 10) |> ExDataSketch.HLL.update("y")
+      iex> merged = ExDataSketch.HLL.merge_many([a, b])
+      iex> ExDataSketch.HLL.estimate(merged) > 0.0
+      true
 
   """
   @spec merge_many(Enumerable.t()) :: t()
