@@ -172,7 +172,7 @@ defmodule ExDataSketch.Codec do
       {:error, %ExDataSketch.Errors.DeserializationError{message: "deserialization failed: binary too short for EXSK header"}}
 
   """
-  @spec decode(binary()) :: {:ok, decoded()} | {:error, DeserializationError.t()}
+  @spec decode(binary()) :: {:ok, decoded()} | {:error, Exception.t()}
   def decode(<<@magic::binary, version::unsigned-8, sketch_id::unsigned-8, rest::binary>>) do
     decode_body(version, sketch_id, rest)
   end

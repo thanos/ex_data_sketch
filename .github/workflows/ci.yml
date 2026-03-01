@@ -37,6 +37,9 @@ jobs:
       - run: mix deps.get
       - run: mix format --check-formatted
       - run: mix credo --strict
+      - run: mix docs --warnings-as-errors
+        env:
+          MIX_ENV: dev
 
   compile:
     name: Compile (Elixir ${{ matrix.elixir }} / OTP ${{ matrix.otp }})
