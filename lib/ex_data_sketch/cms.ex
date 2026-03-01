@@ -51,6 +51,12 @@ defmodule ExDataSketch.CMS do
   2^64-1), further increments leave it at the maximum. This prevents wrap-around
   errors at the cost of potential undercounting at extreme values.
 
+  ## Merge Properties
+
+  CMS merge is **associative** and **commutative** (element-wise counter addition).
+  This means sketches can be merged in any order or grouping and produce the
+  same result, making CMS safe for parallel and distributed aggregation.
+
   ## Phase 0 Status
 
   All functions are stubs that raise `ExDataSketch.Errors.NotImplementedError`.
@@ -195,7 +201,7 @@ defmodule ExDataSketch.CMS do
         %__MODULE__{state: state_b, opts: opts_b}
       ) do
     if opts_a != opts_b do
-      raise Errors.IncompatibleSketches,
+      raise Errors.IncompatibleSketchesError,
         reason: "CMS parameter mismatch: #{inspect(opts_a)} vs #{inspect(opts_b)}"
     end
 
@@ -339,12 +345,95 @@ defmodule ExDataSketch.CMS do
     Errors.not_implemented!(__MODULE__, "deserialize_datasketches")
   end
 
+  @doc """
+  Creates a new CMS sketch from an enumerable of items.
+
+  Equivalent to `new(opts) |> update_many(enumerable)`.
+
+  ## Options
+
+  Same as `new/1`.
+
+  ## Examples
+
+      iex> try do
+      ...>   ExDataSketch.CMS.from_enumerable(["a", "b", "c"])
+      ...> rescue
+      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
+      ...> end
+      "ExDataSketch.Backend.Pure.cms_new is not yet implemented"
+
+  """
+  @spec from_enumerable(Enumerable.t(), keyword()) :: t()
+  def from_enumerable(enumerable, opts \\ []) do
+    new(opts) |> update_many(enumerable)
+  end
+
+  @doc """
+  Merges a non-empty enumerable of CMS sketches into one.
+
+  Raises `Enum.EmptyError` if the enumerable is empty.
+
+  ## Examples
+
+      iex> try do
+      ...>   ExDataSketch.CMS.merge_many([ExDataSketch.CMS.new()])
+      ...> rescue
+      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
+      ...> end
+      "ExDataSketch.Backend.Pure.cms_new is not yet implemented"
+
+  """
+  @spec merge_many(Enumerable.t()) :: t()
+  def merge_many(sketches) do
+    Enum.reduce(sketches, fn sketch, acc -> merge(acc, sketch) end)
+  end
+
+  @doc """
+  Returns a 2-arity reducer function suitable for `Enum.reduce/3` and similar.
+
+  The returned function calls `update/2` on each item.
+
+  ## Options
+
+  Same as `new/1`. Used to create the initial sketch accumulator.
+
+  ## Examples
+
+      iex> is_function(ExDataSketch.CMS.reducer(), 2)
+      true
+
+  """
+  @spec reducer(keyword()) :: (term(), t() -> t())
+  def reducer(opts \\ []) do
+    fn item, sketch ->
+      _ = opts
+      update(sketch, item)
+    end
+  end
+
+  @doc """
+  Returns a 2-arity merge function suitable for combining sketches.
+
+  The returned function calls `merge/2` on two sketches.
+
+  ## Examples
+
+      iex> is_function(ExDataSketch.CMS.merger(), 2)
+      true
+
+  """
+  @spec merger(keyword()) :: (t(), t() -> t())
+  def merger(_opts \\ []) do
+    fn a, b -> merge(a, b) end
+  end
+
   # -- Private --
 
   defp validate_width!(w) when is_integer(w) and w > 0, do: :ok
 
   defp validate_width!(w) do
-    raise Errors.InvalidOption,
+    raise Errors.InvalidOptionError,
       option: :width,
       value: w,
       message: "width must be a positive integer, got: #{inspect(w)}"
@@ -353,7 +442,7 @@ defmodule ExDataSketch.CMS do
   defp validate_depth!(d) when is_integer(d) and d > 0, do: :ok
 
   defp validate_depth!(d) do
-    raise Errors.InvalidOption,
+    raise Errors.InvalidOptionError,
       option: :depth,
       value: d,
       message: "depth must be a positive integer, got: #{inspect(d)}"
@@ -362,7 +451,7 @@ defmodule ExDataSketch.CMS do
   defp validate_counter_width!(cw) when cw in [32, 64], do: :ok
 
   defp validate_counter_width!(cw) do
-    raise Errors.InvalidOption,
+    raise Errors.InvalidOptionError,
       option: :counter_width,
       value: cw,
       message: "counter_width must be 32 or 64, got: #{inspect(cw)}"

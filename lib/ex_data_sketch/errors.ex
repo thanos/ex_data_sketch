@@ -9,9 +9,9 @@ defmodule ExDataSketch.Errors do
   ## Error Types
 
   - `NotImplementedError` -- operation is stubbed and not yet implemented.
-  - `InvalidOption` -- an option value is out of range or of wrong type.
+  - `InvalidOptionError` -- an option value is out of range or of wrong type.
   - `DeserializationError` -- binary data could not be decoded.
-  - `IncompatibleSketches` -- sketches cannot be merged due to parameter mismatch.
+  - `IncompatibleSketchesError` -- sketches cannot be merged due to parameter mismatch.
   """
 
   defmodule NotImplementedError do
@@ -28,7 +28,7 @@ defmodule ExDataSketch.Errors do
     end
   end
 
-  defmodule InvalidOption do
+  defmodule InvalidOptionError do
     @moduledoc """
     Returned when an option value is invalid.
     """
@@ -63,7 +63,7 @@ defmodule ExDataSketch.Errors do
     end
   end
 
-  defmodule IncompatibleSketches do
+  defmodule IncompatibleSketchesError do
     @moduledoc """
     Returned when attempting to merge sketches with incompatible parameters.
     """
@@ -93,8 +93,8 @@ defmodule ExDataSketch.Errors do
 
   ## Examples
 
-      iex> ExDataSketch.Errors.error(%ExDataSketch.Errors.InvalidOption{message: "bad"})
-      {:error, %ExDataSketch.Errors.InvalidOption{message: "bad"}}
+      iex> ExDataSketch.Errors.error(%ExDataSketch.Errors.InvalidOptionError{message: "bad"})
+      {:error, %ExDataSketch.Errors.InvalidOptionError{message: "bad"}}
 
   """
   @spec error(Exception.t()) :: {:error, Exception.t()}

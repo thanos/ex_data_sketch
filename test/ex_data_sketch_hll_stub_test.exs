@@ -2,7 +2,7 @@ defmodule ExDataSketch.HLLStubTest do
   use ExUnit.Case, async: true
   doctest ExDataSketch.HLL
 
-  alias ExDataSketch.Errors.{DeserializationError, InvalidOption, NotImplementedError}
+  alias ExDataSketch.Errors.{DeserializationError, InvalidOptionError, NotImplementedError}
   alias ExDataSketch.HLL
 
   describe "new/1" do
@@ -19,19 +19,19 @@ defmodule ExDataSketch.HLLStubTest do
     end
 
     test "validates p minimum" do
-      assert_raise InvalidOption, ~r/p must be/, fn ->
+      assert_raise InvalidOptionError, ~r/p must be/, fn ->
         HLL.new(p: 3)
       end
     end
 
     test "validates p maximum" do
-      assert_raise InvalidOption, ~r/p must be/, fn ->
+      assert_raise InvalidOptionError, ~r/p must be/, fn ->
         HLL.new(p: 17)
       end
     end
 
     test "validates p type" do
-      assert_raise InvalidOption, ~r/p must be/, fn ->
+      assert_raise InvalidOptionError, ~r/p must be/, fn ->
         HLL.new(p: "14")
       end
     end
@@ -92,6 +92,75 @@ defmodule ExDataSketch.HLLStubTest do
     test "raises NotImplementedError" do
       assert_raise NotImplementedError, ~r/deserialize_datasketches/, fn ->
         HLL.deserialize_datasketches(<<>>)
+      end
+    end
+  end
+
+  describe "from_enumerable/2" do
+    test "raises NotImplementedError (delegates to new)" do
+      assert_raise NotImplementedError, ~r/hll_new/, fn ->
+        HLL.from_enumerable(["a", "b", "c"])
+      end
+    end
+
+    test "raises NotImplementedError with custom opts" do
+      assert_raise NotImplementedError, ~r/hll_new/, fn ->
+        HLL.from_enumerable(["a", "b"], p: 10)
+      end
+    end
+  end
+
+  describe "merge_many/1" do
+    test "raises Enum.EmptyError on empty list" do
+      assert_raise Enum.EmptyError, fn ->
+        HLL.merge_many([])
+      end
+    end
+
+    test "returns single sketch unchanged" do
+      sketch = %HLL{state: <<0, 1, 2>>, opts: [p: 14], backend: ExDataSketch.Backend.Pure}
+      assert HLL.merge_many([sketch]) == sketch
+    end
+
+    test "raises NotImplementedError when merging multiple (stub backend)" do
+      sketch = %HLL{state: <<0>>, opts: [p: 14], backend: ExDataSketch.Backend.Pure}
+
+      assert_raise NotImplementedError, ~r/hll_merge/, fn ->
+        HLL.merge_many([sketch, sketch])
+      end
+    end
+  end
+
+  describe "reducer/1" do
+    test "returns a 2-arity function" do
+      fun = HLL.reducer()
+      assert is_function(fun, 2)
+    end
+
+    test "returned function calls update/2" do
+      sketch = %HLL{state: <<0>>, opts: [p: 14], backend: ExDataSketch.Backend.Pure}
+
+      fun = HLL.reducer()
+
+      assert_raise NotImplementedError, ~r/hll_update/, fn ->
+        fun.("item", sketch)
+      end
+    end
+  end
+
+  describe "merger/1" do
+    test "returns a 2-arity function" do
+      fun = HLL.merger()
+      assert is_function(fun, 2)
+    end
+
+    test "returned function calls merge/2" do
+      sketch = %HLL{state: <<0>>, opts: [p: 14], backend: ExDataSketch.Backend.Pure}
+
+      fun = HLL.merger()
+
+      assert_raise NotImplementedError, ~r/hll_merge/, fn ->
+        fun.(sketch, sketch)
       end
     end
   end

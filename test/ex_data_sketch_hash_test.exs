@@ -34,8 +34,8 @@ defmodule ExDataSketch.HashTest do
     end
 
     test "supports custom hash function" do
-      custom_fn = fn _term -> 12345 end
-      assert Hash.hash64("anything", hash_fn: custom_fn) == 12345
+      custom_fn = fn _term -> 12_345 end
+      assert Hash.hash64("anything", hash_fn: custom_fn) == 12_345
     end
 
     test "hashes different types" do
@@ -67,8 +67,8 @@ defmodule ExDataSketch.HashTest do
     end
 
     test "supports custom hash function" do
-      custom_fn = fn _binary -> 99999 end
-      assert Hash.hash64_binary(<<0>>, hash_fn: custom_fn) == 99999
+      custom_fn = fn _binary -> 99_999 end
+      assert Hash.hash64_binary(<<0>>, hash_fn: custom_fn) == 99_999
     end
 
     test "empty binary hashes to a value" do

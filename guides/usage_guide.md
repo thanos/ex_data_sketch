@@ -129,7 +129,7 @@ within the same BEAM instance.
 ExDataSketch uses tagged tuples for recoverable errors:
 
 ```elixir
-{:error, %ExDataSketch.Errors.InvalidOption{message: "p must be between 4 and 16"}}
+{:error, %ExDataSketch.Errors.InvalidOptionError{message: "p must be between 4 and 16"}}
 {:error, %ExDataSketch.Errors.DeserializationError{message: "invalid magic bytes"}}
 ```
 

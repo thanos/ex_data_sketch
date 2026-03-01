@@ -16,3 +16,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Backend behaviour with Pure Elixir stub implementation.
 - Quick Start and Usage Guide documentation.
 - GitHub Actions CI workflow.
+- Integration convenience functions (`from_enumerable/2`, `merge_many/1`, `reducer/1`, `merger/1`) on all sketch modules.
+- Integration guide with ecosystem examples (Flow, Broadway, Explorer, Nx, ex_arrow/ExZarr).
+- Documented merge properties (associativity, commutativity) for HLL, CMS, and Theta.

@@ -37,6 +37,18 @@ defmodule ExDataSketch do
       sketch = ExDataSketch.update_many(sketch, ["page_a", "page_a", "page_b"])
       ExDataSketch.CMS.estimate(sketch, "page_a")
 
+  ## Integration Patterns
+
+  Each sketch module provides convenience functions for ecosystem integration:
+
+  - `from_enumerable/2` — build a sketch from any `Enumerable` in one call.
+  - `merge_many/1` — merge a collection of sketches (e.g. from parallel workers).
+  - `reducer/1` — returns a 2-arity function for use with `Enum.reduce/3`, Flow, etc.
+  - `merger/1` — returns a 2-arity function for merging sketches in reduce operations.
+
+  See the [Integration Guide](integrations.md) for examples with Flow, Broadway,
+  Explorer, Nx, and other ecosystem libraries.
+
   See the [Quick Start guide](quick_start.md) for more examples.
   """
 

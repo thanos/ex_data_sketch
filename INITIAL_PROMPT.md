@@ -142,6 +142,102 @@ CI DoD
   - Coverage: detect drops vs a baseline threshold and fail
   - Benchmarks: detect significant regressions and surface clearly (see CI section below)
 
+INTEGRATION REQUIREMENTS (DO NOT ADD HARD DEPENDENCIES IN v0.1)
+
+Goal: ExDataSketch (or chosen name) must compose cleanly with Elixir streaming and data ecosystems:
+- Elixir Enum/Stream
+- Flow
+- Broadway
+- Explorer
+- Nx
+- ex_arrow
+- ExZarr
+
+Non-goals for v0.1:
+- Do not add compile-time deps on Flow, Broadway, Explorer, Nx, ex_arrow, or ExZarr.
+- Do not create adapters that require those libraries to be installed to compile.
+- Do not over-engineer or introduce generic “pipeline frameworks”.
+
+Design requirements (must implement now):
+1) Enumerable-first API:
+   - Every sketch module (HLL, CMS, Theta, etc.) must provide:
+     - `update_many(sketch, enumerable)`
+     - `from_enumerable(enumerable, opts \\ [])` convenience constructor
+     - `merge/2` and `merge_many/1` (merge list/stream of sketches)
+   - Must work with both `Enum` and `Stream` without forcing evaluation.
+
+2) Reducer/combinator helpers:
+   - Provide reducer helpers to make integration trivial:
+     - `reducer(opts) :: (item, sketch -> sketch)` OR `new/1` + `update/2` is enough
+     - `merger(opts) :: (sketch, sketch -> sketch)` (pure merge)
+   - Ensure associativity of merge for relevant sketches; document which ones are associative/commutative.
+
+3) Concurrency-safe and chunk-friendly:
+   - Sketch structs must be immutable and safe to pass between processes.
+   - Provide `chunk_size` guidance in docs for update_many.
+   - Provide a `merge_many/1` that can merge sketches produced in parallel workers.
+
+4) Optional integrations via separate modules (compile-time optional):
+   - Create an `ExDataSketch.Integrations` namespace but ensure all integration modules are either:
+     - runtime-detected and no-op if dependency missing, or
+     - placed behind `optional_applications` and compiled conditionally.
+   - In v0.1, provide ONLY documentation + examples of how to use with Flow/Broadway/Explorer/Nx.
+   - Actual adapter modules that call Explorer/Nx APIs should be postponed to v0.2+ or placed in separate packages.
+
+Documentation requirements (must be written in Phase 0 stubs):
+A) Stream/Enum:
+   - Show how to do:
+     - `stream |> ExDataSketch.HLL.from_enumerable(p: 14)`
+     - `stream |> Enum.reduce(ExDataSketch.HLL.new(), &ExDataSketch.HLL.update/2)`
+     - chunked update using `Stream.chunk_every/2` + `update_many`
+
+B) Flow:
+   - Provide examples that treat sketches as mergeable reducers:
+     - Flow.from_enumerable(data)
+       |> Flow.partition()
+       |> Flow.reduce(fn -> ExDataSketch.HLL.new(opts) end, fn item, s -> ExDataSketch.HLL.update(s, item) end)
+       |> Flow.departition(fn -> ExDataSketch.HLL.new(opts) end)
+       |> Enum.reduce(ExDataSketch.HLL.new(opts), &ExDataSketch.HLL.merge/2)
+   - Also show pattern using `Flow.map` producing sketches per partition and merging.
+
+C) Broadway:
+   - Provide an example pipeline pattern (docs only in v0.1):
+     - Each processor updates a per-batch sketch using `handle_batch/4`
+     - Use `update_many` on the batch messages
+     - Merge results at the end (or send to an aggregator process)
+   - Emphasize immutability and avoid global mutable state; show a GenServer “sketch aggregator” pattern.
+
+D) Explorer:
+   - Docs-only in v0.1:
+     - Show how to compute sketches from series:
+       - `df["col"] |> Explorer.Series.to_list() |> ExDataSketch.HLL.from_enumerable(...)`
+     - Or use lazy streaming if available; avoid claiming zero-copy.
+   - Do not add Explorer dependency.
+
+E) Nx:
+   - Docs-only in v0.1:
+     - clarify that sketches are not tensors; integration is about feeding values and returning scalar estimates
+     - show how to convert Nx tensor to list/flat stream responsibly (size warnings)
+
+F) ex_arrow / ExZarr:
+   - Docs-only in v0.1:
+     - show intended future: reading Arrow columns / Zarr chunks, streaming chunk-by-chunk into sketches
+     - Provide a “chunk iterator -> update_many -> merge” example
+   - Do not add dependencies and do not promise direct IPC/Flight integration yet.
+
+Testing requirements related to integration:
+- Add unit tests for:
+  - `from_enumerable/2` equals manual reduce
+  - `update_many` behavior
+  - `merge_many` behavior
+- Add property tests where appropriate:
+  - For HLL/CMS, `merge_many(chunks_sketches) ~== sketch_of_whole_stream` within tolerance.
+
+In v0.1, integrations are achieved through pure functions (update_many, merge_many, from_enumerable) and documentation examples only. Do not write adapter code that depends on external libraries.
+
+STOP CONDITIONS:
+- If implementing any adapter requires adding a dependency or conditional compilation complexity, stop and ask the user; do not proceed automatically.
+
 ================================================================================
 PHASED PLAN (MUST FOLLOW)
 ================================================================================
