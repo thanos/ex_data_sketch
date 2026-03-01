@@ -145,7 +145,7 @@ defmodule ExDataSketch.HLL do
   register-wise maximum, which corresponds to the union of the two input
   multisets.
 
-  Returns the merged sketch. Raises `ExDataSketch.Errors.IncompatibleSketchesErrorError`
+  Returns the merged sketch. Raises `ExDataSketch.Errors.IncompatibleSketchesError`
   if the sketches have different parameters.
 
   ## Examples
@@ -352,22 +352,15 @@ defmodule ExDataSketch.HLL do
 
   The returned function calls `update/2` on each item.
 
-  ## Options
-
-  Same as `new/1`. Used to create the initial sketch accumulator.
-
   ## Examples
 
       iex> is_function(ExDataSketch.HLL.reducer(), 2)
       true
 
   """
-  @spec reducer(keyword()) :: (term(), t() -> t())
-  def reducer(opts \\ []) do
-    fn item, sketch ->
-      _ = opts
-      update(sketch, item)
-    end
+  @spec reducer() :: (term(), t() -> t())
+  def reducer do
+    fn item, sketch -> update(sketch, item) end
   end
 
   @doc """

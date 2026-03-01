@@ -394,22 +394,15 @@ defmodule ExDataSketch.CMS do
 
   The returned function calls `update/2` on each item.
 
-  ## Options
-
-  Same as `new/1`. Used to create the initial sketch accumulator.
-
   ## Examples
 
       iex> is_function(ExDataSketch.CMS.reducer(), 2)
       true
 
   """
-  @spec reducer(keyword()) :: (term(), t() -> t())
-  def reducer(opts \\ []) do
-    fn item, sketch ->
-      _ = opts
-      update(sketch, item)
-    end
+  @spec reducer() :: (term(), t() -> t())
+  def reducer do
+    fn item, sketch -> update(sketch, item) end
   end
 
   @doc """
