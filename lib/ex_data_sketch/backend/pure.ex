@@ -44,10 +44,10 @@ defmodule ExDataSketch.Backend.Pure do
     remaining = hash64 &&& (1 <<< (64 - p)) - 1
     rank = count_leading_zeros(remaining, 64 - p) + 1
 
-    <<header::binary-size(4), registers::binary-size(m)>> = state_bin
+    <<header::binary-size(4), registers::binary-size(^m)>> = state_bin
 
     # Read current register value and set max
-    <<before::binary-size(bucket), old_val::unsigned-8, after_bytes::binary>> = registers
+    <<before::binary-size(^bucket), old_val::unsigned-8, after_bytes::binary>> = registers
 
     if rank > old_val do
       <<header::binary, before::binary, rank::unsigned-8, after_bytes::binary>>
@@ -63,7 +63,7 @@ defmodule ExDataSketch.Backend.Pure do
     m = 1 <<< p
     bits = 64 - p
 
-    <<header::binary-size(4), registers::binary-size(m)>> = state_bin
+    <<header::binary-size(4), registers::binary-size(^m)>> = state_bin
 
     # Decode registers to a tuple for O(1) access
     reg_tuple = registers |> :binary.bin_to_list() |> List.to_tuple()
@@ -96,8 +96,8 @@ defmodule ExDataSketch.Backend.Pure do
     p = Keyword.fetch!(opts, :p)
     m = 1 <<< p
 
-    <<header_a::binary-size(4), regs_a::binary-size(m)>> = a_bin
-    <<_header_b::binary-size(4), regs_b::binary-size(m)>> = b_bin
+    <<header_a::binary-size(4), regs_a::binary-size(^m)>> = a_bin
+    <<_header_b::binary-size(4), regs_b::binary-size(^m)>> = b_bin
 
     merged =
       zip_max_binary(regs_a, regs_b)
@@ -112,7 +112,7 @@ defmodule ExDataSketch.Backend.Pure do
     p = Keyword.fetch!(opts, :p)
     m = 1 <<< p
 
-    <<_header::binary-size(4), registers::binary-size(m)>> = state_bin
+    <<_header::binary-size(4), registers::binary-size(^m)>> = state_bin
 
     # Compute raw estimate: alpha * m^2 / sum(2^(-register_i))
     alpha = alpha(m)
@@ -208,10 +208,9 @@ defmodule ExDataSketch.Backend.Pure do
     counter_bytes = div(counter_width, 8)
     max_counter = (1 <<< counter_width) - 1
     header_size = 9
-    total_counters = width * depth
+    data_size = width * depth * counter_bytes
 
-    <<header::binary-size(header_size), counters::binary-size(total_counters * counter_bytes)>> =
-      state_bin
+    <<header::binary-size(^header_size), counters::binary-size(^data_size)>> = state_bin
 
     # Decode counters to tuple for efficient update
     counter_tuple = decode_counters_to_tuple(counters, counter_bytes)
@@ -238,10 +237,9 @@ defmodule ExDataSketch.Backend.Pure do
     counter_bytes = div(counter_width, 8)
     max_counter = (1 <<< counter_width) - 1
     header_size = 9
-    total_counters = width * depth
+    data_size = width * depth * counter_bytes
 
-    <<header::binary-size(header_size), counters::binary-size(total_counters * counter_bytes)>> =
-      state_bin
+    <<header::binary-size(^header_size), counters::binary-size(^data_size)>> = state_bin
 
     counter_tuple = decode_counters_to_tuple(counters, counter_bytes)
 
@@ -272,8 +270,8 @@ defmodule ExDataSketch.Backend.Pure do
     total_counters = width * depth
     data_size = total_counters * counter_bytes
 
-    <<header_a::binary-size(header_size), counters_a::binary-size(data_size)>> = a_bin
-    <<_header_b::binary-size(header_size), counters_b::binary-size(data_size)>> = b_bin
+    <<header_a::binary-size(^header_size), counters_a::binary-size(^data_size)>> = a_bin
+    <<_header_b::binary-size(^header_size), counters_b::binary-size(^data_size)>> = b_bin
 
     list_a = decode_counters_to_list(counters_a, counter_bytes)
     list_b = decode_counters_to_list(counters_b, counter_bytes)
@@ -294,7 +292,7 @@ defmodule ExDataSketch.Backend.Pure do
     counter_bytes = div(counter_width, 8)
     header_size = 9
 
-    <<_header::binary-size(header_size), counters::binary>> = state_bin
+    <<_header::binary-size(^header_size), counters::binary>> = state_bin
 
     # Read each row's counter via direct binary offset (no full decode)
     Enum.reduce(0..(depth - 1), :infinity, fn row, min_val ->
@@ -357,12 +355,12 @@ defmodule ExDataSketch.Backend.Pure do
   end
 
   defp decode_single_counter(binary, offset, 4) do
-    <<_::binary-size(offset), val::unsigned-little-32, _::binary>> = binary
+    <<_::binary-size(^offset), val::unsigned-little-32, _::binary>> = binary
     val
   end
 
   defp decode_single_counter(binary, offset, 8) do
-    <<_::binary-size(offset), val::unsigned-little-64, _::binary>> = binary
+    <<_::binary-size(^offset), val::unsigned-little-64, _::binary>> = binary
     val
   end
 end
