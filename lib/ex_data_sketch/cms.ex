@@ -1,0 +1,386 @@
+defmodule ExDataSketch.CMS do
+  @moduledoc """
+  Count-Min Sketch (CMS) for frequency estimation.
+
+  CMS provides approximate frequency estimates for items in a data stream.
+  It answers: "approximately how many times has this item appeared?"
+
+  The sketch uses `depth` independent hash functions and a `width x depth`
+  counter matrix. Estimates are guaranteed to never undercount (for non-negative
+  increments) but may overcount.
+
+  ## Memory and Accuracy
+
+  - Counter matrix: `width * depth * (counter_width / 8)` bytes.
+  - Error bound: estimates are within `e * N / width` of the true count
+    with probability at least `1 - (1/2)^depth`, where `N` is total count
+    and `e` is Euler's number.
+
+  | Width | Depth | Counter | Memory     |
+  |-------|-------|---------|------------|
+  | 2,048 | 5     | 32-bit  | 40 KiB    |
+  | 8,192 | 7     | 32-bit  | 224 KiB   |
+  | 2,048 | 5     | 64-bit  | 80 KiB    |
+
+  ## Binary State Layout (v1)
+
+  All multi-byte fields are little-endian.
+
+      Offset  Size      Field
+      ------  --------  -----
+      0       1         Version (u8, currently 1)
+      1       4         Width (u32 little-endian)
+      5       2         Depth (u16 little-endian)
+      7       1         Counter width in bits (u8, 32 or 64)
+      8       1         Reserved (u8, must be 0)
+      9       W*D*C     Counters (row-major, little-endian per counter)
+
+  Where C = counter_width / 8 (4 or 8 bytes per counter).
+  Total: 9 + width * depth * C bytes.
+
+  ## Options
+
+  - `:width` - number of counters per row, pos_integer (default: 2048).
+  - `:depth` - number of rows (hash functions), pos_integer (default: 5).
+  - `:counter_width` - bits per counter, 32 or 64 (default: 32).
+  - `:backend` - backend module (default: `ExDataSketch.Backend.Pure`).
+
+  ## Overflow Policy
+
+  Default: saturating. When a counter reaches its maximum value (2^32-1 or
+  2^64-1), further increments leave it at the maximum. This prevents wrap-around
+  errors at the cost of potential undercounting at extreme values.
+
+  ## Phase 0 Status
+
+  All functions are stubs that raise `ExDataSketch.Errors.NotImplementedError`.
+  Full implementation in Phase 1.
+  """
+
+  alias ExDataSketch.{Backend, Codec, Errors, Hash}
+
+  @type t :: %__MODULE__{
+          state: binary(),
+          opts: keyword(),
+          backend: module()
+        }
+
+  defstruct [:state, :opts, :backend]
+
+  @default_width 2048
+  @default_depth 5
+  @default_counter_width 32
+
+  @doc """
+  Creates a new CMS sketch.
+
+  ## Options
+
+  - `:width` - counters per row (default: #{@default_width}). Must be positive.
+  - `:depth` - number of rows (default: #{@default_depth}). Must be positive.
+  - `:counter_width` - bits per counter, 32 or 64 (default: #{@default_counter_width}).
+  - `:backend` - backend module (default: `ExDataSketch.Backend.Pure`).
+
+  ## Examples
+
+      iex> try do
+      ...>   ExDataSketch.CMS.new()
+      ...> rescue
+      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
+      ...> end
+      "ExDataSketch.Backend.Pure.cms_new is not yet implemented"
+
+  """
+  @spec new(keyword()) :: t()
+  def new(opts \\ []) do
+    width = Keyword.get(opts, :width, @default_width)
+    depth = Keyword.get(opts, :depth, @default_depth)
+    counter_width = Keyword.get(opts, :counter_width, @default_counter_width)
+
+    validate_width!(width)
+    validate_depth!(depth)
+    validate_counter_width!(counter_width)
+
+    backend = Backend.resolve(opts)
+    clean_opts = [width: width, depth: depth, counter_width: counter_width]
+    state = backend.cms_new(clean_opts)
+    %__MODULE__{state: state, opts: clean_opts, backend: backend}
+  end
+
+  @doc """
+  Updates the sketch with a single item.
+
+  The item is hashed using `ExDataSketch.Hash.hash64/1` before being
+  recorded in the sketch.
+
+  ## Parameters
+
+  - `sketch` - the CMS sketch to update.
+  - `item` - any Elixir term to count.
+  - `increment` - positive integer to add (default: 1).
+
+  ## Examples
+
+      iex> try do
+      ...>   ExDataSketch.CMS.new() |> ExDataSketch.CMS.update("hello")
+      ...> rescue
+      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
+      ...> end
+      "ExDataSketch.Backend.Pure.cms_new is not yet implemented"
+
+  """
+  @spec update(t(), term(), pos_integer()) :: t()
+  def update(
+        %__MODULE__{state: state, opts: opts, backend: backend} = sketch,
+        item,
+        increment \\ 1
+      )
+      when is_integer(increment) and increment > 0 do
+    hash = Hash.hash64(item)
+    new_state = backend.cms_update(state, hash, increment, opts)
+    %{sketch | state: new_state}
+  end
+
+  @doc """
+  Updates the sketch with multiple items in a single pass.
+
+  Accepts an enumerable of items (each with implicit increment of 1) or
+  an enumerable of `{item, increment}` tuples.
+
+  ## Examples
+
+      iex> try do
+      ...>   ExDataSketch.CMS.new() |> ExDataSketch.CMS.update_many(["a", "b", "c"])
+      ...> rescue
+      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
+      ...> end
+      "ExDataSketch.Backend.Pure.cms_new is not yet implemented"
+
+  """
+  @spec update_many(t(), Enumerable.t()) :: t()
+  def update_many(%__MODULE__{state: state, opts: opts, backend: backend} = sketch, items) do
+    pairs =
+      Enum.map(items, fn
+        {item, increment} when is_integer(increment) and increment > 0 ->
+          {Hash.hash64(item), increment}
+
+        item ->
+          {Hash.hash64(item), 1}
+      end)
+
+    new_state = backend.cms_update_many(state, pairs, opts)
+    %{sketch | state: new_state}
+  end
+
+  @doc """
+  Merges two CMS sketches.
+
+  Both sketches must have the same width, depth, and counter_width.
+  Counters are added element-wise with saturating arithmetic.
+
+  ## Examples
+
+      iex> try do
+      ...>   a = ExDataSketch.CMS.new()
+      ...>   ExDataSketch.CMS.merge(a, a)
+      ...> rescue
+      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
+      ...> end
+      "ExDataSketch.Backend.Pure.cms_new is not yet implemented"
+
+  """
+  @spec merge(t(), t()) :: t()
+  def merge(
+        %__MODULE__{state: state_a, opts: opts_a, backend: backend} = sketch,
+        %__MODULE__{state: state_b, opts: opts_b}
+      ) do
+    if opts_a != opts_b do
+      raise Errors.IncompatibleSketches,
+        reason: "CMS parameter mismatch: #{inspect(opts_a)} vs #{inspect(opts_b)}"
+    end
+
+    new_state = backend.cms_merge(state_a, state_b, opts_a)
+    %{sketch | state: new_state}
+  end
+
+  @doc """
+  Estimates the frequency of an item in the sketch.
+
+  Returns a non-negative integer. The estimate is guaranteed to be at least
+  the true count (no undercounting) but may overcount.
+
+  ## Examples
+
+      iex> try do
+      ...>   ExDataSketch.CMS.new() |> ExDataSketch.CMS.estimate("hello")
+      ...> rescue
+      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
+      ...> end
+      "ExDataSketch.Backend.Pure.cms_new is not yet implemented"
+
+  """
+  @spec estimate(t(), term()) :: non_neg_integer()
+  def estimate(%__MODULE__{state: state, opts: opts, backend: backend}, item) do
+    hash = Hash.hash64(item)
+    backend.cms_estimate(state, hash, opts)
+  end
+
+  @doc """
+  Returns the size of the sketch state in bytes.
+
+  ## Examples
+
+      iex> try do
+      ...>   ExDataSketch.CMS.new() |> ExDataSketch.CMS.size_bytes()
+      ...> rescue
+      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
+      ...> end
+      "ExDataSketch.Backend.Pure.cms_new is not yet implemented"
+
+  """
+  @spec size_bytes(t()) :: non_neg_integer()
+  def size_bytes(%__MODULE__{state: state}) do
+    byte_size(state)
+  end
+
+  @doc """
+  Serializes the sketch to the ExDataSketch-native EXSK binary format.
+
+  ## Examples
+
+      iex> try do
+      ...>   ExDataSketch.CMS.new() |> ExDataSketch.CMS.serialize()
+      ...> rescue
+      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
+      ...> end
+      "ExDataSketch.Backend.Pure.cms_new is not yet implemented"
+
+  """
+  @spec serialize(t()) :: binary()
+  def serialize(%__MODULE__{state: state, opts: opts}) do
+    width = Keyword.fetch!(opts, :width)
+    depth = Keyword.fetch!(opts, :depth)
+    counter_width = Keyword.fetch!(opts, :counter_width)
+
+    params_bin = <<
+      width::unsigned-little-32,
+      depth::unsigned-little-16,
+      counter_width::unsigned-8
+    >>
+
+    Codec.encode(Codec.sketch_id_cms(), Codec.version(), params_bin, state)
+  end
+
+  @doc """
+  Deserializes an EXSK binary into a CMS sketch.
+
+  Returns `{:ok, sketch}` on success or `{:error, reason}` on failure.
+
+  ## Examples
+
+      iex> ExDataSketch.CMS.deserialize(<<"invalid">>)
+      {:error, %ExDataSketch.Errors.DeserializationError{message: "deserialization failed: invalid magic bytes, expected EXSK"}}
+
+  """
+  @spec deserialize(binary()) :: {:ok, t()} | {:error, Exception.t()}
+  def deserialize(binary) when is_binary(binary) do
+    with {:ok, decoded} <- Codec.decode(binary),
+         :ok <- validate_sketch_id(decoded.sketch_id),
+         {:ok, opts} <- decode_params(decoded.params) do
+      backend = Backend.default()
+
+      {:ok,
+       %__MODULE__{
+         state: decoded.state,
+         opts: opts,
+         backend: backend
+       }}
+    end
+  end
+
+  @doc """
+  Serializes the sketch to Apache DataSketches CMS format.
+
+  Not planned for v1. DataSketches does not define a standard CMS binary
+  format. This function is reserved for future compatibility.
+
+  ## Examples
+
+      iex> try do
+      ...>   ExDataSketch.CMS.new() |> ExDataSketch.CMS.serialize_datasketches()
+      ...> rescue
+      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
+      ...> end
+      "ExDataSketch.Backend.Pure.cms_new is not yet implemented"
+
+  """
+  @spec serialize_datasketches(t()) :: binary()
+  def serialize_datasketches(%__MODULE__{}) do
+    Errors.not_implemented!(__MODULE__, "serialize_datasketches")
+  end
+
+  @doc """
+  Deserializes an Apache DataSketches CMS binary.
+
+  Not planned for v1. Reserved for future compatibility.
+
+  ## Examples
+
+      iex> try do
+      ...>   ExDataSketch.CMS.deserialize_datasketches(<<>>)
+      ...> rescue
+      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
+      ...> end
+      "ExDataSketch.CMS.deserialize_datasketches is not yet implemented"
+
+  """
+  @spec deserialize_datasketches(binary()) :: {:ok, t()} | {:error, Exception.t()}
+  def deserialize_datasketches(_binary) do
+    Errors.not_implemented!(__MODULE__, "deserialize_datasketches")
+  end
+
+  # -- Private --
+
+  defp validate_width!(w) when is_integer(w) and w > 0, do: :ok
+
+  defp validate_width!(w) do
+    raise Errors.InvalidOption,
+      option: :width,
+      value: w,
+      message: "width must be a positive integer, got: #{inspect(w)}"
+  end
+
+  defp validate_depth!(d) when is_integer(d) and d > 0, do: :ok
+
+  defp validate_depth!(d) do
+    raise Errors.InvalidOption,
+      option: :depth,
+      value: d,
+      message: "depth must be a positive integer, got: #{inspect(d)}"
+  end
+
+  defp validate_counter_width!(cw) when cw in [32, 64], do: :ok
+
+  defp validate_counter_width!(cw) do
+    raise Errors.InvalidOption,
+      option: :counter_width,
+      value: cw,
+      message: "counter_width must be 32 or 64, got: #{inspect(cw)}"
+  end
+
+  defp validate_sketch_id(2), do: :ok
+
+  defp validate_sketch_id(id) do
+    {:error,
+     Errors.DeserializationError.exception(reason: "expected CMS sketch ID (2), got #{id}")}
+  end
+
+  defp decode_params(<<width::unsigned-little-32, depth::unsigned-little-16, cw::unsigned-8>>)
+       when width > 0 and depth > 0 and cw in [32, 64] do
+    {:ok, [width: width, depth: depth, counter_width: cw]}
+  end
+
+  defp decode_params(_other) do
+    {:error, Errors.DeserializationError.exception(reason: "invalid CMS params binary")}
+  end
+end

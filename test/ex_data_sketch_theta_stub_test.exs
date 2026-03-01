@@ -1,0 +1,118 @@
+defmodule ExDataSketch.ThetaStubTest do
+  use ExUnit.Case, async: true
+  doctest ExDataSketch.Theta
+
+  alias ExDataSketch.Errors.{DeserializationError, NotImplementedError}
+  alias ExDataSketch.Theta
+
+  describe "new/1" do
+    test "raises NotImplementedError (stub)" do
+      assert_raise NotImplementedError, ~r/Theta.new is not yet implemented/, fn ->
+        Theta.new()
+      end
+    end
+
+    test "raises NotImplementedError with options" do
+      assert_raise NotImplementedError, ~r/Theta.new is not yet implemented/, fn ->
+        Theta.new(k: 8192)
+      end
+    end
+  end
+
+  describe "update/2" do
+    test "raises NotImplementedError (stub)" do
+      sketch = %Theta{state: <<>>, opts: [], backend: nil}
+
+      assert_raise NotImplementedError, ~r/Theta.update is not yet implemented/, fn ->
+        Theta.update(sketch, "item")
+      end
+    end
+  end
+
+  describe "compact/1" do
+    test "raises NotImplementedError (stub)" do
+      sketch = %Theta{state: <<>>, opts: [], backend: nil}
+
+      assert_raise NotImplementedError, ~r/Theta.compact is not yet implemented/, fn ->
+        Theta.compact(sketch)
+      end
+    end
+  end
+
+  describe "estimate/1" do
+    test "raises NotImplementedError (stub)" do
+      sketch = %Theta{state: <<>>, opts: [], backend: nil}
+
+      assert_raise NotImplementedError, ~r/Theta.estimate is not yet implemented/, fn ->
+        Theta.estimate(sketch)
+      end
+    end
+  end
+
+  describe "merge/2" do
+    test "raises NotImplementedError (stub)" do
+      sketch = %Theta{state: <<>>, opts: [], backend: nil}
+
+      assert_raise NotImplementedError, ~r/Theta.merge is not yet implemented/, fn ->
+        Theta.merge(sketch, sketch)
+      end
+    end
+  end
+
+  describe "serialize/1" do
+    test "raises NotImplementedError (stub)" do
+      sketch = %Theta{state: <<>>, opts: [], backend: nil}
+
+      assert_raise NotImplementedError, ~r/Theta.serialize is not yet implemented/, fn ->
+        Theta.serialize(sketch)
+      end
+    end
+  end
+
+  describe "deserialize/1" do
+    test "rejects invalid binary" do
+      assert {:error, %DeserializationError{}} = Theta.deserialize(<<"invalid">>)
+    end
+
+    test "rejects wrong sketch ID" do
+      bin = ExDataSketch.Codec.encode(1, 1, <<>>, <<>>)
+      assert {:error, %DeserializationError{message: msg}} = Theta.deserialize(bin)
+      assert msg =~ "expected Theta sketch ID (3)"
+    end
+
+    test "raises NotImplementedError for correct sketch ID (stub)" do
+      bin = ExDataSketch.Codec.encode(3, 1, <<>>, <<>>)
+
+      assert_raise NotImplementedError, ~r/Theta.deserialize is not yet implemented/, fn ->
+        Theta.deserialize(bin)
+      end
+    end
+  end
+
+  describe "serialize_datasketches/1" do
+    test "raises NotImplementedError (stub)" do
+      sketch = %Theta{state: <<>>, opts: [], backend: nil}
+
+      assert_raise NotImplementedError, ~r/serialize_datasketches/, fn ->
+        Theta.serialize_datasketches(sketch)
+      end
+    end
+  end
+
+  describe "deserialize_datasketches/1" do
+    test "raises NotImplementedError (stub)" do
+      assert_raise NotImplementedError, ~r/deserialize_datasketches/, fn ->
+        Theta.deserialize_datasketches(<<>>)
+      end
+    end
+  end
+
+  describe "struct" do
+    test "has expected fields" do
+      sketch = %Theta{state: <<>>, opts: [], backend: nil}
+      assert Map.has_key?(sketch, :state)
+      assert Map.has_key?(sketch, :opts)
+      assert Map.has_key?(sketch, :backend)
+    end
+  end
+end

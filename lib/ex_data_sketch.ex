@@ -1,0 +1,65 @@
+defmodule ExDataSketch do
+  @moduledoc """
+  Production-grade streaming data sketching algorithms for Elixir.
+
+  ExDataSketch provides probabilistic data structures for approximate counting
+  and frequency estimation on streaming data. All sketch state is stored as
+  Elixir-owned binaries, enabling straightforward serialization, distribution,
+  and persistence.
+
+  ## Sketch Families
+
+  - `ExDataSketch.HLL` -- HyperLogLog for cardinality (distinct count) estimation.
+  - `ExDataSketch.CMS` -- Count-Min Sketch for frequency estimation.
+  - `ExDataSketch.Theta` -- Theta Sketch for set operations on cardinalities.
+
+  ## Architecture
+
+  - **Binary state**: All sketch state is canonical Elixir binaries. No opaque
+    NIF resources.
+  - **Backend system**: Computation is dispatched through backend modules.
+    `ExDataSketch.Backend.Pure` (pure Elixir) is always available.
+    `ExDataSketch.Backend.Rust` (optional, Phase 2) provides NIF acceleration.
+  - **Serialization**: ExDataSketch-native format (EXSK) for all sketches,
+    plus Apache DataSketches interop for Theta CompactSketch.
+  - **Deterministic hashing**: `ExDataSketch.Hash` provides a stable 64-bit
+    hash interface for reproducible results.
+
+  ## Quick Example
+
+      # Cardinality estimation with HLL
+      sketch = ExDataSketch.HLL.new(p: 14)
+      sketch = ExDataSketch.update_many(sketch, ["alice", "bob", "alice"])
+      ExDataSketch.HLL.estimate(sketch)
+
+      # Frequency estimation with CMS
+      sketch = ExDataSketch.CMS.new(width: 2048, depth: 5)
+      sketch = ExDataSketch.update_many(sketch, ["page_a", "page_a", "page_b"])
+      ExDataSketch.CMS.estimate(sketch, "page_a")
+
+  See the [Quick Start guide](quick_start.md) for more examples.
+  """
+
+  alias ExDataSketch.{CMS, HLL}
+
+  @doc """
+  Updates a sketch with multiple items in a single pass.
+
+  Delegates to the appropriate sketch module's `update_many/2` based on
+  the struct type.
+
+  ## Examples
+
+      iex> try do
+      ...>   sketch = ExDataSketch.HLL.new()
+      ...>   ExDataSketch.update_many(sketch, ["a", "b"])
+      ...> rescue
+      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
+      ...> end
+      "ExDataSketch.Backend.Pure.hll_new is not yet implemented"
+
+  """
+  @spec update_many(HLL.t() | CMS.t(), Enumerable.t()) :: HLL.t() | CMS.t()
+  def update_many(%HLL{} = sketch, items), do: HLL.update_many(sketch, items)
+  def update_many(%CMS{} = sketch, items), do: CMS.update_many(sketch, items)
+end

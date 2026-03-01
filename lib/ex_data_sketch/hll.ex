@@ -1,0 +1,330 @@
+defmodule ExDataSketch.HLL do
+  @moduledoc """
+  HyperLogLog (HLL) sketch for cardinality estimation.
+
+  HLL provides approximate distinct-count estimates using sublinear memory.
+  The precision parameter `p` controls the trade-off between memory usage and
+  accuracy: higher `p` means more memory but better estimates.
+
+  ## Memory and Accuracy
+
+  - Register count: `m = 2^p`
+  - Memory: `m` bytes (one byte per register in v1 format)
+  - Relative standard error: approximately `1.04 / sqrt(m)`
+
+  | p  | Registers | Memory  | ~Error |
+  |----|-----------|---------|--------|
+  | 10 | 1,024     | 1 KiB  | 3.25%  |
+  | 12 | 4,096     | 4 KiB  | 1.63%  |
+  | 14 | 16,384    | 16 KiB | 0.81%  |
+  | 16 | 65,536    | 64 KiB | 0.41%  |
+
+  ## Binary State Layout (v1)
+
+  All multi-byte fields are little-endian.
+
+      Offset  Size    Field
+      ------  ------  -----
+      0       1       Version (u8, currently 1)
+      1       1       Precision p (u8, 4..16)
+      2       2       Reserved flags (u16 little-endian, must be 0)
+      4       m       Registers (m = 2^p bytes, one u8 per register)
+
+  Total: 4 + 2^p bytes.
+
+  ## Options
+
+  - `:p` - precision parameter, integer 4..16 (default: 14)
+  - `:backend` - backend module (default: `ExDataSketch.Backend.Pure`)
+
+  ## Phase 0 Status
+
+  All functions are stubs that raise `ExDataSketch.Errors.NotImplementedError`.
+  Full implementation in Phase 1.
+  """
+
+  alias ExDataSketch.{Backend, Codec, Errors, Hash}
+
+  @type t :: %__MODULE__{
+          state: binary(),
+          opts: keyword(),
+          backend: module()
+        }
+
+  defstruct [:state, :opts, :backend]
+
+  @default_p 14
+  @min_p 4
+  @max_p 16
+
+  @doc """
+  Creates a new HLL sketch.
+
+  ## Options
+
+  - `:p` - precision parameter, integer #{@min_p}..#{@max_p} (default: #{@default_p}).
+    Higher values use more memory but give better accuracy.
+  - `:backend` - backend module (default: `ExDataSketch.Backend.Pure`).
+
+  ## Examples
+
+      iex> try do
+      ...>   ExDataSketch.HLL.new()
+      ...> rescue
+      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
+      ...> end
+      "ExDataSketch.Backend.Pure.hll_new is not yet implemented"
+
+  """
+  @spec new(keyword()) :: t()
+  def new(opts \\ []) do
+    p = Keyword.get(opts, :p, @default_p)
+    validate_p!(p)
+    backend = Backend.resolve(opts)
+    clean_opts = [p: p]
+    state = backend.hll_new(clean_opts)
+    %__MODULE__{state: state, opts: clean_opts, backend: backend}
+  end
+
+  @doc """
+  Updates the sketch with a single item.
+
+  The item is hashed using `ExDataSketch.Hash.hash64/1` before being
+  inserted into the sketch.
+
+  ## Examples
+
+      iex> try do
+      ...>   ExDataSketch.HLL.new() |> ExDataSketch.HLL.update("hello")
+      ...> rescue
+      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
+      ...> end
+      "ExDataSketch.Backend.Pure.hll_new is not yet implemented"
+
+  """
+  @spec update(t(), term()) :: t()
+  def update(%__MODULE__{state: state, opts: opts, backend: backend} = sketch, item) do
+    hash = Hash.hash64(item)
+    new_state = backend.hll_update(state, hash, opts)
+    %{sketch | state: new_state}
+  end
+
+  @doc """
+  Updates the sketch with multiple items in a single pass.
+
+  More efficient than calling `update/2` repeatedly because it minimizes
+  intermediate binary allocations.
+
+  ## Examples
+
+      iex> try do
+      ...>   ExDataSketch.HLL.new() |> ExDataSketch.HLL.update_many(["a", "b", "c"])
+      ...> rescue
+      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
+      ...> end
+      "ExDataSketch.Backend.Pure.hll_new is not yet implemented"
+
+  """
+  @spec update_many(t(), Enumerable.t()) :: t()
+  def update_many(%__MODULE__{state: state, opts: opts, backend: backend} = sketch, items) do
+    hashes = Enum.map(items, &Hash.hash64/1)
+    new_state = backend.hll_update_many(state, hashes, opts)
+    %{sketch | state: new_state}
+  end
+
+  @doc """
+  Merges two HLL sketches.
+
+  Both sketches must have the same precision `p`. The result contains the
+  register-wise maximum, which corresponds to the union of the two input
+  multisets.
+
+  Returns the merged sketch. Raises `ExDataSketch.Errors.IncompatibleSketches`
+  if the sketches have different parameters.
+
+  ## Examples
+
+      iex> try do
+      ...>   a = ExDataSketch.HLL.new()
+      ...>   ExDataSketch.HLL.merge(a, a)
+      ...> rescue
+      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
+      ...> end
+      "ExDataSketch.Backend.Pure.hll_new is not yet implemented"
+
+  """
+  @spec merge(t(), t()) :: t()
+  def merge(
+        %__MODULE__{state: state_a, opts: opts_a, backend: backend} = sketch,
+        %__MODULE__{state: state_b, opts: opts_b}
+      ) do
+    if opts_a[:p] != opts_b[:p] do
+      raise Errors.IncompatibleSketches,
+        reason: "HLL precision mismatch: #{opts_a[:p]} vs #{opts_b[:p]}"
+    end
+
+    new_state = backend.hll_merge(state_a, state_b, opts_a)
+    %{sketch | state: new_state}
+  end
+
+  @doc """
+  Estimates the number of distinct items in the sketch.
+
+  Returns a floating-point estimate. The accuracy depends on the precision
+  parameter `p`.
+
+  ## Examples
+
+      iex> try do
+      ...>   ExDataSketch.HLL.new() |> ExDataSketch.HLL.estimate()
+      ...> rescue
+      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
+      ...> end
+      "ExDataSketch.Backend.Pure.hll_new is not yet implemented"
+
+  """
+  @spec estimate(t()) :: float()
+  def estimate(%__MODULE__{state: state, opts: opts, backend: backend}) do
+    backend.hll_estimate(state, opts)
+  end
+
+  @doc """
+  Returns the size of the sketch state in bytes.
+
+  ## Examples
+
+      iex> try do
+      ...>   ExDataSketch.HLL.new() |> ExDataSketch.HLL.size_bytes()
+      ...> rescue
+      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
+      ...> end
+      "ExDataSketch.Backend.Pure.hll_new is not yet implemented"
+
+  """
+  @spec size_bytes(t()) :: non_neg_integer()
+  def size_bytes(%__MODULE__{state: state}) do
+    byte_size(state)
+  end
+
+  @doc """
+  Serializes the sketch to the ExDataSketch-native EXSK binary format.
+
+  The serialized binary includes magic bytes, version, sketch type,
+  parameters, and state. See `ExDataSketch.Codec` for format details.
+
+  ## Examples
+
+      iex> try do
+      ...>   ExDataSketch.HLL.new() |> ExDataSketch.HLL.serialize()
+      ...> rescue
+      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
+      ...> end
+      "ExDataSketch.Backend.Pure.hll_new is not yet implemented"
+
+  """
+  @spec serialize(t()) :: binary()
+  def serialize(%__MODULE__{state: state, opts: opts}) do
+    p = Keyword.fetch!(opts, :p)
+    params_bin = <<p::unsigned-8>>
+    Codec.encode(Codec.sketch_id_hll(), Codec.version(), params_bin, state)
+  end
+
+  @doc """
+  Deserializes an EXSK binary into an HLL sketch.
+
+  Returns `{:ok, sketch}` on success or `{:error, reason}` on failure.
+
+  ## Examples
+
+      iex> ExDataSketch.HLL.deserialize(<<"invalid">>)
+      {:error, %ExDataSketch.Errors.DeserializationError{message: "deserialization failed: invalid magic bytes, expected EXSK"}}
+
+  """
+  @spec deserialize(binary()) :: {:ok, t()} | {:error, Exception.t()}
+  def deserialize(binary) when is_binary(binary) do
+    with {:ok, decoded} <- Codec.decode(binary),
+         :ok <- validate_sketch_id(decoded.sketch_id),
+         {:ok, opts} <- decode_params(decoded.params) do
+      backend = Backend.default()
+
+      {:ok,
+       %__MODULE__{
+         state: decoded.state,
+         opts: opts,
+         backend: backend
+       }}
+    end
+  end
+
+  @doc """
+  Serializes the sketch to Apache DataSketches HLL format.
+
+  Not yet implemented. Will be available in a future release.
+  Interop priority: Theta first, then HLL.
+
+  ## Examples
+
+      iex> try do
+      ...>   ExDataSketch.HLL.new() |> ExDataSketch.HLL.serialize_datasketches()
+      ...> rescue
+      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
+      ...> end
+      "ExDataSketch.Backend.Pure.hll_new is not yet implemented"
+
+  """
+  @spec serialize_datasketches(t()) :: binary()
+  def serialize_datasketches(%__MODULE__{}) do
+    Errors.not_implemented!(__MODULE__, "serialize_datasketches")
+  end
+
+  @doc """
+  Deserializes an Apache DataSketches HLL binary.
+
+  Not yet implemented. Will be available in a future release.
+
+  ## Examples
+
+      iex> try do
+      ...>   ExDataSketch.HLL.deserialize_datasketches(<<>>)
+      ...> rescue
+      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
+      ...> end
+      "ExDataSketch.HLL.deserialize_datasketches is not yet implemented"
+
+  """
+  @spec deserialize_datasketches(binary()) :: {:ok, t()} | {:error, Exception.t()}
+  def deserialize_datasketches(_binary) do
+    Errors.not_implemented!(__MODULE__, "deserialize_datasketches")
+  end
+
+  # -- Private --
+
+  defp validate_p!(p) when is_integer(p) and p >= @min_p and p <= @max_p, do: :ok
+
+  defp validate_p!(p) do
+    raise Errors.InvalidOption,
+      option: :p,
+      value: p,
+      message: "p must be an integer between #{@min_p} and #{@max_p}, got: #{inspect(p)}"
+  end
+
+  defp validate_sketch_id(1), do: :ok
+
+  defp validate_sketch_id(id) do
+    {:error,
+     Errors.DeserializationError.exception(reason: "expected HLL sketch ID (1), got #{id}")}
+  end
+
+  defp decode_params(<<p::unsigned-8>>) when p >= @min_p and p <= @max_p do
+    {:ok, [p: p]}
+  end
+
+  defp decode_params(<<p::unsigned-8>>) do
+    {:error,
+     Errors.DeserializationError.exception(reason: "invalid HLL precision #{p} in params")}
+  end
+
+  defp decode_params(_other) do
+    {:error, Errors.DeserializationError.exception(reason: "invalid HLL params binary")}
+  end
+end
