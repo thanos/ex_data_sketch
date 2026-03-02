@@ -9,13 +9,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Optional Rust NIF acceleration backend (`ExDataSketch.Backend.Rust`).
-- Rust NIFs for HLL (update_many, merge, estimate), CMS (update_many, merge), and Theta (update_many, merge).
-- Normal and dirty CPU scheduler NIF variants with configurable thresholds.
-- Automatic fallback to Pure Elixir backend when Rust NIF is unavailable.
-- Cross-backend parity tests ensuring byte-identical output between Pure and Rust.
-- Side-by-side Pure vs Rust benchmark scenarios.
-- CI jobs for Rust NIF compilation and testing (`test-rust`, `bench-rust`).
 - Pure Elixir Theta sketch implementation (new, update, update_many, compact, merge, estimate).
 - Apache DataSketches CompactSketch codec (serialize/deserialize) for Theta interop.
 - MurmurHash3 seed hash computation for DataSketches compatibility.

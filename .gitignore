@@ -25,7 +25,3 @@ ex_data_sketch-*.tar
 /priv/plts
 
 /bench/output/
-
-# Rust NIF build artifacts
-/native/ex_data_sketch_nif/target/
-/priv/native/

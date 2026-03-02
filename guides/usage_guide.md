@@ -46,15 +46,8 @@ without changing the public API.
 
 - `ExDataSketch.Backend.Pure` -- Pure Elixir implementation. Always available.
   Default backend.
-- `ExDataSketch.Backend.Rust` -- Rust NIF acceleration. Requires the `rustler`
-  dependency and a Rust toolchain. Falls back to Pure if the NIF is not compiled.
-
-Check availability at runtime:
-
-```elixir
-ExDataSketch.Backend.Rust.available?()
-# => true or false
-```
+- `ExDataSketch.Backend.Rust` -- Optional Rust NIF acceleration (Phase 2).
+  Requires Rustler and Rust toolchain.
 
 ### Selecting a Backend
 
@@ -67,50 +60,10 @@ sketch = ExDataSketch.HLL.new(backend: ExDataSketch.Backend.Rust)
 Global default (in config):
 
 ```elixir
-config :ex_data_sketch, backend: ExDataSketch.Backend.Rust
+config :ex_data_sketch, backend: ExDataSketch.Backend.Pure
 ```
 
 The per-sketch option always takes precedence over the global config.
-If `Backend.Rust` is configured but the NIF is not available, it
-automatically falls back to `Backend.Pure`.
-
-### Rust Backend Details
-
-The Rust backend accelerates batch and traversal operations via NIFs:
-
-| Rust NIF | Pure fallback |
-|----------|---------------|
-| `hll_update_many`, `hll_merge`, `hll_estimate` | `hll_new`, `hll_update` |
-| `cms_update_many`, `cms_merge` | `cms_new`, `cms_update`, `cms_estimate` |
-| `theta_update_many`, `theta_merge` | `theta_new`, `theta_update`, `theta_compact`, `theta_estimate` |
-
-#### Dirty Scheduler Thresholds
-
-Batch operations automatically use dirty CPU schedulers when input size
-exceeds configurable thresholds:
-
-| Operation | Default threshold |
-|-----------|-------------------|
-| `hll_update_many` | 10,000 hashes |
-| `cms_update_many` | 10,000 pairs |
-| `theta_update_many` | 10,000 hashes |
-| `cms_merge` | 100,000 total counters |
-| `theta_merge` | 50,000 combined entries |
-
-Override globally:
-
-```elixir
-config :ex_data_sketch, :dirty_thresholds, %{
-  hll_update_many: 5_000,
-  cms_update_many: 20_000
-}
-```
-
-Or per-call via opts:
-
-```elixir
-HLL.update_many(sketch, items, dirty_threshold: 5_000)
-```
 
 ### Backend Guarantees
 

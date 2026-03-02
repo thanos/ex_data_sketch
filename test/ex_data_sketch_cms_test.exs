@@ -6,24 +6,16 @@ defmodule ExDataSketch.CMSTest do
 
   doctest ExDataSketch.CMS
 
-  alias ExDataSketch.Backend
   alias ExDataSketch.CMS
   alias ExDataSketch.Errors.{DeserializationError, IncompatibleSketchesError, InvalidOptionError}
 
-  # Backends to test against
-  @backends [Backend.Pure] ++
-              if(Backend.Rust.available?(),
-                do: [Backend.Rust],
-                else: []
-              )
-
-  # -- Construction (not parameterized — tests public API/validation) --
+  # -- Construction --
 
   describe "new/1" do
     test "creates sketch with default options" do
       sketch = CMS.new()
       assert sketch.opts == [width: 2048, depth: 5, counter_width: 32]
-      assert sketch.backend == Backend.Pure
+      assert sketch.backend == ExDataSketch.Backend.Pure
     end
 
     test "creates sketch with custom options" do
@@ -87,159 +79,131 @@ defmodule ExDataSketch.CMSTest do
     end
   end
 
-  # -- Parameterized backend tests --
+  # -- Update --
 
-  for backend <- @backends do
-    @backend backend
-    backend_name = backend |> Module.split() |> List.last()
-
-    describe "update/2 [#{backend_name}]" do
-      test "empty sketch estimates 0" do
-        sketch = CMS.new(backend: @backend)
-        assert CMS.estimate(sketch, "hello") == 0
-      end
-
-      test "single item has exact count" do
-        sketch = CMS.new(backend: @backend) |> CMS.update("hello")
-        assert CMS.estimate(sketch, "hello") == 1
-      end
-
-      test "update with custom increment" do
-        sketch = CMS.new(backend: @backend) |> CMS.update("hello", 5)
-        assert CMS.estimate(sketch, "hello") == 5
-      end
-
-      test "multiple updates accumulate" do
-        sketch =
-          CMS.new(backend: @backend) |> CMS.update("a") |> CMS.update("a") |> CMS.update("a")
-
-        assert CMS.estimate(sketch, "a") == 3
-      end
-
-      test "known frequencies" do
-        sketch =
-          CMS.new(backend: @backend)
-          |> CMS.update("a", 10)
-          |> CMS.update("b", 3)
-          |> CMS.update("c", 7)
-
-        # Estimates >= true count (no undercount guarantee)
-        assert CMS.estimate(sketch, "a") >= 10
-        assert CMS.estimate(sketch, "b") >= 3
-        assert CMS.estimate(sketch, "c") >= 7
-      end
+  describe "update/2" do
+    test "empty sketch estimates 0" do
+      sketch = CMS.new()
+      assert CMS.estimate(sketch, "hello") == 0
     end
 
-    describe "update_many/2 [#{backend_name}]" do
-      test "batch update produces same result as sequential updates" do
-        items = ["a", "b", "c", "d", "e"]
-
-        sequential =
-          Enum.reduce(items, CMS.new(backend: @backend), fn item, s -> CMS.update(s, item) end)
-
-        batch = CMS.new(backend: @backend) |> CMS.update_many(items)
-        assert sequential.state == batch.state
-      end
-
-      test "accepts {item, increment} tuples" do
-        sketch = CMS.new(backend: @backend) |> CMS.update_many([{"a", 5}, {"b", 3}])
-        assert CMS.estimate(sketch, "a") >= 5
-        assert CMS.estimate(sketch, "b") >= 3
-      end
-
-      test "empty list is a no-op" do
-        sketch = CMS.new(backend: @backend)
-        assert CMS.update_many(sketch, []).state == sketch.state
-      end
+    test "single item has exact count" do
+      sketch = CMS.new() |> CMS.update("hello")
+      assert CMS.estimate(sketch, "hello") == 1
     end
 
-    describe "no-undercount [#{backend_name}]" do
-      test "estimate is always >= true count" do
-        items = List.duplicate("x", 100) ++ List.duplicate("y", 50) ++ List.duplicate("z", 1)
-        sketch = CMS.from_enumerable(items, backend: @backend)
-        assert CMS.estimate(sketch, "x") >= 100
-        assert CMS.estimate(sketch, "y") >= 50
-        assert CMS.estimate(sketch, "z") >= 1
-      end
+    test "update with custom increment" do
+      sketch = CMS.new() |> CMS.update("hello", 5)
+      assert CMS.estimate(sketch, "hello") == 5
     end
 
-    describe "merge/2 [#{backend_name}]" do
-      test "merge is commutative" do
-        a = CMS.from_enumerable(["x", "y"], backend: @backend)
-        b = CMS.from_enumerable(["y", "z"], backend: @backend)
-        assert CMS.merge(a, b).state == CMS.merge(b, a).state
-      end
-
-      test "merge adds counts" do
-        a = CMS.new(backend: @backend) |> CMS.update("x", 3)
-        b = CMS.new(backend: @backend) |> CMS.update("x", 5)
-        merged = CMS.merge(a, b)
-        assert CMS.estimate(merged, "x") >= 8
-      end
-
-      test "merge with empty preserves counts" do
-        sketch = CMS.new(backend: @backend) |> CMS.update("x", 5)
-        empty = CMS.new(backend: @backend)
-        assert CMS.estimate(CMS.merge(sketch, empty), "x") >= 5
-        assert CMS.estimate(CMS.merge(empty, sketch), "x") >= 5
-      end
-
-      test "raises on parameter mismatch" do
-        a = CMS.new(width: 1024, backend: @backend)
-        b = CMS.new(width: 2048, backend: @backend)
-
-        assert_raise IncompatibleSketchesError, ~r/CMS parameter mismatch/, fn ->
-          CMS.merge(a, b)
-        end
-      end
+    test "multiple updates accumulate" do
+      sketch = CMS.new() |> CMS.update("a") |> CMS.update("a") |> CMS.update("a")
+      assert CMS.estimate(sketch, "a") == 3
     end
 
-    describe "saturating overflow [#{backend_name}]" do
-      test "32-bit counter saturates at 2^32-1" do
-        max32 = (1 <<< 32) - 1
-        sketch = CMS.new(width: 10, depth: 1, counter_width: 32, backend: @backend)
-        sketch = CMS.update(sketch, "x", max32)
-        sketch = CMS.update(sketch, "x", 1)
-        assert CMS.estimate(sketch, "x") == max32
-      end
+    test "known frequencies" do
+      sketch =
+        CMS.new()
+        |> CMS.update("a", 10)
+        |> CMS.update("b", 3)
+        |> CMS.update("c", 7)
 
-      test "64-bit counter saturates at 2^64-1" do
-        max64 = (1 <<< 64) - 1
-        sketch = CMS.new(width: 10, depth: 1, counter_width: 64, backend: @backend)
-        sketch = CMS.update(sketch, "x", max64)
-        sketch = CMS.update(sketch, "x", 1)
-        assert CMS.estimate(sketch, "x") == max64
-      end
+      # Estimates >= true count (no undercount guarantee)
+      assert CMS.estimate(sketch, "a") >= 10
+      assert CMS.estimate(sketch, "b") >= 3
+      assert CMS.estimate(sketch, "c") >= 7
+    end
+  end
+
+  # -- Update Many --
+
+  describe "update_many/2" do
+    test "batch update produces same result as sequential updates" do
+      items = ["a", "b", "c", "d", "e"]
+      sequential = Enum.reduce(items, CMS.new(), fn item, s -> CMS.update(s, item) end)
+      batch = CMS.new() |> CMS.update_many(items)
+      assert sequential.state == batch.state
     end
 
-    describe "properties [#{backend_name}]" do
-      property "merge commutativity" do
-        check all(
-                items_a <-
-                  list_of(string(:alphanumeric, min_length: 1), min_length: 1, max_length: 10),
-                items_b <-
-                  list_of(string(:alphanumeric, min_length: 1), min_length: 1, max_length: 10)
-              ) do
-          a = CMS.from_enumerable(items_a, width: 256, depth: 3, backend: @backend)
-          b = CMS.from_enumerable(items_b, width: 256, depth: 3, backend: @backend)
-          assert CMS.merge(a, b).state == CMS.merge(b, a).state
-        end
-      end
+    test "accepts {item, increment} tuples" do
+      sketch = CMS.new() |> CMS.update_many([{"a", 5}, {"b", 3}])
+      assert CMS.estimate(sketch, "a") >= 5
+      assert CMS.estimate(sketch, "b") >= 3
+    end
 
-      property "estimates are non-negative" do
-        check all(
-                items <-
-                  list_of(string(:alphanumeric, min_length: 1), min_length: 1, max_length: 20),
-                query <- string(:alphanumeric, min_length: 1)
-              ) do
-          sketch = CMS.from_enumerable(items, width: 256, depth: 3, backend: @backend)
-          assert CMS.estimate(sketch, query) >= 0
-        end
+    test "empty list is a no-op" do
+      sketch = CMS.new()
+      assert CMS.update_many(sketch, []).state == sketch.state
+    end
+  end
+
+  # -- No-Undercount Property --
+
+  describe "no-undercount" do
+    test "estimate is always >= true count" do
+      items = List.duplicate("x", 100) ++ List.duplicate("y", 50) ++ List.duplicate("z", 1)
+      sketch = CMS.from_enumerable(items)
+      assert CMS.estimate(sketch, "x") >= 100
+      assert CMS.estimate(sketch, "y") >= 50
+      assert CMS.estimate(sketch, "z") >= 1
+    end
+  end
+
+  # -- Merge --
+
+  describe "merge/2" do
+    test "merge is commutative" do
+      a = CMS.from_enumerable(["x", "y"])
+      b = CMS.from_enumerable(["y", "z"])
+      assert CMS.merge(a, b).state == CMS.merge(b, a).state
+    end
+
+    test "merge adds counts" do
+      a = CMS.new() |> CMS.update("x", 3)
+      b = CMS.new() |> CMS.update("x", 5)
+      merged = CMS.merge(a, b)
+      assert CMS.estimate(merged, "x") >= 8
+    end
+
+    test "merge with empty preserves counts" do
+      sketch = CMS.new() |> CMS.update("x", 5)
+      empty = CMS.new()
+      assert CMS.estimate(CMS.merge(sketch, empty), "x") >= 5
+      assert CMS.estimate(CMS.merge(empty, sketch), "x") >= 5
+    end
+
+    test "raises on parameter mismatch" do
+      a = CMS.new(width: 1024)
+      b = CMS.new(width: 2048)
+
+      assert_raise IncompatibleSketchesError, ~r/CMS parameter mismatch/, fn ->
+        CMS.merge(a, b)
       end
     end
   end
 
-  # -- Non-parameterized tests --
+  # -- Overflow --
+
+  describe "saturating overflow" do
+    test "32-bit counter saturates at 2^32-1" do
+      max32 = (1 <<< 32) - 1
+      sketch = CMS.new(width: 10, depth: 1, counter_width: 32)
+      sketch = CMS.update(sketch, "x", max32)
+      sketch = CMS.update(sketch, "x", 1)
+      assert CMS.estimate(sketch, "x") == max32
+    end
+
+    test "64-bit counter saturates at 2^64-1" do
+      max64 = (1 <<< 64) - 1
+      sketch = CMS.new(width: 10, depth: 1, counter_width: 64)
+      sketch = CMS.update(sketch, "x", max64)
+      sketch = CMS.update(sketch, "x", 1)
+      assert CMS.estimate(sketch, "x") == max64
+    end
+  end
+
+  # -- Serialization --
 
   describe "serialize/deserialize" do
     test "round-trip preserves state and opts" do
@@ -276,6 +240,8 @@ defmodule ExDataSketch.CMSTest do
     end
   end
 
+  # -- DataSketches interop --
+
   describe "serialize_datasketches/1" do
     test "raises NotImplementedError" do
       assert_raise ExDataSketch.Errors.NotImplementedError, ~r/serialize_datasketches/, fn ->
@@ -291,6 +257,8 @@ defmodule ExDataSketch.CMSTest do
       end
     end
   end
+
+  # -- Integration --
 
   describe "from_enumerable/2" do
     test "builds sketch from enumerable" do
@@ -350,52 +318,40 @@ defmodule ExDataSketch.CMSTest do
     end
   end
 
+  # -- Property Tests --
+
+  describe "properties" do
+    property "merge commutativity" do
+      check all(
+              items_a <-
+                list_of(string(:alphanumeric, min_length: 1), min_length: 1, max_length: 10),
+              items_b <-
+                list_of(string(:alphanumeric, min_length: 1), min_length: 1, max_length: 10)
+            ) do
+        a = CMS.from_enumerable(items_a, width: 256, depth: 3)
+        b = CMS.from_enumerable(items_b, width: 256, depth: 3)
+        assert CMS.merge(a, b).state == CMS.merge(b, a).state
+      end
+    end
+
+    property "estimates are non-negative" do
+      check all(
+              items <-
+                list_of(string(:alphanumeric, min_length: 1), min_length: 1, max_length: 20),
+              query <- string(:alphanumeric, min_length: 1)
+            ) do
+        sketch = CMS.from_enumerable(items, width: 256, depth: 3)
+        assert CMS.estimate(sketch, query) >= 0
+      end
+    end
+  end
+
   describe "struct" do
     test "has expected fields" do
       sketch = %CMS{state: <<>>, opts: [], backend: nil}
       assert Map.has_key?(sketch, :state)
       assert Map.has_key?(sketch, :opts)
       assert Map.has_key?(sketch, :backend)
-    end
-  end
-
-  # -- Cross-backend parity tests --
-
-  if Backend.Rust.available?() do
-    describe "Pure vs Rust parity" do
-      test "update_many produces identical state" do
-        items = for i <- 0..999, do: "item_#{i}"
-        pure = CMS.from_enumerable(items, backend: Backend.Pure)
-        rust = CMS.from_enumerable(items, backend: Backend.Rust)
-        assert pure.state == rust.state
-      end
-
-      test "merge produces identical state" do
-        items_a = for i <- 0..499, do: "a_#{i}"
-        items_b = for i <- 0..499, do: "b_#{i}"
-        pure_a = CMS.from_enumerable(items_a, backend: Backend.Pure)
-        pure_b = CMS.from_enumerable(items_b, backend: Backend.Pure)
-        rust_a = CMS.from_enumerable(items_a, backend: Backend.Rust)
-        rust_b = CMS.from_enumerable(items_b, backend: Backend.Rust)
-        assert CMS.merge(pure_a, pure_b).state == CMS.merge(rust_a, rust_b).state
-      end
-
-      test "estimate is identical" do
-        items = for i <- 0..99, do: "item_#{i}"
-        pure = CMS.from_enumerable(items, backend: Backend.Pure)
-        rust = CMS.from_enumerable(items, backend: Backend.Rust)
-
-        for i <- 0..99 do
-          assert CMS.estimate(pure, "item_#{i}") == CMS.estimate(rust, "item_#{i}")
-        end
-      end
-
-      test "serialization produces identical binary" do
-        items = for i <- 0..99, do: "item_#{i}"
-        pure = CMS.from_enumerable(items, backend: Backend.Pure)
-        rust = CMS.from_enumerable(items, backend: Backend.Rust)
-        assert CMS.serialize(pure) == CMS.serialize(rust)
-      end
     end
   end
 end

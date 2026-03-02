@@ -231,10 +231,6 @@ jobs:
         run: mix run bench/cms_bench.exs
         continue-on-error: true
 
-      - name: Run Theta benchmarks
-        run: mix run bench/theta_bench.exs
-        continue-on-error: true
-
       - name: Check benchmark regressions
         run: mix run ci/compare_bench.exs
         continue-on-error: true
@@ -243,98 +239,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: benchmarks
-          path: bench/output/
-
-  test-rust:
-    name: Test with Rust NIF
-    runs-on: ubuntu-latest
-    if: hashFiles('native/ex_data_sketch_nif/Cargo.toml') != ''
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: erlef/setup-beam@v1
-        with:
-          elixir-version: "1.19"
-          otp-version: "28"
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache deps
-        uses: actions/cache@v4
-        with:
-          path: deps
-          key: deps-${{ hashFiles('mix.lock') }}
-
-      - name: Cache build
-        uses: actions/cache@v4
-        with:
-          path: _build
-          key: build-test-rust-1.19-28-${{ hashFiles('mix.lock') }}-${{ hashFiles('native/ex_data_sketch_nif/Cargo.lock') }}
-          restore-keys: build-test-rust-1.19-28-
-
-      - name: Cache Rust target
-        uses: actions/cache@v4
-        with:
-          path: native/ex_data_sketch_nif/target
-          key: rust-target-${{ hashFiles('native/ex_data_sketch_nif/Cargo.lock') }}
-          restore-keys: rust-target-
-
-      - run: mix deps.get
-      - run: mix compile --warnings-as-errors
-      - run: mix test
-
-  bench-rust:
-    name: Benchmarks (with Rust NIF)
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && hashFiles('native/ex_data_sketch_nif/Cargo.toml') != ''
-    env:
-      MIX_ENV: dev
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: erlef/setup-beam@v1
-        with:
-          elixir-version: "1.19"
-          otp-version: "28"
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache deps
-        uses: actions/cache@v4
-        with:
-          path: deps
-          key: deps-${{ hashFiles('mix.lock') }}
-
-      - name: Cache build
-        uses: actions/cache@v4
-        with:
-          path: _build
-          key: build-dev-rust-1.19-28-${{ hashFiles('mix.lock') }}-${{ hashFiles('native/ex_data_sketch_nif/Cargo.lock') }}
-          restore-keys: build-dev-rust-1.19-28-
-
-      - name: Cache Rust target
-        uses: actions/cache@v4
-        with:
-          path: native/ex_data_sketch_nif/target
-          key: rust-target-dev-${{ hashFiles('native/ex_data_sketch_nif/Cargo.lock') }}
-          restore-keys: rust-target-dev-
-
-      - run: mix deps.get
-
-      - name: Run HLL benchmarks (Pure vs Rust)
-        run: mix run bench/hll_bench.exs
-        continue-on-error: true
-
-      - name: Run CMS benchmarks (Pure vs Rust)
-        run: mix run bench/cms_bench.exs
-        continue-on-error: true
-
-      - name: Run Theta benchmarks (Pure vs Rust)
-        run: mix run bench/theta_bench.exs
-        continue-on-error: true
-
-      - name: Upload benchmark artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: benchmarks-rust
           path: bench/output/
