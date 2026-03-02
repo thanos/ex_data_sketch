@@ -12,7 +12,7 @@ defmodule ExDataSketch.DataSketches.Murmur3 do
   The seed hash is computed as:
   1. Hash the 8-byte little-endian encoding of the seed using MurmurHash3_x64_128
      with hash seed 0.
-  2. Take the upper 16 bits of the first 64-bit output word.
+  2. Take the lower 16 bits of the first 64-bit output word.
 
   For the default DataSketches seed of 9001, this produces a fixed constant.
   """

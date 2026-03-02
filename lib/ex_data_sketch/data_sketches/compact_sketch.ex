@@ -129,6 +129,7 @@ defmodule ExDataSketch.DataSketches.CompactSketch do
     with {:ok, preamble} <- parse_preamble(binary),
          :ok <- validate_serial_version(preamble.serial_version),
          :ok <- validate_family_id(preamble.family_id),
+         :ok <- validate_lg_nom(preamble.lg_nom_longs),
          :ok <- validate_compact(preamble.flags),
          :ok <- validate_endianness(preamble.flags),
          :ok <- maybe_validate_seed_hash(preamble.seed_hash, seed),
@@ -194,6 +195,19 @@ defmodule ExDataSketch.DataSketches.CompactSketch do
      DeserializationError.exception(reason: "unsupported family ID #{id}, expected #{@family_id}")}
   end
 
+  @min_lg_nom 4
+  @max_lg_nom 26
+
+  defp validate_lg_nom(lg_nom) when lg_nom >= @min_lg_nom and lg_nom <= @max_lg_nom, do: :ok
+
+  defp validate_lg_nom(lg_nom) do
+    {:error,
+     DeserializationError.exception(
+       reason:
+         "lgNomLongs #{lg_nom} out of valid range #{@min_lg_nom}..#{@max_lg_nom} (k must be #{1 <<< @min_lg_nom}..#{1 <<< @max_lg_nom})"
+     )}
+  end
+
   defp validate_compact(flags) do
     if (flags &&& @flag_compact) != 0 do
       :ok
@@ -254,35 +268,50 @@ defmodule ExDataSketch.DataSketches.CompactSketch do
              DeserializationError.exception(reason: "truncated single-item CompactSketch")}
         end
 
-      # Exact or estimation mode
-      pre_longs >= 2 ->
-        preamble_size = pre_longs * 8
-        extract_multi_entry(binary, preamble_size, k, pre_longs, preamble)
+      # Exact or estimation mode (preamble must be 2 or 3 longs)
+      pre_longs in [2, 3] ->
+        extract_multi_entry(binary, k, pre_longs, preamble)
 
       true ->
         {:error,
          DeserializationError.exception(
-           reason: "invalid preamble longs #{pre_longs} for non-empty sketch"
+           reason:
+             "invalid preamble longs #{pre_longs} for non-empty compact sketch (expected 1, 2, or 3)"
          )}
     end
   end
 
-  defp extract_multi_entry(binary, _preamble_size, k, pre_longs, preamble) do
-    # Read count from bytes 8-11
-    <<_first8::binary-size(8), count::unsigned-little-32, _pad::unsigned-little-32, rest::binary>> =
-      binary
+  defp extract_multi_entry(binary, k, pre_longs, preamble) do
+    # Need at least 16 bytes to read count (bytes 8-15)
+    case binary do
+      <<_first8::binary-size(8), count::unsigned-little-32, _pad::unsigned-little-32,
+        rest::binary>> ->
+        extract_theta_and_entries(rest, k, count, pre_longs, preamble)
 
+      _ ->
+        {:error,
+         DeserializationError.exception(reason: "truncated CompactSketch: too short for preamble")}
+    end
+  end
+
+  defp extract_theta_and_entries(rest, k, count, pre_longs, preamble) do
     # Read theta if 3 preamble longs
-    {theta, entries_bin} =
-      if pre_longs >= 3 do
-        <<theta::unsigned-little-64, entries::binary>> = rest
-        {theta, entries}
-      else
-        {_entries_only_rest, _} = {rest, nil}
-        {@max_theta, rest}
-      end
+    case {pre_longs, rest} do
+      {n, <<theta::unsigned-little-64, entries_bin::binary>>} when n >= 3 ->
+        extract_entries(entries_bin, k, count, theta, preamble)
 
-    # Skip any remaining preamble bytes beyond what we've consumed
+      {n, _} when n >= 3 ->
+        {:error,
+         DeserializationError.exception(
+           reason: "truncated CompactSketch: too short for theta field"
+         )}
+
+      {_, entries_bin} ->
+        extract_entries(entries_bin, k, count, @max_theta, preamble)
+    end
+  end
+
+  defp extract_entries(entries_bin, k, count, theta, preamble) do
     expected_entries_size = count * 8
 
     if byte_size(entries_bin) < expected_entries_size do

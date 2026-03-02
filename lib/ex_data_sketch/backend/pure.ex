@@ -500,8 +500,21 @@ defmodule ExDataSketch.Backend.Pure do
   @spec theta_from_components(non_neg_integer(), non_neg_integer(), [non_neg_integer()]) ::
           binary()
   def theta_from_components(k, theta, entries) do
-    sorted = Enum.sort(entries)
-    theta_encode_state(k, theta, sorted)
+    normalized =
+      entries
+      |> Enum.uniq()
+      |> Enum.filter(&(&1 < theta))
+      |> Enum.sort()
+
+    {final_theta, final_entries} =
+      if length(normalized) > k do
+        {kept, [new_theta | _]} = Enum.split(normalized, k)
+        {new_theta, kept}
+      else
+        {theta, normalized}
+      end
+
+    theta_encode_state(k, final_theta, final_entries)
   end
 
   # -- Theta Helpers --

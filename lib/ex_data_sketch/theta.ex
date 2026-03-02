@@ -414,12 +414,17 @@ defmodule ExDataSketch.Theta do
      Errors.DeserializationError.exception(reason: "expected Theta sketch ID (3), got #{id}")}
   end
 
-  defp decode_params(<<k::unsigned-little-32>>) when k >= @min_k and k <= @max_k do
+  defp decode_params(<<k::unsigned-little-32>>)
+       when k >= @min_k and k <= @max_k and (k &&& k - 1) == 0 do
     {:ok, [k: k]}
   end
 
   defp decode_params(<<k::unsigned-little-32>>) do
-    {:error, Errors.DeserializationError.exception(reason: "invalid Theta k=#{k} in params")}
+    {:error,
+     Errors.DeserializationError.exception(
+       reason:
+         "invalid Theta k=#{k} in params (must be a power of 2 between #{@min_k} and #{@max_k})"
+     )}
   end
 
   defp decode_params(_other) do

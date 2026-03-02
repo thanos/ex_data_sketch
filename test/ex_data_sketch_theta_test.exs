@@ -284,6 +284,14 @@ defmodule ExDataSketch.ThetaTest do
       assert {:error, %DeserializationError{message: msg}} = Theta.deserialize(bin)
       assert msg =~ "invalid Theta params"
     end
+
+    test "rejects non-power-of-2 k in params" do
+      # k=100 is in range 16..2^26 but not a power of 2
+      params = <<100::unsigned-little-32>>
+      bin = ExDataSketch.Codec.encode(3, 1, params, <<0, 0>>)
+      assert {:error, %DeserializationError{message: msg}} = Theta.deserialize(bin)
+      assert msg =~ "power of 2"
+    end
   end
 
   # -- DataSketches Interop --
@@ -363,6 +371,43 @@ defmodule ExDataSketch.ThetaTest do
       assert {:error, %DeserializationError{}} = Theta.deserialize_datasketches(<<1, 2>>)
     end
 
+    test "rejects truncated multi-entry preamble" do
+      # Valid 8-byte preamble header indicating 2 preamble longs, but no count bytes
+      binary =
+        <<2::unsigned-8, 3::unsigned-8, 3::unsigned-8, 10::unsigned-8, 0::unsigned-8,
+          0x1A::unsigned-8, 0::unsigned-little-16>>
+
+      assert {:error, %DeserializationError{message: msg}} =
+               Theta.deserialize_datasketches(binary, seed: nil)
+
+      assert msg =~ "truncated"
+    end
+
+    test "rejects truncated estimation mode preamble (missing theta)" do
+      # 3 preamble longs indicated, count present, but theta field missing
+      binary =
+        <<3::unsigned-8, 3::unsigned-8, 3::unsigned-8, 10::unsigned-8, 0::unsigned-8,
+          0x1A::unsigned-8, 0::unsigned-little-16, 5::unsigned-little-32, 0::unsigned-little-32>>
+
+      assert {:error, %DeserializationError{message: msg}} =
+               Theta.deserialize_datasketches(binary, seed: nil)
+
+      assert msg =~ "truncated"
+    end
+
+    test "rejects invalid preamble longs > 3" do
+      # pre_longs = 4 is not a valid CompactSketch preamble
+      binary =
+        <<4::unsigned-8, 3::unsigned-8, 3::unsigned-8, 10::unsigned-8, 0::unsigned-8,
+          0x1A::unsigned-8, 0::unsigned-little-16, 5::unsigned-little-32, 0::unsigned-little-32,
+          0::unsigned-little-64, 0::unsigned-little-64>>
+
+      assert {:error, %DeserializationError{message: msg}} =
+               Theta.deserialize_datasketches(binary, seed: nil)
+
+      assert msg =~ "invalid preamble longs"
+    end
+
     test "rejects wrong serial version" do
       # Craft a minimal valid-looking but wrong version preamble
       binary =
@@ -373,6 +418,66 @@ defmodule ExDataSketch.ThetaTest do
                Theta.deserialize_datasketches(binary, seed: nil)
 
       assert msg =~ "serial version"
+    end
+
+    test "rejects lgNomLongs out of valid range" do
+      # lg_nom = 3 means k=8, below minimum k=16 (lg_nom=4)
+      binary =
+        <<1::unsigned-8, 3::unsigned-8, 3::unsigned-8, 3::unsigned-8, 0::unsigned-8,
+          0x0E::unsigned-8, 0::unsigned-little-16>>
+
+      assert {:error, %DeserializationError{message: msg}} =
+               Theta.deserialize_datasketches(binary, seed: nil)
+
+      assert msg =~ "lgNomLongs"
+
+      # lg_nom = 27 means k=2^27, above maximum k=2^26
+      binary_high =
+        <<1::unsigned-8, 3::unsigned-8, 3::unsigned-8, 27::unsigned-8, 0::unsigned-8,
+          0x0E::unsigned-8, 0::unsigned-little-16>>
+
+      assert {:error, %DeserializationError{message: msg_high}} =
+               Theta.deserialize_datasketches(binary_high, seed: nil)
+
+      assert msg_high =~ "lgNomLongs"
+    end
+
+    test "theta_from_components deduplicates entries" do
+      backend = ExDataSketch.Backend.Pure
+      max_theta = 0xFFFFFFFFFFFFFFFF
+      # Duplicate entries should be deduplicated
+      state = backend.theta_from_components(16, max_theta, [100, 200, 100, 300, 200])
+
+      <<1, _k::unsigned-little-32, _theta::unsigned-little-64, count::unsigned-little-32,
+        _::binary>> = state
+
+      assert count == 3
+    end
+
+    test "theta_from_components filters entries >= theta" do
+      backend = ExDataSketch.Backend.Pure
+      # Only entries strictly below theta should be kept
+      state = backend.theta_from_components(16, 500, [100, 200, 500, 600, 300])
+
+      <<1, _k::unsigned-little-32, _theta::unsigned-little-64, count::unsigned-little-32,
+        _::binary>> = state
+
+      assert count == 3
+    end
+
+    test "theta_from_components compacts when entries exceed k" do
+      backend = ExDataSketch.Backend.Pure
+      max_theta = 0xFFFFFFFFFFFFFFFF
+      # k=16, provide 20 entries — should compact to 16
+      entries = Enum.to_list(1..20)
+      state = backend.theta_from_components(16, max_theta, entries)
+
+      <<1, _k::unsigned-little-32, theta::unsigned-little-64, count::unsigned-little-32,
+        _::binary>> = state
+
+      assert count == 16
+      # theta should be set to the 17th element (first excluded)
+      assert theta == 17
     end
   end
 
