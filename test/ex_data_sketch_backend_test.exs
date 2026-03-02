@@ -131,7 +131,7 @@ defmodule ExDataSketch.BackendTest do
   end
 
   # Rust backend tests — only run when NIF is available
-  if ExDataSketch.Backend.Rust.available?() do
+  if Rust.available?() do
     describe "Rust backend dirty scheduler paths" do
       test "hll_update_many uses dirty scheduler when exceeding threshold" do
         opts = [p: 14, backend: Rust]
