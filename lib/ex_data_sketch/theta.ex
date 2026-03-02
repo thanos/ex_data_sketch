@@ -18,6 +18,7 @@ defmodule ExDataSketch.Theta do
 
   - `:k` - nominal number of entries (default: 4096). Controls accuracy.
     Higher values use more memory but give better estimates.
+    Must be a power of 2, between 16 and 67,108,864 (2^26).
   - `:backend` - backend module (default: `ExDataSketch.Backend.Pure`).
 
   ## Binary State Layout (v1)
@@ -37,7 +38,7 @@ defmodule ExDataSketch.Theta do
   ## DataSketches Interop
 
   Theta is the primary target for Apache DataSketches interop.
-  `serialize_datasketches/1` and `deserialize_datasketches/1` will implement
+  `serialize_datasketches/1` and `deserialize_datasketches/1` implement
   the CompactSketch binary format, enabling cross-language compatibility
   with Java, C++, and Python DataSketches libraries.
 
@@ -46,13 +47,12 @@ defmodule ExDataSketch.Theta do
   Theta merge (union) is **associative** and **commutative**.
   This means sketches can be merged in any order or grouping and produce the
   same result, making Theta safe for parallel and distributed aggregation.
-
-  ## Phase 0 Status
-
-  All functions are stubs. Full implementation in Phase 1.5.
   """
 
-  alias ExDataSketch.{Codec, Errors}
+  import Bitwise, only: [<<<: 2, &&&: 2]
+
+  alias ExDataSketch.{Backend, Codec, Errors, Hash}
+  alias ExDataSketch.DataSketches.CompactSketch
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -63,6 +63,8 @@ defmodule ExDataSketch.Theta do
   defstruct [:state, :opts, :backend]
 
   @default_k 4096
+  @min_k 16
+  @max_k 1 <<< 26
 
   @doc """
   Creates a new Theta sketch.
@@ -70,40 +72,66 @@ defmodule ExDataSketch.Theta do
   ## Options
 
   - `:k` - nominal number of entries (default: #{@default_k}). Must be a
-    positive integer and a power of 2.
+    power of 2, between #{@min_k} and #{@max_k}.
   - `:backend` - backend module (default: `ExDataSketch.Backend.Pure`).
 
   ## Examples
 
-      iex> try do
-      ...>   ExDataSketch.Theta.new()
-      ...> rescue
-      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
-      ...> end
-      "ExDataSketch.Theta.new is not yet implemented"
+      iex> sketch = ExDataSketch.Theta.new(k: 1024)
+      iex> sketch.opts
+      [k: 1024]
+      iex> ExDataSketch.Theta.size_bytes(sketch)
+      17
 
   """
   @spec new(keyword()) :: t()
-  def new(_opts \\ []) do
-    Errors.not_implemented!(__MODULE__, "new")
+  def new(opts \\ []) do
+    k = Keyword.get(opts, :k, @default_k)
+    validate_k!(k)
+    backend = Backend.resolve(opts)
+    clean_opts = [k: k]
+    state = backend.theta_new(clean_opts)
+    %__MODULE__{state: state, opts: clean_opts, backend: backend}
   end
 
   @doc """
   Updates the sketch with a single item.
 
+  The item is hashed using `ExDataSketch.Hash.hash64/1` before being
+  inserted into the sketch.
+
   ## Examples
 
-      iex> try do
-      ...>   ExDataSketch.Theta.update(%ExDataSketch.Theta{state: <<>>, opts: [], backend: nil}, "hello")
-      ...> rescue
-      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
-      ...> end
-      "ExDataSketch.Theta.update is not yet implemented"
+      iex> sketch = ExDataSketch.Theta.new() |> ExDataSketch.Theta.update("hello")
+      iex> ExDataSketch.Theta.estimate(sketch) > 0.0
+      true
 
   """
   @spec update(t(), term()) :: t()
-  def update(%__MODULE__{}, _item) do
-    Errors.not_implemented!(__MODULE__, "update")
+  def update(%__MODULE__{state: state, opts: opts, backend: backend} = sketch, item) do
+    hash = Hash.hash64(item)
+    new_state = backend.theta_update(state, hash, opts)
+    %{sketch | state: new_state}
+  end
+
+  @doc """
+  Updates the sketch with multiple items in a single pass.
+
+  More efficient than calling `update/2` repeatedly because it minimizes
+  intermediate binary allocations.
+
+  ## Examples
+
+      iex> sketch = ExDataSketch.Theta.new() |> ExDataSketch.Theta.update_many(["a", "b", "c"])
+      iex> ExDataSketch.Theta.estimate(sketch) > 0.0
+      true
+
+  """
+  @spec update_many(t(), Enumerable.t()) :: t()
+  def update_many(%__MODULE__{state: state, opts: opts, backend: backend} = sketch, items) do
+    hashes = Enum.map(items, &Hash.hash64/1)
+    new_state = backend.theta_update_many(state, hashes, opts)
+    %{sketch | state: new_state}
   end
 
   @doc """
@@ -115,17 +143,15 @@ defmodule ExDataSketch.Theta do
 
   ## Examples
 
-      iex> try do
-      ...>   ExDataSketch.Theta.compact(%ExDataSketch.Theta{state: <<>>, opts: [], backend: nil})
-      ...> rescue
-      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
-      ...> end
-      "ExDataSketch.Theta.compact is not yet implemented"
+      iex> sketch = ExDataSketch.Theta.new() |> ExDataSketch.Theta.update("x") |> ExDataSketch.Theta.compact()
+      iex> ExDataSketch.Theta.estimate(sketch) > 0.0
+      true
 
   """
   @spec compact(t()) :: t()
-  def compact(%__MODULE__{}) do
-    Errors.not_implemented!(__MODULE__, "compact")
+  def compact(%__MODULE__{state: state, opts: opts, backend: backend} = sketch) do
+    new_state = backend.theta_compact(state, opts)
+    %{sketch | state: new_state}
   end
 
   @doc """
@@ -133,58 +159,85 @@ defmodule ExDataSketch.Theta do
 
   ## Examples
 
-      iex> try do
-      ...>   ExDataSketch.Theta.estimate(%ExDataSketch.Theta{state: <<>>, opts: [], backend: nil})
-      ...> rescue
-      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
-      ...> end
-      "ExDataSketch.Theta.estimate is not yet implemented"
+      iex> ExDataSketch.Theta.new() |> ExDataSketch.Theta.estimate()
+      0.0
 
   """
   @spec estimate(t()) :: float()
-  def estimate(%__MODULE__{}) do
-    Errors.not_implemented!(__MODULE__, "estimate")
+  def estimate(%__MODULE__{state: state, opts: opts, backend: backend}) do
+    backend.theta_estimate(state, opts)
   end
 
   @doc """
   Merges two Theta sketches (set union).
 
+  Both sketches must have the same `k` value. Returns the merged sketch.
+  Raises `ExDataSketch.Errors.IncompatibleSketchesError` if the sketches
+  have different parameters.
+
   ## Examples
 
-      iex> try do
-      ...>   s = %ExDataSketch.Theta{state: <<>>, opts: [], backend: nil}
-      ...>   ExDataSketch.Theta.merge(s, s)
-      ...> rescue
-      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
-      ...> end
-      "ExDataSketch.Theta.merge is not yet implemented"
+      iex> a = ExDataSketch.Theta.new(k: 1024) |> ExDataSketch.Theta.update("x")
+      iex> b = ExDataSketch.Theta.new(k: 1024) |> ExDataSketch.Theta.update("y")
+      iex> merged = ExDataSketch.Theta.merge(a, b)
+      iex> ExDataSketch.Theta.estimate(merged) >= ExDataSketch.Theta.estimate(a)
+      true
 
   """
   @spec merge(t(), t()) :: t()
-  def merge(%__MODULE__{}, %__MODULE__{}) do
-    Errors.not_implemented!(__MODULE__, "merge")
+  def merge(
+        %__MODULE__{state: state_a, opts: opts_a, backend: backend} = sketch,
+        %__MODULE__{state: state_b, opts: opts_b}
+      ) do
+    if opts_a[:k] != opts_b[:k] do
+      raise Errors.IncompatibleSketchesError,
+        reason: "Theta k mismatch: #{opts_a[:k]} vs #{opts_b[:k]}"
+    end
+
+    new_state = backend.theta_merge(state_a, state_b, opts_a)
+    %{sketch | state: new_state}
+  end
+
+  @doc """
+  Returns the size of the sketch state in bytes.
+
+  ## Examples
+
+      iex> ExDataSketch.Theta.new() |> ExDataSketch.Theta.size_bytes()
+      17
+
+  """
+  @spec size_bytes(t()) :: non_neg_integer()
+  def size_bytes(%__MODULE__{state: state}) do
+    byte_size(state)
   end
 
   @doc """
   Serializes the sketch to the ExDataSketch-native EXSK binary format.
 
+  The serialized binary includes magic bytes, version, sketch type,
+  parameters, and state. See `ExDataSketch.Codec` for format details.
+
   ## Examples
 
-      iex> try do
-      ...>   ExDataSketch.Theta.serialize(%ExDataSketch.Theta{state: <<>>, opts: [], backend: nil})
-      ...> rescue
-      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
-      ...> end
-      "ExDataSketch.Theta.serialize is not yet implemented"
+      iex> sketch = ExDataSketch.Theta.new(k: 1024)
+      iex> binary = ExDataSketch.Theta.serialize(sketch)
+      iex> <<"EXSK", _rest::binary>> = binary
+      iex> byte_size(binary) > 0
+      true
 
   """
   @spec serialize(t()) :: binary()
-  def serialize(%__MODULE__{}) do
-    Errors.not_implemented!(__MODULE__, "serialize")
+  def serialize(%__MODULE__{state: state, opts: opts}) do
+    k = Keyword.fetch!(opts, :k)
+    params_bin = <<k::unsigned-little-32>>
+    Codec.encode(Codec.sketch_id_theta(), Codec.version(), params_bin, state)
   end
 
   @doc """
   Deserializes an EXSK binary into a Theta sketch.
+
+  Returns `{:ok, sketch}` on success or `{:error, reason}` on failure.
 
   ## Examples
 
@@ -194,12 +247,17 @@ defmodule ExDataSketch.Theta do
   """
   @spec deserialize(binary()) :: {:ok, t()} | {:error, Exception.t()}
   def deserialize(binary) when is_binary(binary) do
-    case Codec.decode(binary) do
-      {:ok, decoded} ->
-        validate_sketch_id(decoded.sketch_id)
+    with {:ok, decoded} <- Codec.decode(binary),
+         :ok <- validate_sketch_id(decoded.sketch_id),
+         {:ok, opts} <- decode_params(decoded.params) do
+      backend = Backend.default()
 
-      error ->
-        error
+      {:ok,
+       %__MODULE__{
+         state: decoded.state,
+         opts: opts,
+         backend: backend
+       }}
     end
   end
 
@@ -210,48 +268,56 @@ defmodule ExDataSketch.Theta do
   The CompactSketch format uses 64-bit hashes with a seed hash for
   compatibility verification.
 
-  Not yet implemented. Will be the first DataSketches interop codec.
+  ## Options
+
+  - `:seed` - the seed value for seed hash computation (default: 9001).
 
   ## Examples
 
-      iex> try do
-      ...>   s = %ExDataSketch.Theta{state: <<>>, opts: [], backend: nil}
-      ...>   ExDataSketch.Theta.serialize_datasketches(s)
-      ...> rescue
-      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
-      ...> end
-      "ExDataSketch.Theta.serialize_datasketches is not yet implemented"
+      iex> sketch = ExDataSketch.Theta.new(k: 1024) |> ExDataSketch.Theta.update("hello")
+      iex> binary = ExDataSketch.Theta.serialize_datasketches(sketch)
+      iex> is_binary(binary) and byte_size(binary) > 0
+      true
 
   """
-  @spec serialize_datasketches(t()) :: binary()
-  def serialize_datasketches(%__MODULE__{}) do
-    Errors.not_implemented!(__MODULE__, "serialize_datasketches")
+  @spec serialize_datasketches(t(), keyword()) :: binary()
+  def serialize_datasketches(%__MODULE__{} = sketch, opts \\ []) do
+    CompactSketch.encode(sketch, opts)
   end
 
   @doc """
   Deserializes an Apache DataSketches CompactSketch binary into a Theta sketch.
 
-  Not yet implemented. Will be the first DataSketches interop codec.
+  ## Options
+
+  - `:seed` - expected seed value for seed hash verification (default: 9001).
 
   ## Examples
 
-      iex> try do
-      ...>   ExDataSketch.Theta.deserialize_datasketches(<<>>)
-      ...> rescue
-      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
-      ...> end
-      "ExDataSketch.Theta.deserialize_datasketches is not yet implemented"
+      iex> sketch = ExDataSketch.Theta.new(k: 1024) |> ExDataSketch.Theta.update("test")
+      iex> binary = ExDataSketch.Theta.serialize_datasketches(sketch)
+      iex> {:ok, restored} = ExDataSketch.Theta.deserialize_datasketches(binary)
+      iex> ExDataSketch.Theta.estimate(restored) == ExDataSketch.Theta.estimate(sketch)
+      true
 
   """
-  @spec deserialize_datasketches(binary()) :: {:ok, t()} | {:error, Exception.t()}
-  def deserialize_datasketches(_binary) do
-    Errors.not_implemented!(__MODULE__, "deserialize_datasketches")
+  @spec deserialize_datasketches(binary(), keyword()) :: {:ok, t()} | {:error, Exception.t()}
+  def deserialize_datasketches(binary, opts \\ []) when is_binary(binary) do
+    case CompactSketch.decode(binary, opts) do
+      {:ok, decoded} ->
+        backend = Backend.default()
+        state = backend.theta_from_components(decoded.k, decoded.theta, decoded.entries)
+        {:ok, %__MODULE__{state: state, opts: [k: decoded.k], backend: backend}}
+
+      error ->
+        error
+    end
   end
 
   @doc """
   Creates a new Theta sketch from an enumerable of items.
 
-  Equivalent to creating a new sketch and updating it with each item.
+  Equivalent to `new(opts) |> update_many(enumerable)`.
 
   ## Options
 
@@ -259,21 +325,14 @@ defmodule ExDataSketch.Theta do
 
   ## Examples
 
-      iex> try do
-      ...>   ExDataSketch.Theta.from_enumerable(["a", "b", "c"])
-      ...> rescue
-      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
-      ...> end
-      "ExDataSketch.Theta.new is not yet implemented"
+      iex> sketch = ExDataSketch.Theta.from_enumerable(["a", "b", "c"], k: 1024)
+      iex> ExDataSketch.Theta.estimate(sketch) > 0.0
+      true
 
   """
   @spec from_enumerable(Enumerable.t(), keyword()) :: t()
   def from_enumerable(enumerable, opts \\ []) do
-    # apply/3 used to avoid type-checker warning: new/1 is a stub that always
-    # raises, so the compiler infers none() and warns on Enum.reduce/3.
-    # This will be replaced with a direct call once new/1 is implemented.
-    sketch = apply(__MODULE__, :new, [opts])
-    Enum.reduce(enumerable, sketch, fn item, acc -> update(acc, item) end)
+    new(opts) |> update_many(enumerable)
   end
 
   @doc """
@@ -283,13 +342,11 @@ defmodule ExDataSketch.Theta do
 
   ## Examples
 
-      iex> try do
-      ...>   s = %ExDataSketch.Theta{state: <<>>, opts: [], backend: nil}
-      ...>   ExDataSketch.Theta.merge_many([s, s])
-      ...> rescue
-      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
-      ...> end
-      "ExDataSketch.Theta.merge is not yet implemented"
+      iex> a = ExDataSketch.Theta.new(k: 1024) |> ExDataSketch.Theta.update("x")
+      iex> b = ExDataSketch.Theta.new(k: 1024) |> ExDataSketch.Theta.update("y")
+      iex> merged = ExDataSketch.Theta.merge_many([a, b])
+      iex> ExDataSketch.Theta.estimate(merged) > 0.0
+      true
 
   """
   @spec merge_many(Enumerable.t()) :: t()
@@ -331,13 +388,46 @@ defmodule ExDataSketch.Theta do
 
   # -- Private --
 
-  defp validate_sketch_id(3) do
-    Errors.not_implemented!(__MODULE__, "deserialize")
+  defp validate_k!(k) when is_integer(k) and k >= @min_k and k <= @max_k do
+    if (k &&& k - 1) != 0 do
+      raise Errors.InvalidOptionError,
+        option: :k,
+        value: k,
+        message: "k must be a power of 2, got: #{k}"
+    end
+
+    :ok
   end
 
-  defp validate_sketch_id(id) do
-    alias ExDataSketch.Errors.DeserializationError
+  defp validate_k!(k) do
+    raise Errors.InvalidOptionError,
+      option: :k,
+      value: k,
+      message:
+        "k must be an integer power of 2 between #{@min_k} and #{@max_k}, got: #{inspect(k)}"
+  end
 
-    {:error, DeserializationError.exception(reason: "expected Theta sketch ID (3), got #{id}")}
+  defp validate_sketch_id(3), do: :ok
+
+  defp validate_sketch_id(id) do
+    {:error,
+     Errors.DeserializationError.exception(reason: "expected Theta sketch ID (3), got #{id}")}
+  end
+
+  defp decode_params(<<k::unsigned-little-32>>)
+       when k >= @min_k and k <= @max_k and (k &&& k - 1) == 0 do
+    {:ok, [k: k]}
+  end
+
+  defp decode_params(<<k::unsigned-little-32>>) do
+    {:error,
+     Errors.DeserializationError.exception(
+       reason:
+         "invalid Theta k=#{k} in params (must be a power of 2 between #{@min_k} and #{@max_k})"
+     )}
+  end
+
+  defp decode_params(_other) do
+    {:error, Errors.DeserializationError.exception(reason: "invalid Theta params binary")}
   end
 end

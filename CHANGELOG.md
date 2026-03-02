@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Pure Elixir Theta sketch implementation (new, update, update_many, compact, merge, estimate).
+- Apache DataSketches CompactSketch codec (serialize/deserialize) for Theta interop.
+- MurmurHash3 seed hash computation for DataSketches compatibility.
+- Deterministic test vectors for Theta sketch.
+- Cross-language vector harness specification for Java interop testing.
+- Theta Benchee benchmarks.
 - Pure Elixir HLL implementation (new, update, update_many, merge, estimate).
 - Pure Elixir CMS implementation (new, update, update_many, merge, estimate).
 - Deterministic test vectors for HLL and CMS.

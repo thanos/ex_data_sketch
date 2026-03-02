@@ -363,4 +363,209 @@ defmodule ExDataSketch.Backend.Pure do
     <<_::binary-size(^offset), val::unsigned-little-64, _::binary>> = binary
     val
   end
+
+  # ============================================================
+  # Theta Implementation
+  # ============================================================
+
+  @theta_max_u64 0xFFFFFFFFFFFFFFFF
+
+  @impl true
+  @spec theta_new(keyword()) :: binary()
+  def theta_new(opts) do
+    k = Keyword.fetch!(opts, :k)
+
+    <<1::unsigned-8, k::unsigned-little-32, @theta_max_u64::unsigned-little-64,
+      0::unsigned-little-32>>
+  end
+
+  @impl true
+  @spec theta_update(binary(), non_neg_integer(), keyword()) :: binary()
+  def theta_update(state_bin, hash64, _opts) do
+    <<1::unsigned-8, k::unsigned-little-32, theta::unsigned-little-64, count::unsigned-little-32,
+      entries_bin::binary>> = state_bin
+
+    # Skip if hash is above threshold
+    if hash64 >= theta do
+      state_bin
+    else
+      entries = theta_decode_entries(entries_bin)
+
+      # Check membership via sorted list search
+      if theta_member?(entries, hash64) do
+        state_bin
+      else
+        theta_insert_and_compact(entries, hash64, k, theta, count)
+      end
+    end
+  end
+
+  @impl true
+  @spec theta_update_many(binary(), [non_neg_integer()], keyword()) :: binary()
+  def theta_update_many(state_bin, hashes, _opts) do
+    <<1::unsigned-8, k::unsigned-little-32, theta::unsigned-little-64, _count::unsigned-little-32,
+      entries_bin::binary>> = state_bin
+
+    entry_set = entries_bin |> theta_decode_entries() |> MapSet.new()
+
+    # Add all qualifying hashes
+    {new_set, new_theta} =
+      Enum.reduce(hashes, {entry_set, theta}, fn hash64, {set, th} ->
+        if hash64 >= th do
+          {set, th}
+        else
+          {MapSet.put(set, hash64), th}
+        end
+      end)
+
+    sorted = new_set |> MapSet.to_list() |> Enum.sort()
+
+    if length(sorted) > k do
+      kept = Enum.take(sorted, k)
+      # theta = the (k+1)th element (0-indexed: element at position k)
+      compact_theta = Enum.at(sorted, k)
+      theta_encode_state(k, compact_theta, kept)
+    else
+      theta_encode_state(k, new_theta, sorted)
+    end
+  end
+
+  @impl true
+  @spec theta_compact(binary(), keyword()) :: binary()
+  def theta_compact(state_bin, _opts) do
+    <<1::unsigned-8, k::unsigned-little-32, theta::unsigned-little-64, _count::unsigned-little-32,
+      entries_bin::binary>> = state_bin
+
+    entries =
+      entries_bin
+      |> theta_decode_entries()
+      |> Enum.filter(&(&1 < theta))
+      |> Enum.sort()
+
+    theta_encode_state(k, theta, entries)
+  end
+
+  @impl true
+  @spec theta_merge(binary(), binary(), keyword()) :: binary()
+  def theta_merge(a_bin, b_bin, _opts) do
+    <<1::unsigned-8, k_a::unsigned-little-32, theta_a::unsigned-little-64,
+      _count_a::unsigned-little-32, entries_a_bin::binary>> = a_bin
+
+    <<1::unsigned-8, _k_b::unsigned-little-32, theta_b::unsigned-little-64,
+      _count_b::unsigned-little-32, entries_b_bin::binary>> = b_bin
+
+    new_theta = min(theta_a, theta_b)
+
+    entries_a = theta_decode_entries(entries_a_bin)
+    entries_b = theta_decode_entries(entries_b_bin)
+
+    # Union, deduplicate, filter by new theta
+    union =
+      (entries_a ++ entries_b)
+      |> MapSet.new()
+      |> MapSet.to_list()
+      |> Enum.filter(&(&1 < new_theta))
+      |> Enum.sort()
+
+    if length(union) > k_a do
+      kept = Enum.take(union, k_a)
+      compact_theta = Enum.at(union, k_a)
+      theta_encode_state(k_a, compact_theta, kept)
+    else
+      theta_encode_state(k_a, new_theta, union)
+    end
+  end
+
+  @impl true
+  @spec theta_estimate(binary(), keyword()) :: float()
+  def theta_estimate(state_bin, _opts) do
+    <<1::unsigned-8, _k::unsigned-little-32, theta::unsigned-little-64, count::unsigned-little-32,
+      _entries_bin::binary>> = state_bin
+
+    cond do
+      count == 0 ->
+        0.0
+
+      theta == @theta_max_u64 ->
+        # Exact mode: no sampling, count is exact
+        count / 1
+
+      true ->
+        # Estimation mode: count / (theta / 2^64)
+        count * (@theta_max_u64 + 1) / theta
+    end
+  end
+
+  @impl true
+  @spec theta_from_components(non_neg_integer(), non_neg_integer(), [non_neg_integer()]) ::
+          binary()
+  def theta_from_components(k, theta, entries) do
+    normalized =
+      entries
+      |> Enum.uniq()
+      |> Enum.filter(&(&1 < theta))
+      |> Enum.sort()
+
+    {final_theta, final_entries} =
+      if length(normalized) > k do
+        {kept, [new_theta | _]} = Enum.split(normalized, k)
+        {new_theta, kept}
+      else
+        {theta, normalized}
+      end
+
+    theta_encode_state(k, final_theta, final_entries)
+  end
+
+  # -- Theta Helpers --
+
+  defp theta_insert_and_compact(entries, hash64, k, theta, count) do
+    new_entries = theta_insert_sorted(entries, hash64)
+    new_count = count + 1
+
+    if new_count > k do
+      {kept, [new_theta | _]} = Enum.split(new_entries, k)
+      theta_encode_state(k, new_theta, kept)
+    else
+      theta_encode_state(k, theta, new_entries)
+    end
+  end
+
+  defp theta_encode_state(k, theta, sorted_entries) do
+    count = length(sorted_entries)
+
+    entries_bin =
+      sorted_entries
+      |> Enum.map(fn v -> <<v::unsigned-little-64>> end)
+      |> IO.iodata_to_binary()
+
+    <<1::unsigned-8, k::unsigned-little-32, theta::unsigned-little-64, count::unsigned-little-32,
+      entries_bin::binary>>
+  end
+
+  defp theta_decode_entries(<<>>), do: []
+
+  defp theta_decode_entries(binary) do
+    do_theta_decode(binary, []) |> :lists.reverse()
+  end
+
+  defp do_theta_decode(<<>>, acc), do: acc
+
+  defp do_theta_decode(<<val::unsigned-little-64, rest::binary>>, acc) do
+    do_theta_decode(rest, [val | acc])
+  end
+
+  defp theta_member?([], _value), do: false
+
+  defp theta_member?([h | _t], value) when h > value, do: false
+
+  defp theta_member?([h | _t], value) when h == value, do: true
+
+  defp theta_member?([_h | t], value), do: theta_member?(t, value)
+
+  defp theta_insert_sorted([], value), do: [value]
+
+  defp theta_insert_sorted([h | t], value) when value < h, do: [value, h | t]
+
+  defp theta_insert_sorted([h | t], value), do: [h | theta_insert_sorted(t, value)]
 end
