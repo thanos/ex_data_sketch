@@ -89,7 +89,8 @@ defmodule ExDataSketch.MixProject do
           ExDataSketch.Hash,
           ExDataSketch.Codec,
           ExDataSketch.Backend,
-          ExDataSketch.Backend.Pure
+          ExDataSketch.Backend.Pure,
+          ExDataSketch.Backend.Rust
         ],
         Errors: [
           ExDataSketch.Errors
@@ -101,7 +102,11 @@ defmodule ExDataSketch.MixProject do
   defp aliases do
     [
       lint: ["format --check-formatted", "credo --strict", "dialyzer"],
-      bench: ["run bench/hll_bench.exs", "run bench/cms_bench.exs"],
+      bench: [
+        "run bench/hll_bench.exs",
+        "run bench/cms_bench.exs",
+        "run bench/theta_bench.exs"
+      ],
       verify: &verify/1
     ]
   end
