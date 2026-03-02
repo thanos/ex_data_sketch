@@ -1,5 +1,5 @@
 {
-  "threshold": 91.0,
+  "threshold": 84.0,
   "updated_at": "2026-03-02",
-  "notes": "Post Phase 2 baseline. All phases complete. Current coverage: 91.8%."
+  "notes": "CI baseline (Pure-only, no Rust NIF). Local with Rust: ~91.8%."
 }
