@@ -48,6 +48,7 @@ defmodule ExDataSketch.MixProject do
 
   defp deps do
     [
+      {:rustler, "~> 0.36", optional: true, runtime: false},
       {:stream_data, "~> 1.0", only: [:test], runtime: false},
       {:benchee, "~> 1.0", only: :dev, runtime: false},
       {:benchee_json, "~> 1.0", only: :dev, runtime: false},
@@ -80,7 +81,8 @@ defmodule ExDataSketch.MixProject do
           ExDataSketch.Hash,
           ExDataSketch.Codec,
           ExDataSketch.Backend,
-          ExDataSketch.Backend.Pure
+          ExDataSketch.Backend.Pure,
+          ExDataSketch.Backend.Rust
         ],
         Errors: [
           ExDataSketch.Errors
@@ -92,7 +94,11 @@ defmodule ExDataSketch.MixProject do
   defp aliases do
     [
       lint: ["format --check-formatted", "credo --strict", "dialyzer"],
-      bench: ["run bench/hll_bench.exs", "run bench/cms_bench.exs"],
+      bench: [
+        "run bench/hll_bench.exs",
+        "run bench/cms_bench.exs",
+        "run bench/theta_bench.exs"
+      ],
       verify: &verify/1
     ]
   end
