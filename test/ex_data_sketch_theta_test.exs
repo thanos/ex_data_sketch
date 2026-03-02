@@ -765,6 +765,43 @@ defmodule ExDataSketch.ThetaTest do
         rust_b = Theta.from_enumerable(items_b, k: 64, backend: Backend.Rust)
         assert Theta.merge(pure_a, pure_b).state == Theta.merge(rust_a, rust_b).state
       end
+
+      property "update_many produces identical state for random inputs" do
+        check all(
+                items <-
+                  list_of(string(:alphanumeric, min_length: 1), min_length: 0, max_length: 50)
+              ) do
+          pure = Theta.from_enumerable(items, k: 64, backend: Backend.Pure)
+          rust = Theta.from_enumerable(items, k: 64, backend: Backend.Rust)
+          assert pure.state == rust.state
+        end
+      end
+
+      property "merge produces identical state for random inputs" do
+        check all(
+                items_a <-
+                  list_of(string(:alphanumeric, min_length: 1), min_length: 0, max_length: 20),
+                items_b <-
+                  list_of(string(:alphanumeric, min_length: 1), min_length: 0, max_length: 20)
+              ) do
+          pure_a = Theta.from_enumerable(items_a, k: 64, backend: Backend.Pure)
+          pure_b = Theta.from_enumerable(items_b, k: 64, backend: Backend.Pure)
+          rust_a = Theta.from_enumerable(items_a, k: 64, backend: Backend.Rust)
+          rust_b = Theta.from_enumerable(items_b, k: 64, backend: Backend.Rust)
+          assert Theta.merge(pure_a, pure_b).state == Theta.merge(rust_a, rust_b).state
+        end
+      end
+
+      property "estimate is identical for random inputs" do
+        check all(
+                items <-
+                  list_of(string(:alphanumeric, min_length: 1), min_length: 0, max_length: 50)
+              ) do
+          pure = Theta.from_enumerable(items, k: 64, backend: Backend.Pure)
+          rust = Theta.from_enumerable(items, k: 64, backend: Backend.Rust)
+          assert_in_delta Theta.estimate(pure), Theta.estimate(rust), 1.0e-9
+        end
+      end
     end
   end
 

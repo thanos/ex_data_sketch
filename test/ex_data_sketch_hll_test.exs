@@ -440,6 +440,43 @@ defmodule ExDataSketch.HLLTest do
         rust = HLL.from_enumerable(items, p: 14, backend: Backend.Rust)
         assert HLL.serialize(pure) == HLL.serialize(rust)
       end
+
+      property "update_many produces identical state for random inputs" do
+        check all(
+                items <-
+                  list_of(string(:alphanumeric, min_length: 1), min_length: 0, max_length: 50)
+              ) do
+          pure = HLL.from_enumerable(items, p: 10, backend: Backend.Pure)
+          rust = HLL.from_enumerable(items, p: 10, backend: Backend.Rust)
+          assert pure.state == rust.state
+        end
+      end
+
+      property "merge produces identical state for random inputs" do
+        check all(
+                items_a <-
+                  list_of(string(:alphanumeric, min_length: 1), min_length: 0, max_length: 20),
+                items_b <-
+                  list_of(string(:alphanumeric, min_length: 1), min_length: 0, max_length: 20)
+              ) do
+          pure_a = HLL.from_enumerable(items_a, p: 10, backend: Backend.Pure)
+          pure_b = HLL.from_enumerable(items_b, p: 10, backend: Backend.Pure)
+          rust_a = HLL.from_enumerable(items_a, p: 10, backend: Backend.Rust)
+          rust_b = HLL.from_enumerable(items_b, p: 10, backend: Backend.Rust)
+          assert HLL.merge(pure_a, pure_b).state == HLL.merge(rust_a, rust_b).state
+        end
+      end
+
+      property "estimate is identical for random inputs" do
+        check all(
+                items <-
+                  list_of(string(:alphanumeric, min_length: 1), min_length: 0, max_length: 50)
+              ) do
+          pure = HLL.from_enumerable(items, p: 10, backend: Backend.Pure)
+          rust = HLL.from_enumerable(items, p: 10, backend: Backend.Rust)
+          assert_in_delta HLL.estimate(pure), HLL.estimate(rust), 1.0e-9
+        end
+      end
     end
   end
 end

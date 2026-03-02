@@ -462,6 +462,44 @@ defmodule ExDataSketch.CMSTest do
         rust = CMS.from_enumerable(items, backend: Backend.Rust)
         assert CMS.serialize(pure) == CMS.serialize(rust)
       end
+
+      property "update_many produces identical state for random inputs" do
+        check all(
+                items <-
+                  list_of(string(:alphanumeric, min_length: 1), min_length: 0, max_length: 30)
+              ) do
+          pure = CMS.from_enumerable(items, width: 256, depth: 3, backend: Backend.Pure)
+          rust = CMS.from_enumerable(items, width: 256, depth: 3, backend: Backend.Rust)
+          assert pure.state == rust.state
+        end
+      end
+
+      property "merge produces identical state for random inputs" do
+        check all(
+                items_a <-
+                  list_of(string(:alphanumeric, min_length: 1), min_length: 0, max_length: 15),
+                items_b <-
+                  list_of(string(:alphanumeric, min_length: 1), min_length: 0, max_length: 15)
+              ) do
+          pure_a = CMS.from_enumerable(items_a, width: 256, depth: 3, backend: Backend.Pure)
+          pure_b = CMS.from_enumerable(items_b, width: 256, depth: 3, backend: Backend.Pure)
+          rust_a = CMS.from_enumerable(items_a, width: 256, depth: 3, backend: Backend.Rust)
+          rust_b = CMS.from_enumerable(items_b, width: 256, depth: 3, backend: Backend.Rust)
+          assert CMS.merge(pure_a, pure_b).state == CMS.merge(rust_a, rust_b).state
+        end
+      end
+
+      property "estimate is identical for random inputs" do
+        check all(
+                items <-
+                  list_of(string(:alphanumeric, min_length: 1), min_length: 1, max_length: 30),
+                query <- member_of(items)
+              ) do
+          pure = CMS.from_enumerable(items, width: 256, depth: 3, backend: Backend.Pure)
+          rust = CMS.from_enumerable(items, width: 256, depth: 3, backend: Backend.Rust)
+          assert CMS.estimate(pure, query) == CMS.estimate(rust, query)
+        end
+      end
     end
   end
 end
