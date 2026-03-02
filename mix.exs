@@ -47,24 +47,16 @@ defmodule ExDataSketch.MixProject do
   end
 
   defp deps do
-    rustler_deps =
-      if File.exists?("native/ex_data_sketch_nif/Cargo.toml") and
-           System.find_executable("cargo") != nil do
-        [{:rustler, "~> 0.36", optional: true, runtime: false}]
-      else
-        []
-      end
-
-    rustler_deps ++
-      [
-        {:stream_data, "~> 1.0", only: [:test], runtime: false},
-        {:benchee, "~> 1.0", only: :dev, runtime: false},
-        {:benchee_json, "~> 1.0", only: :dev, runtime: false},
-        {:ex_doc, "~> 0.34", only: :dev, runtime: false},
-        {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-        {:dialyxir, "~> 1.4", only: :dev, runtime: false},
-        {:excoveralls, "~> 0.18", only: :test, runtime: false}
-      ]
+    [
+      {:rustler, "~> 0.36", optional: true, runtime: false},
+      {:stream_data, "~> 1.0", only: [:test], runtime: false},
+      {:benchee, "~> 1.0", only: :dev, runtime: false},
+      {:benchee_json, "~> 1.0", only: :dev, runtime: false},
+      {:ex_doc, "~> 0.34", only: :dev, runtime: false},
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:dialyxir, "~> 1.4", only: :dev, runtime: false},
+      {:excoveralls, "~> 0.18", only: :test, runtime: false}
+    ]
   end
 
   defp docs do

@@ -55,8 +55,13 @@ defmodule ExDataSketch.Backend.Rust do
   """
   @spec available?() :: boolean()
   def available? do
-    Code.ensure_loaded?(ExDataSketch.Nif) and
-      function_exported?(ExDataSketch.Nif, :hll_update_many_nif, 3)
+    Code.ensure_loaded?(ExDataSketch.Nif) and nif_loaded?()
+  end
+
+  defp nif_loaded? do
+    ExDataSketch.Nif.nif_loaded() == :ok
+  rescue
+    _ -> false
   end
 
   # -- HLL callbacks --

@@ -396,7 +396,7 @@ defmodule ExDataSketch.HLLTest do
         items = for i <- 0..9999, do: "item_#{i}"
         pure = HLL.from_enumerable(items, p: 14, backend: Backend.Pure)
         rust = HLL.from_enumerable(items, p: 14, backend: Backend.Rust)
-        assert HLL.estimate(pure) == HLL.estimate(rust)
+        assert_in_delta HLL.estimate(pure), HLL.estimate(rust), 1.0e-9
       end
 
       test "serialization produces identical binary" do

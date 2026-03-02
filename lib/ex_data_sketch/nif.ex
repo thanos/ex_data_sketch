@@ -1,9 +1,16 @@
 defmodule ExDataSketch.Nif do
   @moduledoc false
 
+  @skip_nif not (File.exists?("native/ex_data_sketch_nif/Cargo.toml") and
+                   System.find_executable("cargo") != nil)
+
   use Rustler,
     otp_app: :ex_data_sketch,
-    crate: "ex_data_sketch_nif"
+    crate: "ex_data_sketch_nif",
+    skip_compilation?: @skip_nif
+
+  @doc false
+  def nif_loaded, do: :erlang.nif_error(:not_loaded)
 
   # HLL
   def hll_update_many_nif(_state_bin, _hashes_bin, _p), do: :erlang.nif_error(:not_loaded)

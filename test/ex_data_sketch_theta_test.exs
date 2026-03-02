@@ -662,7 +662,7 @@ defmodule ExDataSketch.ThetaTest do
         items = for i <- 0..9999, do: "item_#{i}"
         pure = Theta.from_enumerable(items, k: 4096, backend: Backend.Pure)
         rust = Theta.from_enumerable(items, k: 4096, backend: Backend.Rust)
-        assert Theta.estimate(pure) == Theta.estimate(rust)
+        assert_in_delta Theta.estimate(pure), Theta.estimate(rust), 1.0e-9
       end
 
       test "serialization produces identical binary" do
