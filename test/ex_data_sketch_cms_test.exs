@@ -246,6 +246,62 @@ defmodule ExDataSketch.CMSTest do
           assert CMS.estimate(sketch, query) >= 0
         end
       end
+
+      property "merge associativity" do
+        check all(
+                items_a <-
+                  list_of(string(:alphanumeric, min_length: 1), min_length: 1, max_length: 10),
+                items_b <-
+                  list_of(string(:alphanumeric, min_length: 1), min_length: 1, max_length: 10),
+                items_c <-
+                  list_of(string(:alphanumeric, min_length: 1), min_length: 1, max_length: 10)
+              ) do
+          a = CMS.from_enumerable(items_a, width: 256, depth: 3, backend: @backend)
+          b = CMS.from_enumerable(items_b, width: 256, depth: 3, backend: @backend)
+          c = CMS.from_enumerable(items_c, width: 256, depth: 3, backend: @backend)
+          assert CMS.merge(CMS.merge(a, b), c).state == CMS.merge(a, CMS.merge(b, c)).state
+        end
+      end
+
+      property "no-undercount: estimate >= true frequency" do
+        check all(
+                items <-
+                  list_of(string(:alphanumeric, min_length: 1), min_length: 1, max_length: 30)
+              ) do
+          sketch = CMS.from_enumerable(items, width: 256, depth: 3, backend: @backend)
+          freqs = Enum.frequencies(items)
+
+          Enum.each(freqs, fn {item, count} ->
+            assert CMS.estimate(sketch, item) >= count
+          end)
+        end
+      end
+
+      property "self-merge is idempotent on estimates" do
+        check all(
+                items <-
+                  list_of(string(:alphanumeric, min_length: 1), min_length: 1, max_length: 15),
+                query <- string(:alphanumeric, min_length: 1)
+              ) do
+          sketch = CMS.from_enumerable(items, width: 256, depth: 3, backend: @backend)
+          merged = CMS.merge(sketch, sketch)
+          # Merging with self doubles all counters, so estimate doubles
+          assert CMS.estimate(merged, query) == 2 * CMS.estimate(sketch, query)
+        end
+      end
+
+      property "serialize/deserialize round-trip preserves state" do
+        check all(
+                items <-
+                  list_of(string(:alphanumeric, min_length: 1), min_length: 1, max_length: 20)
+              ) do
+          sketch = CMS.from_enumerable(items, width: 256, depth: 3, backend: @backend)
+          binary = CMS.serialize(sketch)
+          assert {:ok, restored} = CMS.deserialize(binary)
+          assert restored.state == sketch.state
+          assert restored.opts == sketch.opts
+        end
+      end
     end
   end
 

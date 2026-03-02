@@ -351,6 +351,52 @@ defmodule ExDataSketch.ThetaTest do
           assert Theta.estimate(sketch_full) >= Theta.estimate(sketch_a)
         end
       end
+
+      property "compact is idempotent" do
+        check all(
+                items <-
+                  list_of(string(:alphanumeric, min_length: 1), min_length: 1, max_length: 30)
+              ) do
+          sketch = Theta.from_enumerable(items, k: 64, backend: @backend)
+          once = Theta.compact(sketch)
+          twice = Theta.compact(once)
+          assert once.state == twice.state
+        end
+      end
+
+      property "compact preserves estimate" do
+        check all(
+                items <-
+                  list_of(string(:alphanumeric, min_length: 1), min_length: 1, max_length: 30)
+              ) do
+          sketch = Theta.from_enumerable(items, k: 64, backend: @backend)
+          compacted = Theta.compact(sketch)
+          assert Theta.estimate(sketch) == Theta.estimate(compacted)
+        end
+      end
+
+      property "self-merge is idempotent" do
+        check all(
+                items <-
+                  list_of(string(:alphanumeric, min_length: 1), min_length: 1, max_length: 20)
+              ) do
+          sketch = Theta.from_enumerable(items, k: 64, backend: @backend)
+          assert Theta.merge(sketch, sketch).state == sketch.state
+        end
+      end
+
+      property "serialize/deserialize round-trip preserves state" do
+        check all(
+                items <-
+                  list_of(string(:alphanumeric, min_length: 1), min_length: 1, max_length: 20)
+              ) do
+          sketch = Theta.from_enumerable(items, k: 64, backend: @backend)
+          binary = Theta.serialize(sketch)
+          assert {:ok, restored} = Theta.deserialize(binary)
+          assert restored.state == sketch.state
+          assert restored.opts == sketch.opts
+        end
+      end
     end
   end
 

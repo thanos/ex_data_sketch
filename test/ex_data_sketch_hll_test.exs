@@ -240,6 +240,41 @@ defmodule ExDataSketch.HLLTest do
           assert HLL.estimate(sketch_full) >= HLL.estimate(sketch_a)
         end
       end
+
+      property "self-merge is idempotent" do
+        check all(
+                items <-
+                  list_of(string(:alphanumeric, min_length: 1), min_length: 1, max_length: 20)
+              ) do
+          sketch = HLL.from_enumerable(items, p: 10, backend: @backend)
+          assert HLL.merge(sketch, sketch).state == sketch.state
+        end
+      end
+
+      property "merge with empty is identity" do
+        check all(
+                items <-
+                  list_of(string(:alphanumeric, min_length: 1), min_length: 1, max_length: 20)
+              ) do
+          sketch = HLL.from_enumerable(items, p: 10, backend: @backend)
+          empty = HLL.new(p: 10, backend: @backend)
+          assert HLL.merge(sketch, empty).state == sketch.state
+          assert HLL.merge(empty, sketch).state == sketch.state
+        end
+      end
+
+      property "serialize/deserialize round-trip preserves state" do
+        check all(
+                items <-
+                  list_of(string(:alphanumeric, min_length: 1), min_length: 1, max_length: 20)
+              ) do
+          sketch = HLL.from_enumerable(items, p: 10, backend: @backend)
+          binary = HLL.serialize(sketch)
+          assert {:ok, restored} = HLL.deserialize(binary)
+          assert restored.state == sketch.state
+          assert restored.opts == sketch.opts
+        end
+      end
     end
   end
 
