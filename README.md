@@ -11,9 +11,9 @@ and persistence.
 
 | Algorithm | Purpose | Status |
 |-----------|---------|--------|
-| HyperLogLog (HLL) | Cardinality estimation | Phase 0 (stubs) |
-| Count-Min Sketch (CMS) | Frequency estimation | Phase 0 (stubs) |
-| Theta Sketch | Set operations on cardinalities | Phase 0 (stubs) |
+| HyperLogLog (HLL) | Cardinality estimation | Implemented (Pure + Rust) |
+| Count-Min Sketch (CMS) | Frequency estimation | Implemented (Pure + Rust) |
+| Theta Sketch | Set operations on cardinalities | Implemented (Pure + Rust) |
 
 ## Installation
 
@@ -38,9 +38,10 @@ Full documentation is available at [HexDocs](https://hexdocs.pm/ex_data_sketch).
 ## Architecture
 
 - **Binary state**: All sketch state is canonical Elixir binaries.
-- **Backend system**: Pure Elixir (Phase 1) with optional Rust acceleration (Phase 2).
-- **Serialization**: ExDataSketch-native format (EXSK) plus DataSketches interop for Theta.
+- **Backend system**: Pure Elixir reference implementation with optional Rust NIF acceleration.
+- **Serialization**: ExDataSketch-native format (EXSK) plus Apache DataSketches CompactSketch interop for Theta.
 - **Deterministic hashing**: Stable 64-bit hash for reproducible results.
+- **Backend parity**: Both backends produce byte-identical output for the same inputs.
 
 ## Development
 

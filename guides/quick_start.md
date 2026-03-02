@@ -1,11 +1,8 @@
 # Quick Start
 
 ExDataSketch provides streaming probabilistic data structures for Elixir.
-This guide covers the basics of using HLL (cardinality estimation) and
-CMS (frequency estimation).
-
-> Note: Phase 0 contains stubs only. The examples below show the intended API.
-> Full implementations will be available in Phase 1.
+This guide covers the basics of using HLL (cardinality estimation),
+CMS (frequency estimation), and Theta (set operations on cardinalities).
 
 ## HyperLogLog (HLL) -- Cardinality Estimation
 
@@ -46,9 +43,32 @@ ExDataSketch.CMS.estimate(sketch, "page_about")  # approximately 1
 ExDataSketch.CMS.estimate(sketch, "page_other")  # approximately 0
 ```
 
+## Theta Sketch -- Set Operations on Cardinalities
+
+Theta answers: "approximately how many distinct items, with support for
+set union and intersection?"
+
+```elixir
+# Create a new Theta sketch with default k=4096
+sketch = ExDataSketch.Theta.new()
+
+# Add items
+sketch = ExDataSketch.Theta.update(sketch, "user_123")
+sketch = ExDataSketch.Theta.update(sketch, "user_456")
+
+# Estimate distinct count
+ExDataSketch.Theta.estimate(sketch)
+
+# Add many items at once
+sketch = ExDataSketch.Theta.update_many(sketch, ["a", "b", "c", "d"])
+
+# Compact for serialization or merging
+sketch = ExDataSketch.Theta.compact(sketch)
+```
+
 ## Merging Sketches
 
-Both HLL and CMS support merging, which is essential for distributed systems:
+HLL, CMS, and Theta all support merging, which is essential for distributed systems:
 
 ```elixir
 # Merge HLL sketches from different nodes
@@ -58,6 +78,13 @@ ExDataSketch.HLL.estimate(combined)
 # Merge CMS sketches
 combined = ExDataSketch.CMS.merge(sketch_from_node1, sketch_from_node2)
 ExDataSketch.CMS.estimate(combined, "some_item")
+
+# Merge Theta sketches
+combined = ExDataSketch.Theta.merge(sketch_from_node1, sketch_from_node2)
+ExDataSketch.Theta.estimate(combined)
+
+# Merge many sketches at once (works with all sketch types)
+merged = ExDataSketch.HLL.merge_many([sketch1, sketch2, sketch3])
 ```
 
 ## Serialization
@@ -65,12 +92,13 @@ ExDataSketch.CMS.estimate(combined, "some_item")
 Sketches can be serialized to binaries for storage or transmission:
 
 ```elixir
-# ExDataSketch-native format
+# ExDataSketch-native format (all sketch types)
 binary = ExDataSketch.HLL.serialize(sketch)
-sketch = ExDataSketch.HLL.deserialize(binary)
+{:ok, sketch} = ExDataSketch.HLL.deserialize(binary)
 
-# DataSketches-compatible format (Theta only, for cross-language interop)
+# Apache DataSketches CompactSketch format (Theta only, for cross-language interop)
 binary = ExDataSketch.Theta.serialize_datasketches(theta_sketch)
+{:ok, sketch} = ExDataSketch.Theta.deserialize_datasketches(binary)
 ```
 
 ## Next Steps
