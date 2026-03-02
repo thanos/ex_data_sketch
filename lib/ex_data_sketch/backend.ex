@@ -64,6 +64,30 @@ defmodule ExDataSketch.Backend do
   @doc "Estimate the count for a given hash64 from CMS state."
   @callback cms_estimate(state_bin(), hash64(), opts()) :: non_neg_integer()
 
+  # -- Theta callbacks --
+
+  @doc "Create a new Theta state binary with the given options."
+  @callback theta_new(opts()) :: state_bin()
+
+  @doc "Update Theta state with a single hash64 value."
+  @callback theta_update(state_bin(), hash64(), opts()) :: state_bin()
+
+  @doc "Update Theta state with a list of hash64 values in a single pass."
+  @callback theta_update_many(state_bin(), [hash64()], opts()) :: state_bin()
+
+  @doc "Compact Theta state: sort entries and discard any above theta."
+  @callback theta_compact(state_bin(), opts()) :: state_bin()
+
+  @doc "Merge two Theta state binaries (set union)."
+  @callback theta_merge(state_bin(), state_bin(), opts()) :: state_bin()
+
+  @doc "Estimate cardinality from Theta state."
+  @callback theta_estimate(state_bin(), opts()) :: float()
+
+  @doc "Build Theta state binary from raw components (k, theta, sorted entries list)."
+  @callback theta_from_components(non_neg_integer(), non_neg_integer(), [non_neg_integer()]) ::
+              state_bin()
+
   @doc """
   Returns the default backend module.
 

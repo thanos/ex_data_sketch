@@ -52,7 +52,7 @@ defmodule ExDataSketch do
   See the [Quick Start guide](quick_start.md) for more examples.
   """
 
-  alias ExDataSketch.{CMS, HLL}
+  alias ExDataSketch.{CMS, HLL, Theta}
 
   @doc """
   Updates a sketch with multiple items in a single pass.
@@ -68,7 +68,9 @@ defmodule ExDataSketch do
       true
 
   """
-  @spec update_many(HLL.t() | CMS.t(), Enumerable.t()) :: HLL.t() | CMS.t()
+  @spec update_many(HLL.t() | CMS.t() | Theta.t(), Enumerable.t()) ::
+          HLL.t() | CMS.t() | Theta.t()
   def update_many(%HLL{} = sketch, items), do: HLL.update_many(sketch, items)
   def update_many(%CMS{} = sketch, items), do: CMS.update_many(sketch, items)
+  def update_many(%Theta{} = sketch, items), do: Theta.update_many(sketch, items)
 end

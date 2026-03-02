@@ -14,5 +14,11 @@ defmodule ExDataSketchTest do
       updated = ExDataSketch.update_many(sketch, ["a", "b", "a"])
       assert ExDataSketch.CMS.estimate(updated, "a") == 2
     end
+
+    test "delegates to Theta.update_many for Theta structs" do
+      sketch = ExDataSketch.Theta.new(k: 1024)
+      updated = ExDataSketch.update_many(sketch, ["a", "b"])
+      assert ExDataSketch.Theta.estimate(updated) > 0.0
+    end
   end
 end

@@ -1,7 +1,7 @@
 defmodule ExDataSketch.VectorsTest do
   use ExUnit.Case, async: true
 
-  alias ExDataSketch.{CMS, HLL}
+  alias ExDataSketch.{CMS, HLL, Theta}
 
   @vectors_dir Path.join([__DIR__, "vectors"])
 
@@ -96,6 +96,62 @@ defmodule ExDataSketch.VectorsTest do
       for i <- 0..99 do
         assert CMS.estimate(sketch, "item_#{i}") >= 1
       end
+    end
+  end
+
+  # -- Theta Vectors --
+
+  describe "Theta test vectors" do
+    test "empty k=4096 vector matches generated state" do
+      expected = Theta.new(k: 4096)
+      stored = File.read!(Path.join(@vectors_dir, "theta_v1_empty_k4096.bin"))
+      assert expected.state == stored
+    end
+
+    test "100 items k=4096 vector matches generated state" do
+      items = for i <- 0..99, do: "item_#{i}"
+      expected = Theta.from_enumerable(items, k: 4096)
+      stored = File.read!(Path.join(@vectors_dir, "theta_v1_100items_k4096.bin"))
+      assert expected.state == stored
+    end
+
+    test "10000 items k=4096 vector matches generated state" do
+      items = for i <- 0..9999, do: "item_#{i}"
+      expected = Theta.from_enumerable(items, k: 4096)
+      stored = File.read!(Path.join(@vectors_dir, "theta_v1_10000items_k4096.bin"))
+      assert expected.state == stored
+    end
+
+    test "empty vector serialize/deserialize round-trip" do
+      stored = File.read!(Path.join(@vectors_dir, "theta_v1_empty_k4096.bin"))
+      sketch = %Theta{state: stored, opts: [k: 4096], backend: ExDataSketch.Backend.Pure}
+      binary = Theta.serialize(sketch)
+      assert {:ok, restored} = Theta.deserialize(binary)
+      assert restored.state == stored
+      assert restored.opts == [k: 4096]
+    end
+
+    test "100 items vector serialize/deserialize round-trip" do
+      stored = File.read!(Path.join(@vectors_dir, "theta_v1_100items_k4096.bin"))
+      sketch = %Theta{state: stored, opts: [k: 4096], backend: ExDataSketch.Backend.Pure}
+      binary = Theta.serialize(sketch)
+      assert {:ok, restored} = Theta.deserialize(binary)
+      assert restored.state == stored
+    end
+
+    test "10000 items vector gives expected estimate" do
+      stored = File.read!(Path.join(@vectors_dir, "theta_v1_10000items_k4096.bin"))
+      sketch = %Theta{state: stored, opts: [k: 4096], backend: ExDataSketch.Backend.Pure}
+      estimate = Theta.estimate(sketch)
+      assert_in_delta estimate, 10_000.0, 10_000 * 0.1
+    end
+
+    test "10000 items vector DataSketches round-trip" do
+      stored = File.read!(Path.join(@vectors_dir, "theta_v1_10000items_k4096.bin"))
+      sketch = %Theta{state: stored, opts: [k: 4096], backend: ExDataSketch.Backend.Pure}
+      binary = Theta.serialize_datasketches(sketch)
+      assert {:ok, restored} = Theta.deserialize_datasketches(binary)
+      assert Theta.estimate(restored) == Theta.estimate(sketch)
     end
   end
 end
