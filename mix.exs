@@ -65,7 +65,9 @@ defmodule ExDataSketch.MixProject do
 
   defp package do
     [
+      description: "Production-grade streaming data sketching algorithms for Elixir.",
       licenses: ["MIT"],
+      maintainers: ["Thanos Vassilakis"],
       links: %{
         "GitHub" => @source_url,
         "Changelog" => "#{@source_url}/blob/main/CHANGELOG.md"
