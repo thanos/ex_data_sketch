@@ -184,6 +184,16 @@ defmodule ExDataSketch.CMSTest do
         assert CMS.estimate(CMS.merge(empty, sketch), "x") >= 5
       end
 
+      test "merge is associative" do
+        a = CMS.from_enumerable(["a", "b"], backend: @backend)
+        b = CMS.from_enumerable(["c", "d"], backend: @backend)
+        c = CMS.from_enumerable(["e", "f"], backend: @backend)
+
+        ab_c = CMS.merge(CMS.merge(a, b), c)
+        a_bc = CMS.merge(a, CMS.merge(b, c))
+        assert ab_c.state == a_bc.state
+      end
+
       test "raises on parameter mismatch" do
         a = CMS.new(width: 1024, backend: @backend)
         b = CMS.new(width: 2048, backend: @backend)

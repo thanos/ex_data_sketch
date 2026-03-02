@@ -211,6 +211,21 @@ defmodule ExDataSketch.ThetaTest do
         entries = decode_entries(entries_bin)
         assert entries == Enum.sort(entries)
       end
+
+      test "compact is idempotent" do
+        items = for i <- 0..99, do: "item_#{i}"
+        sketch = Theta.from_enumerable(items, k: 16, backend: @backend)
+        once = Theta.compact(sketch)
+        twice = Theta.compact(once)
+        assert once.state == twice.state
+      end
+
+      test "compact preserves estimate" do
+        items = for i <- 0..99, do: "item_#{i}"
+        sketch = Theta.from_enumerable(items, k: 16, backend: @backend)
+        compacted = Theta.compact(sketch)
+        assert Theta.estimate(sketch) == Theta.estimate(compacted)
+      end
     end
 
     describe "merge/2 [#{backend_name}]" do
@@ -258,6 +273,29 @@ defmodule ExDataSketch.ThetaTest do
         b = Theta.from_enumerable(items_b, k: 16, backend: @backend)
         merged = Theta.merge(a, b)
         assert Theta.estimate(merged) > 0.0
+      end
+
+      test "merged estimate does not exceed sum of individual estimates (exact mode)" do
+        # In exact mode (count < k), estimates are exact counts so
+        # |A ∪ B| <= |A| + |B| holds strictly.
+        items_a = for i <- 0..19, do: "a_#{i}"
+        items_b = for i <- 0..19, do: "b_#{i}"
+        a = Theta.from_enumerable(items_a, k: 4096, backend: @backend)
+        b = Theta.from_enumerable(items_b, k: 4096, backend: @backend)
+        merged = Theta.merge(a, b)
+        assert Theta.estimate(merged) <= Theta.estimate(a) + Theta.estimate(b)
+      end
+
+      test "merged estimate does not exceed sum (with overlap, exact mode)" do
+        # Overlapping sets: |A ∪ B| <= |A| + |B| still holds
+        items_a = for i <- 0..29, do: "item_#{i}"
+        items_b = for i <- 20..49, do: "item_#{i}"
+        a = Theta.from_enumerable(items_a, k: 4096, backend: @backend)
+        b = Theta.from_enumerable(items_b, k: 4096, backend: @backend)
+        merged = Theta.merge(a, b)
+        assert Theta.estimate(merged) <= Theta.estimate(a) + Theta.estimate(b)
+        # With 10-item overlap, merged should be ~40, not ~60
+        assert_in_delta Theta.estimate(merged), 50.0, 1.0
       end
 
       test "raises on k mismatch" do
