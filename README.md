@@ -7,6 +7,12 @@ frequency estimation on streaming data. All sketch state is stored as
 Elixir-owned binaries, enabling straightforward serialization, distribution,
 and persistence.
 
+[![CI](https://github.com/thanos/ex_data_sketch/actions/workflows/ci.yml/badge.svg)](https://github.com/thanos/ex_data_sketch/actions/workflows/ci.yml)
+[![Hex version](https://img.shields.io/hexpm/v/ex_data_sketch.svg)](https://hex.pm/packages/ex_data_sketch)
+[![Hex docs](https://img.shields.io/badge/docs-hexdocs.pm-blue)](https://hexdocs.pm/ex_data_sketch)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+
 ## Supported Algorithms
 
 | Algorithm | Purpose | Status |

@@ -1,13 +1,24 @@
 defmodule ExDataSketch.Nif do
   @moduledoc false
 
-  @skip_nif not (File.exists?("native/ex_data_sketch_nif/Cargo.toml") and
-                   System.find_executable("cargo") != nil)
+  unless System.get_env("EX_DATA_SKETCH_SKIP_NIF") in ["1", "true"] do
+    version = Mix.Project.config()[:version]
 
-  use Rustler,
-    otp_app: :ex_data_sketch,
-    crate: "ex_data_sketch_nif",
-    skip_compilation?: @skip_nif
+    use RustlerPrecompiled,
+      otp_app: :ex_data_sketch,
+      crate: "ex_data_sketch_nif",
+      base_url: "https://github.com/thanos/ex_data_sketch/releases/download/v#{version}",
+      force_build: System.get_env("EX_DATA_SKETCH_BUILD") in ["1", "true"],
+      version: version,
+      targets: [
+        "aarch64-apple-darwin",
+        "x86_64-apple-darwin",
+        "x86_64-unknown-linux-gnu",
+        "x86_64-unknown-linux-musl",
+        "aarch64-unknown-linux-gnu",
+        "aarch64-unknown-linux-musl"
+      ]
+  end
 
   @doc false
   def nif_loaded, do: :erlang.nif_error(:not_loaded)

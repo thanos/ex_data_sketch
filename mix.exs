@@ -12,6 +12,9 @@ defmodule ExDataSketch.MixProject do
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       aliases: aliases(),
+      package: package(),
+      description:
+        "Production-grade streaming data sketching algorithms (HLL, CMS, Theta) with optional Rust NIF acceleration.",
 
       # Docs
       name: "ExDataSketch",
@@ -48,7 +51,8 @@ defmodule ExDataSketch.MixProject do
 
   defp deps do
     [
-      {:rustler, "~> 0.36", optional: true, runtime: false},
+      {:rustler, ">= 0.0.0", optional: true, runtime: false},
+      {:rustler_precompiled, "~> 0.8"},
       {:stream_data, "~> 1.0", only: [:test], runtime: false},
       {:benchee, "~> 1.0", only: :dev, runtime: false},
       {:benchee_json, "~> 1.0", only: :dev, runtime: false},
@@ -56,6 +60,29 @@ defmodule ExDataSketch.MixProject do
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: :dev, runtime: false},
       {:excoveralls, "~> 0.18", only: :test, runtime: false}
+    ]
+  end
+
+  defp package do
+    [
+      licenses: ["MIT"],
+      links: %{
+        "GitHub" => @source_url,
+        "Changelog" => "#{@source_url}/blob/main/CHANGELOG.md"
+      },
+      files: [
+        "lib",
+        "native/ex_data_sketch_nif/src",
+        "native/ex_data_sketch_nif/Cargo.toml",
+        "native/ex_data_sketch_nif/Cargo.lock",
+        "checksum-Elixir.ExDataSketch.Nif.exs",
+        "guides",
+        "LICENSE",
+        "README.md",
+        "CHANGELOG.md",
+        "mix.exs",
+        ".formatter.exs"
+      ]
     ]
   end
 

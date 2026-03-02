@@ -1,0 +1,130 @@
+name: Release precompiled NIFs
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build_release:
+    name: NIF ${{ matrix.nif }} - ${{ matrix.job.target }} (${{ matrix.job.os }})
+    runs-on: ${{ matrix.job.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        nif: ["2.16", "2.17"]
+        job:
+          - { target: aarch64-apple-darwin, os: macos-14 }
+          - { target: x86_64-apple-darwin, os: macos-13 }
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04 }
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-22.04 }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04 }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-22.04 }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27"
+          elixir-version: "1.18"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.job.target }}
+
+      - name: Install cross-compilation tools (Linux ARM GNU)
+        if: matrix.job.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Install musl tools (x86_64)
+        if: matrix.job.target == 'x86_64-unknown-linux-musl'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - name: Install cross-compilation tools (Linux ARM musl)
+        if: matrix.job.target == 'aarch64-unknown-linux-musl'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu musl-tools
+          wget -q https://musl.cc/aarch64-linux-musl-cross.tgz
+          tar xzf aarch64-linux-musl-cross.tgz -C /opt/
+          echo "/opt/aarch64-linux-musl-cross/bin" >> $GITHUB_PATH
+
+      - name: Cache deps
+        uses: actions/cache@v4
+        with:
+          path: deps
+          key: deps-${{ hashFiles('mix.lock') }}
+
+      - run: mix deps.get
+
+      - name: Build precompiled NIF
+        run: |
+          mix rustler_precompiled.build ExDataSketch.Nif \
+            --target ${{ matrix.job.target }} \
+            --nif-version ${{ matrix.nif }}
+        env:
+          EX_DATA_SKETCH_BUILD: "true"
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-musl-gcc
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+          CC_aarch64_unknown_linux_musl: aarch64-linux-musl-gcc
+
+      - name: Upload built NIF artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nif-${{ matrix.job.target }}-nif${{ matrix.nif }}
+          path: priv/native/*
+          if-no-files-found: error
+
+  publish_release:
+    name: Publish GitHub Release & Hex package
+    needs: build_release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27"
+          elixir-version: "1.18"
+
+      - name: Cache deps
+        uses: actions/cache@v4
+        with:
+          path: deps
+          key: deps-${{ hashFiles('mix.lock') }}
+
+      - run: mix deps.get
+
+      - name: Download all NIF artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: priv/native
+          pattern: nif-*
+          merge-multiple: true
+
+      - name: List downloaded artifacts
+        run: ls -lR priv/native/
+
+      - name: Generate checksums
+        run: mix rustler_precompiled.checksum ExDataSketch.Nif --all
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            priv/native/libex_data_sketch_nif-*.tar.gz
+          generate_release_notes: true
+
+      - name: Publish to Hex
+        run: mix hex.publish --yes
+        env:
+          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}

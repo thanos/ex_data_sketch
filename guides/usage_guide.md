@@ -46,8 +46,31 @@ without changing the public API.
 
 - `ExDataSketch.Backend.Pure` -- Pure Elixir implementation. Always available.
   Default backend.
-- `ExDataSketch.Backend.Rust` -- Rust NIF acceleration. Requires the `rustler`
-  dependency and a Rust toolchain. Falls back to Pure if the NIF is not compiled.
+- `ExDataSketch.Backend.Rust` -- Rust NIF acceleration. Precompiled binaries
+  are downloaded automatically on supported platforms. Falls back to Pure if
+  the NIF is not available.
+
+### Precompiled NIF Binaries
+
+The Rust NIF is distributed as precompiled binaries for the following platforms:
+
+| Platform | Architecture |
+|----------|-------------|
+| macOS | ARM64 (Apple Silicon), x86_64 |
+| Linux (glibc) | x86_64, aarch64 |
+| Linux (musl) | x86_64, aarch64 |
+
+On these platforms, `mix compile` automatically downloads the correct binary.
+No Rust toolchain is required.
+
+To force compilation from source (requires Rust):
+
+```bash
+EX_DATA_SKETCH_BUILD=1 mix compile
+```
+
+On unsupported platforms, the library operates in pure Elixir mode
+automatically. No configuration is needed.
 
 Check availability at runtime:
 
