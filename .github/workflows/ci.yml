@@ -156,43 +156,42 @@ jobs:
           name: coverage
           path: cover/
 
-  # TODO: Enable dialyzer in Phase 1 once all stubs are implemented.
-  # dialyzer:
-  #   name: Dialyzer
-  #   runs-on: ubuntu-latest
-  #   env:
-  #     MIX_ENV: dev
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #
-  #     - uses: erlef/setup-beam@v1
-  #       with:
-  #         elixir-version: "1.17"
-  #         otp-version: "27"
-  #
-  #     - name: Cache deps
-  #       uses: actions/cache@v4
-  #       with:
-  #         path: deps
-  #         key: deps-${{ hashFiles('mix.lock') }}
-  #
-  #     - name: Cache build
-  #       uses: actions/cache@v4
-  #       with:
-  #         path: _build
-  #         key: build-dev-1.17-27-${{ hashFiles('mix.lock') }}
-  #         restore-keys: build-dev-1.17-27-
-  #
-  #     - name: Cache PLTs
-  #       uses: actions/cache@v4
-  #       with:
-  #         path: priv/plts
-  #         key: plt-1.17-27-${{ hashFiles('mix.lock') }}
-  #         restore-keys: plt-1.17-27-
-  #
-  #     - run: mix deps.get
-  #     - run: mkdir -p priv/plts
-  #     - run: mix dialyzer
+  dialyzer:
+    name: Dialyzer
+    runs-on: ubuntu-latest
+    env:
+      MIX_ENV: dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.19"
+          otp-version: "28"
+
+      - name: Cache deps
+        uses: actions/cache@v4
+        with:
+          path: deps
+          key: deps-${{ hashFiles('mix.lock') }}
+
+      - name: Cache build
+        uses: actions/cache@v4
+        with:
+          path: _build
+          key: build-dev-1.19-28-${{ hashFiles('mix.lock') }}
+          restore-keys: build-dev-1.19-28-
+
+      - name: Cache PLTs
+        uses: actions/cache@v4
+        with:
+          path: priv/plts
+          key: plt-1.19-28-${{ hashFiles('mix.lock') }}
+          restore-keys: plt-1.19-28-
+
+      - run: mix deps.get
+      - run: mkdir -p priv/plts
+      - run: mix dialyzer
 
   bench:
     name: Benchmarks

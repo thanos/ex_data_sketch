@@ -257,6 +257,7 @@ defmodule ExDataSketch.HLL do
 
   """
   @spec serialize_datasketches(t()) :: binary()
+  @dialyzer {:nowarn_function, serialize_datasketches: 1}
   def serialize_datasketches(%__MODULE__{}) do
     Errors.not_implemented!(__MODULE__, "serialize_datasketches")
   end
@@ -277,6 +278,7 @@ defmodule ExDataSketch.HLL do
 
   """
   @spec deserialize_datasketches(binary()) :: {:ok, t()} | {:error, Exception.t()}
+  @dialyzer {:nowarn_function, deserialize_datasketches: 1}
   def deserialize_datasketches(_binary) do
     Errors.not_implemented!(__MODULE__, "deserialize_datasketches")
   end

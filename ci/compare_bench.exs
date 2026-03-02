@@ -84,15 +84,26 @@ defmodule CI.CompareBench do
     end
   end
 
-  defp extract_ips(%{"scenarios" => scenarios}, acc) when is_list(scenarios) do
+  defp extract_ips(data, acc) do
+    scenarios =
+      case data do
+        list when is_list(list) -> list
+        %{"scenarios" => s} when is_list(s) -> s
+        _ -> []
+      end
+
     Enum.reduce(scenarios, acc, fn scenario, inner_acc ->
-      name = scenario["name"] || "unknown"
-      ips = get_in(scenario, ["run_time_data", "statistics", "ips"]) || 0
+      name = Map.get(scenario, "name", "unknown")
+
+      ips =
+        scenario
+        |> Map.get("run_time_data", %{})
+        |> Map.get("statistics", %{})
+        |> Map.get("ips", 0)
+
       Map.put(inner_acc, name, ips)
     end)
   end
-
-  defp extract_ips(_, acc), do: acc
 
   defp warn_no_baseline(reason) do
     IO.puts("WARN: #{reason}")

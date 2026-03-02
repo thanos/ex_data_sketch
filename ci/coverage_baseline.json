@@ -1,5 +1,5 @@
 {
-  "threshold": 70.0,
-  "updated_at": "2026-03-01",
-  "notes": "Initial baseline. Update after Phase 1 implementation."
+  "threshold": 91.0,
+  "updated_at": "2026-03-02",
+  "notes": "Post Phase 2 baseline. All phases complete. Current coverage: 91.8%."
 }

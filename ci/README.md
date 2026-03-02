@@ -15,8 +15,8 @@ coverage and benchmark regression tracking.
 - `coverage_baseline.json` -- Stores the coverage threshold. Update this file
   when you intentionally accept a new coverage level.
 
-- `bench_baseline.json` -- Stores baseline benchmark IPS values. Created after
-  first benchmark run on main.
+- `bench_baseline.json` -- Stores baseline benchmark IPS values (Pure backend).
+  Used by the bench CI job to detect performance regressions.
 
 ## Updating Baselines
 
@@ -37,11 +37,20 @@ MIX_ENV=test mix coveralls.json
 After running benchmarks on main:
 
 ```bash
-# Run benchmarks
+# Run all benchmarks
 MIX_ENV=dev mix run bench/hll_bench.exs
 MIX_ENV=dev mix run bench/cms_bench.exs
+MIX_ENV=dev mix run bench/theta_bench.exs
 
 # The bench scripts produce JSON in bench/output/
-# Merge relevant IPS values into ci/bench_baseline.json as:
+# Extract IPS values and update ci/bench_baseline.json as:
 # { "scenario_name": ips_value, ... }
+#
+# The baseline should contain Pure-backend scenarios only,
+# since the standard bench CI job runs without Rust.
 ```
+
+Note: benchmark IPS values are machine-dependent. The baseline is a
+ballpark for catching severe regressions (>15%), not exact comparisons.
+Update the baseline when running on the same CI runner class or after
+intentional performance changes.
