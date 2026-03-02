@@ -15,10 +15,7 @@ defmodule ExDataSketch.Backend do
   ## Available Backends
 
   - `ExDataSketch.Backend.Pure` -- Pure Elixir (always available, default).
-  - `ExDataSketch.Backend.Rust` -- Rust NIF acceleration (optional).
-    Accelerates batch operations (`update_many`, `merge`, `estimate`).
-    Falls back to Pure if the NIF is not compiled.
-    Check with `ExDataSketch.Backend.Rust.available?/0`.
+  - `ExDataSketch.Backend.Rust` -- Rust NIF acceleration (Phase 2, optional).
 
   ## Backend Selection
 
@@ -105,18 +102,7 @@ defmodule ExDataSketch.Backend do
   """
   @spec default() :: module()
   def default do
-    alias __MODULE__.{Pure, Rust}
-
-    case Application.get_env(:ex_data_sketch, :backend) do
-      nil ->
-        Pure
-
-      Rust ->
-        if Rust.available?(), do: Rust, else: Pure
-
-      other ->
-        other
-    end
+    Application.get_env(:ex_data_sketch, :backend, ExDataSketch.Backend.Pure)
   end
 
   @doc """

@@ -6,24 +6,16 @@ defmodule ExDataSketch.ThetaTest do
 
   doctest ExDataSketch.Theta
 
-  alias ExDataSketch.Backend
   alias ExDataSketch.Errors.{DeserializationError, IncompatibleSketchesError, InvalidOptionError}
   alias ExDataSketch.Theta
 
-  # Backends to test against
-  @backends [Backend.Pure] ++
-              if(Backend.Rust.available?(),
-                do: [Backend.Rust],
-                else: []
-              )
-
-  # -- Construction (not parameterized — tests public API/validation) --
+  # -- Construction --
 
   describe "new/1" do
     test "creates sketch with default k=4096" do
       sketch = Theta.new()
       assert sketch.opts == [k: 4096]
-      assert sketch.backend == Backend.Pure
+      assert sketch.backend == ExDataSketch.Backend.Pure
     end
 
     test "creates sketch with custom k" do
@@ -75,248 +67,191 @@ defmodule ExDataSketch.ThetaTest do
     end
   end
 
-  # -- Parameterized backend tests --
+  # -- Update --
 
-  for backend <- @backends do
-    @backend backend
-    backend_name = backend |> Module.split() |> List.last()
-
-    describe "update/2 [#{backend_name}]" do
-      test "single update changes state" do
-        sketch = Theta.new(k: 1024, backend: @backend) |> Theta.update("hello")
-        assert byte_size(sketch.state) > 17
-      end
-
-      test "same item is deduplicated (idempotent)" do
-        sketch1 = Theta.new(k: 1024, backend: @backend) |> Theta.update("hello")
-
-        sketch2 =
-          Theta.new(k: 1024, backend: @backend) |> Theta.update("hello") |> Theta.update("hello")
-
-        assert sketch1.state == sketch2.state
-      end
-
-      test "different items produce different states" do
-        sketch1 = Theta.new(k: 1024, backend: @backend) |> Theta.update("a")
-        sketch2 = Theta.new(k: 1024, backend: @backend) |> Theta.update("b")
-        assert sketch1.state != sketch2.state
-      end
-
-      test "entries are stored sorted" do
-        sketch =
-          Theta.new(k: 1024, backend: @backend)
-          |> Theta.update("z")
-          |> Theta.update("a")
-          |> Theta.update("m")
-
-        <<_header::binary-size(17), entries_bin::binary>> = sketch.state
-        entries = decode_entries(entries_bin)
-        assert entries == Enum.sort(entries)
-      end
+  describe "update/2" do
+    test "single update changes state" do
+      sketch = Theta.new(k: 1024) |> Theta.update("hello")
+      assert byte_size(sketch.state) > 17
     end
 
-    describe "update_many/2 [#{backend_name}]" do
-      test "batch update produces same result as sequential updates" do
-        items = ["a", "b", "c", "d", "e"]
-
-        sequential =
-          Enum.reduce(items, Theta.new(k: 1024, backend: @backend), &Theta.update(&2, &1))
-
-        batch = Theta.new(k: 1024, backend: @backend) |> Theta.update_many(items)
-        assert sequential.state == batch.state
-      end
-
-      test "empty list is a no-op" do
-        sketch = Theta.new(k: 1024, backend: @backend)
-        assert Theta.update_many(sketch, []).state == sketch.state
-      end
+    test "same item is deduplicated (idempotent)" do
+      sketch1 = Theta.new(k: 1024) |> Theta.update("hello")
+      sketch2 = Theta.new(k: 1024) |> Theta.update("hello") |> Theta.update("hello")
+      assert sketch1.state == sketch2.state
     end
 
-    describe "estimate/1 [#{backend_name}]" do
-      test "empty sketch estimates 0.0" do
-        assert Theta.new(k: 1024, backend: @backend) |> Theta.estimate() == 0.0
-      end
-
-      test "single item estimates approximately 1.0" do
-        estimate = Theta.new(k: 4096, backend: @backend) |> Theta.update("x") |> Theta.estimate()
-        assert_in_delta estimate, 1.0, 0.01
-      end
-
-      test "100 items within error bounds (k=4096)" do
-        items = for i <- 0..99, do: "item_#{i}"
-        estimate = Theta.from_enumerable(items, k: 4096, backend: @backend) |> Theta.estimate()
-        # Exact mode (100 < k=4096), so estimate should be exactly 100.0
-        assert estimate == 100.0
-      end
-
-      test "1000 items within error bounds (k=4096)" do
-        items = for i <- 0..999, do: "item_#{i}"
-        estimate = Theta.from_enumerable(items, k: 4096, backend: @backend) |> Theta.estimate()
-        # Exact mode (1000 < k=4096)
-        assert estimate == 1000.0
-      end
-
-      test "10_000 items within error bounds (k=4096)" do
-        items = for i <- 0..9999, do: "item_#{i}"
-        estimate = Theta.from_enumerable(items, k: 4096, backend: @backend) |> Theta.estimate()
-        # Estimation mode (10000 > k=4096)
-        assert_in_delta estimate, 10_000.0, 10_000 * 0.1
-      end
-
-      test "monotonicity: estimate never decreases when adding items" do
-        sketch = Theta.new(k: 1024, backend: @backend)
-
-        Enum.reduce(1..50, {sketch, 0.0}, fn i, {s, prev_est} ->
-          s = Theta.update(s, "item_#{i}")
-          est = Theta.estimate(s)
-          assert est >= prev_est, "estimate decreased from #{prev_est} to #{est} after item #{i}"
-          {s, est}
-        end)
-      end
+    test "different items produce different states" do
+      sketch1 = Theta.new(k: 1024) |> Theta.update("a")
+      sketch2 = Theta.new(k: 1024) |> Theta.update("b")
+      assert sketch1.state != sketch2.state
     end
 
-    describe "compact/1 [#{backend_name}]" do
-      test "compacting an empty sketch returns empty" do
-        sketch = Theta.new(k: 16, backend: @backend) |> Theta.compact()
-        assert Theta.estimate(sketch) == 0.0
-      end
+    test "entries are stored sorted" do
+      sketch = Theta.new(k: 1024) |> Theta.update("z") |> Theta.update("a") |> Theta.update("m")
 
-      test "compacting preserves entries below theta" do
-        sketch =
-          Theta.new(k: 1024, backend: @backend)
-          |> Theta.update("a")
-          |> Theta.update("b")
-          |> Theta.compact()
+      <<_header::binary-size(17), entries_bin::binary>> = sketch.state
+      entries = decode_entries(entries_bin)
+      assert entries == Enum.sort(entries)
+    end
+  end
 
-        assert Theta.estimate(sketch) > 0.0
-      end
+  # -- Update Many --
 
-      test "compaction triggers when count exceeds k" do
-        # Use small k to force compaction
-        items = for i <- 0..99, do: "item_#{i}"
-        sketch = Theta.from_enumerable(items, k: 16, backend: @backend)
-
-        <<_v::unsigned-8, _k::unsigned-little-32, theta::unsigned-little-64,
-          count::unsigned-little-32, _entries::binary>> = sketch.state
-
-        assert count <= 16
-        assert theta < 0xFFFFFFFFFFFFFFFF
-      end
-
-      test "entries are sorted after compact" do
-        items = for i <- 0..99, do: "item_#{i}"
-        sketch = Theta.from_enumerable(items, k: 16, backend: @backend) |> Theta.compact()
-
-        <<_header::binary-size(17), entries_bin::binary>> = sketch.state
-        entries = decode_entries(entries_bin)
-        assert entries == Enum.sort(entries)
-      end
+  describe "update_many/2" do
+    test "batch update produces same result as sequential updates" do
+      items = ["a", "b", "c", "d", "e"]
+      sequential = Enum.reduce(items, Theta.new(k: 1024), &Theta.update(&2, &1))
+      batch = Theta.new(k: 1024) |> Theta.update_many(items)
+      assert sequential.state == batch.state
     end
 
-    describe "merge/2 [#{backend_name}]" do
-      test "merging two empty sketches produces empty sketch" do
-        a = Theta.new(k: 1024, backend: @backend)
-        b = Theta.new(k: 1024, backend: @backend)
-        merged = Theta.merge(a, b)
-        assert Theta.estimate(merged) == 0.0
-      end
+    test "empty list is a no-op" do
+      sketch = Theta.new(k: 1024)
+      assert Theta.update_many(sketch, []).state == sketch.state
+    end
+  end
 
-      test "merge is commutative" do
-        a = Theta.from_enumerable(["x", "y"], k: 1024, backend: @backend)
-        b = Theta.from_enumerable(["y", "z"], k: 1024, backend: @backend)
-        assert Theta.merge(a, b).state == Theta.merge(b, a).state
-      end
+  # -- Estimate --
 
-      test "merge is associative" do
-        a = Theta.from_enumerable(["a", "b"], k: 1024, backend: @backend)
-        b = Theta.from_enumerable(["c", "d"], k: 1024, backend: @backend)
-        c = Theta.from_enumerable(["e", "f"], k: 1024, backend: @backend)
-
-        ab_c = Theta.merge(Theta.merge(a, b), c)
-        a_bc = Theta.merge(a, Theta.merge(b, c))
-        assert ab_c.state == a_bc.state
-      end
-
-      test "self-merge is idempotent" do
-        sketch = Theta.from_enumerable(["a", "b", "c"], k: 1024, backend: @backend)
-        merged = Theta.merge(sketch, sketch)
-        assert merged.state == sketch.state
-      end
-
-      test "merge with empty sketch preserves state" do
-        sketch = Theta.from_enumerable(["a", "b"], k: 1024, backend: @backend)
-        empty = Theta.new(k: 1024, backend: @backend)
-        assert Theta.merge(sketch, empty).state == sketch.state
-        assert Theta.merge(empty, sketch).state == sketch.state
-      end
-
-      test "merge with estimation mode" do
-        # Force both into estimation mode by exceeding k
-        items_a = for i <- 0..99, do: "a_#{i}"
-        items_b = for i <- 0..99, do: "b_#{i}"
-        a = Theta.from_enumerable(items_a, k: 16, backend: @backend)
-        b = Theta.from_enumerable(items_b, k: 16, backend: @backend)
-        merged = Theta.merge(a, b)
-        assert Theta.estimate(merged) > 0.0
-      end
-
-      test "raises on k mismatch" do
-        a = Theta.new(k: 1024, backend: @backend)
-        b = Theta.new(k: 2048, backend: @backend)
-
-        assert_raise IncompatibleSketchesError, ~r/k mismatch/, fn ->
-          Theta.merge(a, b)
-        end
-      end
+  describe "estimate/1" do
+    test "empty sketch estimates 0.0" do
+      assert Theta.new(k: 1024) |> Theta.estimate() == 0.0
     end
 
-    describe "properties [#{backend_name}]" do
-      property "merge commutativity" do
-        check all(
-                items_a <-
-                  list_of(string(:alphanumeric, min_length: 1), min_length: 1, max_length: 20),
-                items_b <-
-                  list_of(string(:alphanumeric, min_length: 1), min_length: 1, max_length: 20)
-              ) do
-          a = Theta.from_enumerable(items_a, k: 64, backend: @backend)
-          b = Theta.from_enumerable(items_b, k: 64, backend: @backend)
-          assert Theta.merge(a, b).state == Theta.merge(b, a).state
-        end
-      end
+    test "single item estimates approximately 1.0" do
+      estimate = Theta.new(k: 4096) |> Theta.update("x") |> Theta.estimate()
+      assert_in_delta estimate, 1.0, 0.01
+    end
 
-      property "merge associativity" do
-        check all(
-                items_a <-
-                  list_of(string(:alphanumeric, min_length: 1), min_length: 1, max_length: 10),
-                items_b <-
-                  list_of(string(:alphanumeric, min_length: 1), min_length: 1, max_length: 10),
-                items_c <-
-                  list_of(string(:alphanumeric, min_length: 1), min_length: 1, max_length: 10)
-              ) do
-          a = Theta.from_enumerable(items_a, k: 64, backend: @backend)
-          b = Theta.from_enumerable(items_b, k: 64, backend: @backend)
-          c = Theta.from_enumerable(items_c, k: 64, backend: @backend)
-          ab_c = Theta.merge(Theta.merge(a, b), c)
-          a_bc = Theta.merge(a, Theta.merge(b, c))
-          assert ab_c.state == a_bc.state
-        end
-      end
+    test "100 items within error bounds (k=4096)" do
+      items = for i <- 0..99, do: "item_#{i}"
+      estimate = Theta.from_enumerable(items, k: 4096) |> Theta.estimate()
+      # Exact mode (100 < k=4096), so estimate should be exactly 100.0
+      assert estimate == 100.0
+    end
 
-      property "monotonicity: estimate grows or stays with more items" do
-        check all(
-                items <-
-                  list_of(string(:alphanumeric, min_length: 1), min_length: 2, max_length: 30)
-              ) do
-          {half_a, half_b} = Enum.split(items, div(length(items), 2))
-          sketch_a = Theta.from_enumerable(half_a, k: 64, backend: @backend)
-          sketch_full = Theta.update_many(sketch_a, half_b)
-          assert Theta.estimate(sketch_full) >= Theta.estimate(sketch_a)
-        end
+    test "1000 items within error bounds (k=4096)" do
+      items = for i <- 0..999, do: "item_#{i}"
+      estimate = Theta.from_enumerable(items, k: 4096) |> Theta.estimate()
+      # Exact mode (1000 < k=4096)
+      assert estimate == 1000.0
+    end
+
+    test "10_000 items within error bounds (k=4096)" do
+      items = for i <- 0..9999, do: "item_#{i}"
+      estimate = Theta.from_enumerable(items, k: 4096) |> Theta.estimate()
+      # Estimation mode (10000 > k=4096)
+      assert_in_delta estimate, 10_000.0, 10_000 * 0.1
+    end
+
+    test "monotonicity: estimate never decreases when adding items" do
+      sketch = Theta.new(k: 1024)
+
+      Enum.reduce(1..50, {sketch, 0.0}, fn i, {s, prev_est} ->
+        s = Theta.update(s, "item_#{i}")
+        est = Theta.estimate(s)
+        assert est >= prev_est, "estimate decreased from #{prev_est} to #{est} after item #{i}"
+        {s, est}
+      end)
+    end
+  end
+
+  # -- Compaction --
+
+  describe "compact/1" do
+    test "compacting an empty sketch returns empty" do
+      sketch = Theta.new(k: 16) |> Theta.compact()
+      assert Theta.estimate(sketch) == 0.0
+    end
+
+    test "compacting preserves entries below theta" do
+      sketch = Theta.new(k: 1024) |> Theta.update("a") |> Theta.update("b") |> Theta.compact()
+      assert Theta.estimate(sketch) > 0.0
+    end
+
+    test "compaction triggers when count exceeds k" do
+      # Use small k to force compaction
+      items = for i <- 0..99, do: "item_#{i}"
+      sketch = Theta.from_enumerable(items, k: 16)
+
+      <<_v::unsigned-8, _k::unsigned-little-32, theta::unsigned-little-64,
+        count::unsigned-little-32, _entries::binary>> = sketch.state
+
+      assert count <= 16
+      assert theta < 0xFFFFFFFFFFFFFFFF
+    end
+
+    test "entries are sorted after compact" do
+      items = for i <- 0..99, do: "item_#{i}"
+      sketch = Theta.from_enumerable(items, k: 16) |> Theta.compact()
+
+      <<_header::binary-size(17), entries_bin::binary>> = sketch.state
+      entries = decode_entries(entries_bin)
+      assert entries == Enum.sort(entries)
+    end
+  end
+
+  # -- Merge --
+
+  describe "merge/2" do
+    test "merging two empty sketches produces empty sketch" do
+      a = Theta.new(k: 1024)
+      b = Theta.new(k: 1024)
+      merged = Theta.merge(a, b)
+      assert Theta.estimate(merged) == 0.0
+    end
+
+    test "merge is commutative" do
+      a = Theta.from_enumerable(["x", "y"], k: 1024)
+      b = Theta.from_enumerable(["y", "z"], k: 1024)
+      assert Theta.merge(a, b).state == Theta.merge(b, a).state
+    end
+
+    test "merge is associative" do
+      a = Theta.from_enumerable(["a", "b"], k: 1024)
+      b = Theta.from_enumerable(["c", "d"], k: 1024)
+      c = Theta.from_enumerable(["e", "f"], k: 1024)
+
+      ab_c = Theta.merge(Theta.merge(a, b), c)
+      a_bc = Theta.merge(a, Theta.merge(b, c))
+      assert ab_c.state == a_bc.state
+    end
+
+    test "self-merge is idempotent" do
+      sketch = Theta.from_enumerable(["a", "b", "c"], k: 1024)
+      merged = Theta.merge(sketch, sketch)
+      assert merged.state == sketch.state
+    end
+
+    test "merge with empty sketch preserves state" do
+      sketch = Theta.from_enumerable(["a", "b"], k: 1024)
+      empty = Theta.new(k: 1024)
+      assert Theta.merge(sketch, empty).state == sketch.state
+      assert Theta.merge(empty, sketch).state == sketch.state
+    end
+
+    test "merge with estimation mode" do
+      # Force both into estimation mode by exceeding k
+      items_a = for i <- 0..99, do: "a_#{i}"
+      items_b = for i <- 0..99, do: "b_#{i}"
+      a = Theta.from_enumerable(items_a, k: 16)
+      b = Theta.from_enumerable(items_b, k: 16)
+      merged = Theta.merge(a, b)
+      assert Theta.estimate(merged) > 0.0
+    end
+
+    test "raises on k mismatch" do
+      a = Theta.new(k: 1024)
+      b = Theta.new(k: 2048)
+
+      assert_raise IncompatibleSketchesError, ~r/k mismatch/, fn ->
+        Theta.merge(a, b)
       end
     end
   end
 
-  # -- Non-parameterized tests --
+  # -- Serialization (EXSK) --
 
   describe "serialize/deserialize" do
     test "round-trip preserves state and opts" do
@@ -358,6 +293,8 @@ defmodule ExDataSketch.ThetaTest do
       assert msg =~ "power of 2"
     end
   end
+
+  # -- DataSketches Interop --
 
   describe "serialize_datasketches/deserialize_datasketches" do
     test "round-trip preserves estimate for empty sketch" do
@@ -506,7 +443,7 @@ defmodule ExDataSketch.ThetaTest do
     end
 
     test "theta_from_components deduplicates entries" do
-      backend = Backend.Pure
+      backend = ExDataSketch.Backend.Pure
       max_theta = 0xFFFFFFFFFFFFFFFF
       # Duplicate entries should be deduplicated
       state = backend.theta_from_components(16, max_theta, [100, 200, 100, 300, 200])
@@ -518,7 +455,7 @@ defmodule ExDataSketch.ThetaTest do
     end
 
     test "theta_from_components filters entries >= theta" do
-      backend = Backend.Pure
+      backend = ExDataSketch.Backend.Pure
       # Only entries strictly below theta should be kept
       state = backend.theta_from_components(16, 500, [100, 200, 500, 600, 300])
 
@@ -529,7 +466,7 @@ defmodule ExDataSketch.ThetaTest do
     end
 
     test "theta_from_components compacts when entries exceed k" do
-      backend = Backend.Pure
+      backend = ExDataSketch.Backend.Pure
       max_theta = 0xFFFFFFFFFFFFFFFF
       # k=16, provide 20 entries — should compact to 16
       entries = Enum.to_list(1..20)
@@ -543,6 +480,8 @@ defmodule ExDataSketch.ThetaTest do
       assert theta == 17
     end
   end
+
+  # -- Integration --
 
   describe "from_enumerable/2" do
     test "builds sketch from enumerable" do
@@ -612,18 +551,52 @@ defmodule ExDataSketch.ThetaTest do
     end
   end
 
-  describe "struct" do
-    test "has expected fields" do
-      sketch = %Theta{state: <<>>, opts: [], backend: nil}
-      assert Map.has_key?(sketch, :state)
-      assert Map.has_key?(sketch, :opts)
-      assert Map.has_key?(sketch, :backend)
+  # -- Property Tests --
+
+  describe "properties" do
+    property "merge commutativity" do
+      check all(
+              items_a <-
+                list_of(string(:alphanumeric, min_length: 1), min_length: 1, max_length: 20),
+              items_b <-
+                list_of(string(:alphanumeric, min_length: 1), min_length: 1, max_length: 20)
+            ) do
+        a = Theta.from_enumerable(items_a, k: 64)
+        b = Theta.from_enumerable(items_b, k: 64)
+        assert Theta.merge(a, b).state == Theta.merge(b, a).state
+      end
     end
-  end
 
-  # -- DataSketches property (not parameterized — Pure-only format) --
+    property "merge associativity" do
+      check all(
+              items_a <-
+                list_of(string(:alphanumeric, min_length: 1), min_length: 1, max_length: 10),
+              items_b <-
+                list_of(string(:alphanumeric, min_length: 1), min_length: 1, max_length: 10),
+              items_c <-
+                list_of(string(:alphanumeric, min_length: 1), min_length: 1, max_length: 10)
+            ) do
+        a = Theta.from_enumerable(items_a, k: 64)
+        b = Theta.from_enumerable(items_b, k: 64)
+        c = Theta.from_enumerable(items_c, k: 64)
+        ab_c = Theta.merge(Theta.merge(a, b), c)
+        a_bc = Theta.merge(a, Theta.merge(b, c))
+        assert ab_c.state == a_bc.state
+      end
+    end
 
-  describe "DataSketches properties" do
+    property "monotonicity: estimate grows or stays with more items" do
+      check all(
+              items <-
+                list_of(string(:alphanumeric, min_length: 1), min_length: 2, max_length: 30)
+            ) do
+        {half_a, half_b} = Enum.split(items, div(length(items), 2))
+        sketch_a = Theta.from_enumerable(half_a, k: 64)
+        sketch_full = Theta.update_many(sketch_a, half_b)
+        assert Theta.estimate(sketch_full) >= Theta.estimate(sketch_a)
+      end
+    end
+
     property "DataSketches round-trip preserves entries" do
       check all(
               items <-
@@ -637,50 +610,12 @@ defmodule ExDataSketch.ThetaTest do
     end
   end
 
-  # -- Cross-backend parity tests --
-
-  if Backend.Rust.available?() do
-    describe "Pure vs Rust parity" do
-      test "update_many produces identical state" do
-        items = for i <- 0..999, do: "item_#{i}"
-        pure = Theta.from_enumerable(items, k: 4096, backend: Backend.Pure)
-        rust = Theta.from_enumerable(items, k: 4096, backend: Backend.Rust)
-        assert pure.state == rust.state
-      end
-
-      test "merge produces identical state" do
-        items_a = for i <- 0..499, do: "a_#{i}"
-        items_b = for i <- 0..499, do: "b_#{i}"
-        pure_a = Theta.from_enumerable(items_a, k: 4096, backend: Backend.Pure)
-        pure_b = Theta.from_enumerable(items_b, k: 4096, backend: Backend.Pure)
-        rust_a = Theta.from_enumerable(items_a, k: 4096, backend: Backend.Rust)
-        rust_b = Theta.from_enumerable(items_b, k: 4096, backend: Backend.Rust)
-        assert Theta.merge(pure_a, pure_b).state == Theta.merge(rust_a, rust_b).state
-      end
-
-      test "estimate is identical" do
-        items = for i <- 0..9999, do: "item_#{i}"
-        pure = Theta.from_enumerable(items, k: 4096, backend: Backend.Pure)
-        rust = Theta.from_enumerable(items, k: 4096, backend: Backend.Rust)
-        assert Theta.estimate(pure) == Theta.estimate(rust)
-      end
-
-      test "serialization produces identical binary" do
-        items = for i <- 0..99, do: "item_#{i}"
-        pure = Theta.from_enumerable(items, k: 4096, backend: Backend.Pure)
-        rust = Theta.from_enumerable(items, k: 4096, backend: Backend.Rust)
-        assert Theta.serialize(pure) == Theta.serialize(rust)
-      end
-
-      test "merge in estimation mode produces identical state" do
-        items_a = for i <- 0..499, do: "a_#{i}"
-        items_b = for i <- 0..499, do: "b_#{i}"
-        pure_a = Theta.from_enumerable(items_a, k: 64, backend: Backend.Pure)
-        pure_b = Theta.from_enumerable(items_b, k: 64, backend: Backend.Pure)
-        rust_a = Theta.from_enumerable(items_a, k: 64, backend: Backend.Rust)
-        rust_b = Theta.from_enumerable(items_b, k: 64, backend: Backend.Rust)
-        assert Theta.merge(pure_a, pure_b).state == Theta.merge(rust_a, rust_b).state
-      end
+  describe "struct" do
+    test "has expected fields" do
+      sketch = %Theta{state: <<>>, opts: [], backend: nil}
+      assert Map.has_key?(sketch, :state)
+      assert Map.has_key?(sketch, :opts)
+      assert Map.has_key?(sketch, :backend)
     end
   end
 
