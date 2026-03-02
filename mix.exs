@@ -51,7 +51,7 @@ defmodule ExDataSketch.MixProject do
 
   defp deps do
     [
-      {:rustler, ">= 0.0.0", optional: true, runtime: false},
+      {:rustler, "~> 0.36", optional: true, runtime: false},
       {:rustler_precompiled, "~> 0.8"},
       {:stream_data, "~> 1.0", only: [:test], runtime: false},
       {:benchee, "~> 1.0", only: :dev, runtime: false},

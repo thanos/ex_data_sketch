@@ -1,8 +1,32 @@
+defmodule ExDataSketch.BackendTest.StubBackend do
+  @moduledoc false
+  @behaviour ExDataSketch.Backend
+
+  def hll_new(_opts), do: <<>>
+  def hll_update(s, _h, _o), do: s
+  def hll_update_many(s, _h, _o), do: s
+  def hll_merge(s, _b, _o), do: s
+  def hll_estimate(_s, _o), do: 0.0
+  def cms_new(_opts), do: <<>>
+  def cms_update(s, _h, _i, _o), do: s
+  def cms_update_many(s, _p, _o), do: s
+  def cms_merge(s, _b, _o), do: s
+  def cms_estimate(_s, _h, _o), do: 0
+  def theta_new(_opts), do: <<>>
+  def theta_update(s, _h, _o), do: s
+  def theta_update_many(s, _h, _o), do: s
+  def theta_compact(s, _o), do: s
+  def theta_merge(s, _b, _o), do: s
+  def theta_estimate(_s, _o), do: 0.0
+  def theta_from_components(_k, _t, _e), do: <<>>
+end
+
 defmodule ExDataSketch.BackendTest do
   use ExUnit.Case, async: false
 
   alias ExDataSketch.Backend
   alias ExDataSketch.Backend.{Pure, Rust}
+  alias ExDataSketch.BackendTest.StubBackend
 
   describe "Backend.default/0" do
     setup do
@@ -15,23 +39,21 @@ defmodule ExDataSketch.BackendTest do
       assert Backend.default() == Pure
     end
 
+    @tag :rust_nif
     test "returns Rust when configured and available" do
-      if Rust.available?() do
-        Application.put_env(:ex_data_sketch, :backend, Rust)
-        assert Backend.default() == Rust
-      end
+      Application.put_env(:ex_data_sketch, :backend, Rust)
+      assert Backend.default() == Rust
     end
 
+    @tag :no_rust_nif
     test "returns Pure when Rust configured but not available" do
-      unless Rust.available?() do
-        Application.put_env(:ex_data_sketch, :backend, Rust)
-        assert Backend.default() == Pure
-      end
+      Application.put_env(:ex_data_sketch, :backend, Rust)
+      assert Backend.default() == Pure
     end
 
     test "returns custom module when configured" do
-      Application.put_env(:ex_data_sketch, :backend, MyCustomBackend)
-      assert Backend.default() == MyCustomBackend
+      Application.put_env(:ex_data_sketch, :backend, StubBackend)
+      assert Backend.default() == StubBackend
     end
   end
 
@@ -53,157 +75,156 @@ defmodule ExDataSketch.BackendTest do
   end
 
   describe "Nif stubs" do
-    test "nif_loaded returns :ok when NIF is loaded or raises when not" do
-      if Rust.available?() do
-        assert ExDataSketch.Nif.nif_loaded() == :ok
-      else
-        assert_raise ErlangError, fn -> ExDataSketch.Nif.nif_loaded() end
+    @tag :no_rust_nif
+    test "nif_loaded raises when NIF is not loaded" do
+      assert_raise ErlangError, fn -> ExDataSketch.Nif.nif_loaded() end
+    end
+
+    @tag :rust_nif
+    test "nif_loaded returns :ok when NIF is loaded" do
+      assert ExDataSketch.Nif.nif_loaded() == :ok
+    end
+
+    @tag :no_rust_nif
+    test "hll stubs raise when NIF is not loaded" do
+      assert_raise ErlangError, fn ->
+        ExDataSketch.Nif.hll_update_many_nif(<<>>, <<>>, 14)
+      end
+
+      assert_raise ErlangError, fn ->
+        ExDataSketch.Nif.hll_update_many_dirty_nif(<<>>, <<>>, 14)
+      end
+
+      assert_raise ErlangError, fn ->
+        ExDataSketch.Nif.hll_merge_nif(<<>>, <<>>, 14)
+      end
+
+      assert_raise ErlangError, fn ->
+        ExDataSketch.Nif.hll_merge_dirty_nif(<<>>, <<>>, 14)
+      end
+
+      assert_raise ErlangError, fn ->
+        ExDataSketch.Nif.hll_estimate_nif(<<>>, 14)
+      end
+
+      assert_raise ErlangError, fn ->
+        ExDataSketch.Nif.hll_estimate_dirty_nif(<<>>, 14)
       end
     end
 
-    test "hll stubs are callable" do
-      unless Rust.available?() do
-        assert_raise ErlangError, fn ->
-          ExDataSketch.Nif.hll_update_many_nif(<<>>, <<>>, 14)
-        end
+    @tag :no_rust_nif
+    test "cms stubs raise when NIF is not loaded" do
+      assert_raise ErlangError, fn ->
+        ExDataSketch.Nif.cms_update_many_nif(<<>>, <<>>, 1, 1, 32)
+      end
 
-        assert_raise ErlangError, fn ->
-          ExDataSketch.Nif.hll_update_many_dirty_nif(<<>>, <<>>, 14)
-        end
+      assert_raise ErlangError, fn ->
+        ExDataSketch.Nif.cms_update_many_dirty_nif(<<>>, <<>>, 1, 1, 32)
+      end
 
-        assert_raise ErlangError, fn ->
-          ExDataSketch.Nif.hll_merge_nif(<<>>, <<>>, 14)
-        end
+      assert_raise ErlangError, fn ->
+        ExDataSketch.Nif.cms_merge_nif(<<>>, <<>>, 1, 1, 32)
+      end
 
-        assert_raise ErlangError, fn ->
-          ExDataSketch.Nif.hll_merge_dirty_nif(<<>>, <<>>, 14)
-        end
-
-        assert_raise ErlangError, fn ->
-          ExDataSketch.Nif.hll_estimate_nif(<<>>, 14)
-        end
-
-        assert_raise ErlangError, fn ->
-          ExDataSketch.Nif.hll_estimate_dirty_nif(<<>>, 14)
-        end
+      assert_raise ErlangError, fn ->
+        ExDataSketch.Nif.cms_merge_dirty_nif(<<>>, <<>>, 1, 1, 32)
       end
     end
 
-    test "cms stubs are callable" do
-      unless Rust.available?() do
-        assert_raise ErlangError, fn ->
-          ExDataSketch.Nif.cms_update_many_nif(<<>>, <<>>, 1, 1, 32)
-        end
-
-        assert_raise ErlangError, fn ->
-          ExDataSketch.Nif.cms_update_many_dirty_nif(<<>>, <<>>, 1, 1, 32)
-        end
-
-        assert_raise ErlangError, fn ->
-          ExDataSketch.Nif.cms_merge_nif(<<>>, <<>>, 1, 1, 32)
-        end
-
-        assert_raise ErlangError, fn ->
-          ExDataSketch.Nif.cms_merge_dirty_nif(<<>>, <<>>, 1, 1, 32)
-        end
+    @tag :no_rust_nif
+    test "theta stubs raise when NIF is not loaded" do
+      assert_raise ErlangError, fn ->
+        ExDataSketch.Nif.theta_update_many_nif(<<>>, <<>>)
       end
-    end
 
-    test "theta stubs are callable" do
-      unless Rust.available?() do
-        assert_raise ErlangError, fn ->
-          ExDataSketch.Nif.theta_update_many_nif(<<>>, <<>>)
-        end
+      assert_raise ErlangError, fn ->
+        ExDataSketch.Nif.theta_update_many_dirty_nif(<<>>, <<>>)
+      end
 
-        assert_raise ErlangError, fn ->
-          ExDataSketch.Nif.theta_update_many_dirty_nif(<<>>, <<>>)
-        end
+      assert_raise ErlangError, fn ->
+        ExDataSketch.Nif.theta_merge_nif(<<>>, <<>>)
+      end
 
-        assert_raise ErlangError, fn ->
-          ExDataSketch.Nif.theta_merge_nif(<<>>, <<>>)
-        end
-
-        assert_raise ErlangError, fn ->
-          ExDataSketch.Nif.theta_merge_dirty_nif(<<>>, <<>>)
-        end
+      assert_raise ErlangError, fn ->
+        ExDataSketch.Nif.theta_merge_dirty_nif(<<>>, <<>>)
       end
     end
   end
 
-  # Rust backend tests — only run when NIF is available
-  if Rust.available?() do
-    describe "Rust backend dirty scheduler paths" do
-      test "hll_update_many uses dirty scheduler when exceeding threshold" do
-        opts = [p: 14, backend: Rust]
-        state = Rust.hll_new(opts)
-        hashes = Enum.map(1..5, &ExDataSketch.Hash.hash64/1)
-        # Use dirty_threshold: 0 to force dirty path
-        result = Rust.hll_update_many(state, hashes, Keyword.put(opts, :dirty_threshold, 0))
-        assert is_binary(result)
-      end
-
-      test "cms_update_many uses dirty scheduler when exceeding threshold" do
-        opts = [width: 64, depth: 3, counter_width: 32, backend: Rust]
-        state = Rust.cms_new(opts)
-        pairs = Enum.map(1..5, fn i -> {ExDataSketch.Hash.hash64(i), 1} end)
-        result = Rust.cms_update_many(state, pairs, Keyword.put(opts, :dirty_threshold, 0))
-        assert is_binary(result)
-      end
-
-      test "cms_merge uses dirty scheduler when exceeding threshold" do
-        opts = [width: 64, depth: 3, counter_width: 32, backend: Rust]
-        a = Rust.cms_new(opts)
-        b = Rust.cms_new(opts)
-        # total_counters = 64 * 3 = 192, set threshold to 0 to force dirty
-        result = Rust.cms_merge(a, b, Keyword.put(opts, :dirty_threshold, 0))
-        assert is_binary(result)
-      end
-
-      test "theta_update_many uses dirty scheduler when exceeding threshold" do
-        opts = [k: 64, backend: Rust]
-        state = Rust.theta_new(opts)
-        hashes = Enum.map(1..5, &ExDataSketch.Hash.hash64/1)
-        result = Rust.theta_update_many(state, hashes, Keyword.put(opts, :dirty_threshold, 0))
-        assert is_binary(result)
-      end
-
-      test "theta_merge uses dirty scheduler when exceeding threshold" do
-        opts = [k: 64, backend: Rust]
-        a = Rust.theta_new(opts)
-        b = Rust.theta_new(opts)
-        # Insert entries so count > 0
-        a = Rust.theta_update(a, ExDataSketch.Hash.hash64("a"), opts)
-        b = Rust.theta_update(b, ExDataSketch.Hash.hash64("b"), opts)
-        result = Rust.theta_merge(a, b, Keyword.put(opts, :dirty_threshold, 0))
-        assert is_binary(result)
-      end
+  describe "Rust backend dirty scheduler paths" do
+    @tag :rust_nif
+    test "hll_update_many uses dirty scheduler when exceeding threshold" do
+      opts = [p: 14, backend: Rust]
+      state = Rust.hll_new(opts)
+      hashes = Enum.map(1..5, &ExDataSketch.Hash.hash64/1)
+      result = Rust.hll_update_many(state, hashes, Keyword.put(opts, :dirty_threshold, 0))
+      assert is_binary(result)
     end
 
-    describe "Rust backend theta_from_components" do
-      test "delegates to Pure" do
-        k = 64
-        theta = 0xFFFFFFFFFFFFFFFF
-        entries = [100, 200, 300]
-        result = Rust.theta_from_components(k, theta, entries)
-        assert result == Pure.theta_from_components(k, theta, entries)
-      end
+    @tag :rust_nif
+    test "cms_update_many uses dirty scheduler when exceeding threshold" do
+      opts = [width: 64, depth: 3, counter_width: 32, backend: Rust]
+      state = Rust.cms_new(opts)
+      pairs = Enum.map(1..5, fn i -> {ExDataSketch.Hash.hash64(i), 1} end)
+      result = Rust.cms_update_many(state, pairs, Keyword.put(opts, :dirty_threshold, 0))
+      assert is_binary(result)
     end
 
-    describe "Rust backend dirty threshold configuration" do
-      setup do
-        original = Application.get_env(:ex_data_sketch, :dirty_thresholds)
-        on_exit(fn -> Application.put_env(:ex_data_sketch, :dirty_thresholds, original) end)
-      end
+    @tag :rust_nif
+    test "cms_merge uses dirty scheduler when exceeding threshold" do
+      opts = [width: 64, depth: 3, counter_width: 32, backend: Rust]
+      a = Rust.cms_new(opts)
+      b = Rust.cms_new(opts)
+      result = Rust.cms_merge(a, b, Keyword.put(opts, :dirty_threshold, 0))
+      assert is_binary(result)
+    end
 
-      test "reads threshold from app config" do
-        Application.put_env(:ex_data_sketch, :dirty_thresholds, %{hll_update_many: 1})
-        opts = [p: 14, backend: Rust]
-        state = Rust.hll_new(opts)
-        hashes = Enum.map(1..3, &ExDataSketch.Hash.hash64/1)
-        # Should hit dirty path since app config threshold is 1
-        result = Rust.hll_update_many(state, hashes, opts)
-        assert is_binary(result)
-      end
+    @tag :rust_nif
+    test "theta_update_many uses dirty scheduler when exceeding threshold" do
+      opts = [k: 64, backend: Rust]
+      state = Rust.theta_new(opts)
+      hashes = Enum.map(1..5, &ExDataSketch.Hash.hash64/1)
+      result = Rust.theta_update_many(state, hashes, Keyword.put(opts, :dirty_threshold, 0))
+      assert is_binary(result)
+    end
+
+    @tag :rust_nif
+    test "theta_merge uses dirty scheduler when exceeding threshold" do
+      opts = [k: 64, backend: Rust]
+      a = Rust.theta_new(opts)
+      b = Rust.theta_new(opts)
+      a = Rust.theta_update(a, ExDataSketch.Hash.hash64("a"), opts)
+      b = Rust.theta_update(b, ExDataSketch.Hash.hash64("b"), opts)
+      result = Rust.theta_merge(a, b, Keyword.put(opts, :dirty_threshold, 0))
+      assert is_binary(result)
+    end
+  end
+
+  describe "Rust backend theta_from_components" do
+    @tag :rust_nif
+    test "delegates to Pure" do
+      k = 64
+      theta = 0xFFFFFFFFFFFFFFFF
+      entries = [100, 200, 300]
+      result = Rust.theta_from_components(k, theta, entries)
+      assert result == Pure.theta_from_components(k, theta, entries)
+    end
+  end
+
+  describe "Rust backend dirty threshold configuration" do
+    setup do
+      original = Application.get_env(:ex_data_sketch, :dirty_thresholds)
+      on_exit(fn -> Application.put_env(:ex_data_sketch, :dirty_thresholds, original) end)
+    end
+
+    @tag :rust_nif
+    test "reads threshold from app config" do
+      Application.put_env(:ex_data_sketch, :dirty_thresholds, %{hll_update_many: 1})
+      opts = [p: 14, backend: Rust]
+      state = Rust.hll_new(opts)
+      hashes = Enum.map(1..3, &ExDataSketch.Hash.hash64/1)
+      result = Rust.hll_update_many(state, hashes, opts)
+      assert is_binary(result)
     end
   end
 end
