@@ -7,8 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-03-02
+
 ### Added
 
+- Precompiled Rust NIF binaries for macOS (ARM64, x86_64) and Linux (x86_64 gnu/musl, aarch64 gnu/musl).
 - Optional Rust NIF acceleration backend (`ExDataSketch.Backend.Rust`).
 - Rust NIFs for HLL (update_many, merge, estimate), CMS (update_many, merge), and Theta (update_many, merge).
 - Normal and dirty CPU scheduler NIF variants with configurable thresholds.

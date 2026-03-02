@@ -8,6 +8,7 @@ on:
 
 env:
   MIX_ENV: test
+  EX_DATA_SKETCH_SKIP_NIF: "true"
 
 jobs:
   lint:
@@ -247,6 +248,9 @@ jobs:
   test-rust:
     name: Test with Rust NIF
     runs-on: ubuntu-latest
+    env:
+      EX_DATA_SKETCH_BUILD: "true"
+      EX_DATA_SKETCH_SKIP_NIF: "false"
     steps:
       - uses: actions/checkout@v4
 
@@ -287,6 +291,8 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     env:
       MIX_ENV: dev
+      EX_DATA_SKETCH_BUILD: "true"
+      EX_DATA_SKETCH_SKIP_NIF: "false"
     steps:
       - uses: actions/checkout@v4
 
