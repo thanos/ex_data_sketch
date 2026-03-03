@@ -8,8 +8,14 @@ name = "ex_data_sketch_nif"
 path = "src/lib.rs"
 crate-type = ["cdylib"]
 
+[features]
+default = ["nif_version_2_15"]
+nif_version_2_15 = ["rustler/nif_version_2_15"]
+nif_version_2_16 = ["rustler/nif_version_2_16"]
+nif_version_2_17 = ["rustler/nif_version_2_17"]
+
 [dependencies]
-rustler = "0.36"
+rustler = { version = "0.36", default-features = false, features = ["derive"] }
 
 [profile.release]
 opt-level = 3
