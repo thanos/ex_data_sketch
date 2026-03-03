@@ -18,7 +18,7 @@ jobs:
         nif: ["2.16", "2.17"]
         job:
           - { target: aarch64-apple-darwin, os: macos-14 }
-          - { target: x86_64-apple-darwin, os: macos-13 }
+          - { target: x86_64-apple-darwin, os: macos-14 }
           - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04 }
           - { target: x86_64-unknown-linux-musl, os: ubuntu-22.04, use-cross: true }
           - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04, use-cross: true }
@@ -37,6 +37,18 @@ jobs:
         with:
           targets: ${{ matrix.job.target }}
 
+      - name: Add Rust target (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          rustup default stable
+          rustup target add ${{ matrix.job.target }}
+
+      - name: Use GNU tar on macOS
+        if: runner.os == 'macOS'
+        run: |
+          brew install gnu-tar
+          echo "PATH=$(brew --prefix gnu-tar)/libexec/gnubin:$PATH" >> $GITHUB_ENV
+
       - name: Build precompiled NIF
         id: build-crate
         uses: philss/rustler-precompiled-action@v1.1.4
@@ -45,7 +57,8 @@ jobs:
           project-version: ${{ env.PROJECT_VERSION }}
           target: ${{ matrix.job.target }}
           nif-version: ${{ matrix.nif }}
-          use-cross: ${{ matrix.job.use-cross || false }}
+          use-cross: ${{ matrix.job.use-cross || '' }}
+          cross-version: from-source
           project-dir: "native/ex_data_sketch_nif"
 
       - name: Upload NIF artifact
@@ -54,16 +67,35 @@ jobs:
           name: ${{ steps.build-crate.outputs.file-name }}
           path: ${{ steps.build-crate.outputs.file-path }}
 
-      - name: Publish to GitHub Release
+  release:
+    name: Create GitHub Release
+    needs: build_release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Flatten tarballs
+        run: |
+          mkdir -p nifs
+          find release-artifacts -name '*.tar.gz' -exec cp {} nifs/ \;
+          ls -la nifs/
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ steps.build-crate.outputs.file-path }}
-        if: startsWith(github.ref, 'refs/tags/')
+          files: nifs/*.tar.gz
+          generate_release_notes: true
 
   publish_hex:
     name: Publish to Hex.pm
-    needs: build_release
+    needs: release
     runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
     steps:
       - uses: actions/checkout@v4
 
