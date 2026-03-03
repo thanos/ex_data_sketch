@@ -77,6 +77,7 @@ defmodule ExDataSketch.MixProject do
         "native/ex_data_sketch_nif/src",
         "native/ex_data_sketch_nif/Cargo.toml",
         "native/ex_data_sketch_nif/Cargo.lock",
+        "native/ex_data_sketch_nif/.cargo",
         "checksum-Elixir.ExDataSketch.Nif.exs",
         "guides",
         "LICENSE",

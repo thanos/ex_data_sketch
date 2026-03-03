@@ -1,0 +1,3 @@
+# Pass NIF version through when cross builds inside Docker container.
+[build.env]
+passthrough = ["RUSTLER_NIF_VERSION"]

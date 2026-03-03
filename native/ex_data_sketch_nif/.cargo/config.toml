@@ -1,0 +1,10 @@
+# musl targets default to statically linking the C runtime (crt-static),
+# which prevents building cdylib crates. Disable crt-static so that
+# cross can produce the .so NIF shared library.
+# See: https://github.com/rust-lang/cargo/issues/10143
+
+[target.x86_64-unknown-linux-musl]
+rustflags = ["-C", "target-feature=-crt-static"]
+
+[target.aarch64-unknown-linux-musl]
+rustflags = ["-C", "target-feature=-crt-static"]
