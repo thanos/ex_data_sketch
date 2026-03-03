@@ -111,16 +111,11 @@ jobs:
           key: deps-${{ hashFiles('mix.lock') }}
 
       - run: mix deps.get
-        env:
-          EX_DATA_SKETCH_SKIP_NIF: "true"
 
       - name: Generate checksums from GitHub Release
         run: mix rustler_precompiled.download ExDataSketch.Nif --all --print
-        env:
-          EX_DATA_SKETCH_SKIP_NIF: "true"
 
       - name: Publish to Hex
         run: mix hex.publish --yes
         env:
           HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
-          EX_DATA_SKETCH_SKIP_NIF: "true"
