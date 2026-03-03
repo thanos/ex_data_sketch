@@ -96,6 +96,8 @@ jobs:
     needs: release
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
+    env:
+      EX_DATA_SKETCH_BUILD: "true"
     steps:
       - uses: actions/checkout@v4
 
@@ -104,6 +106,9 @@ jobs:
           otp-version: "27"
           elixir-version: "1.18"
 
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Cache deps
         uses: actions/cache@v4
         with:
@@ -111,6 +116,9 @@ jobs:
           key: deps-${{ hashFiles('mix.lock') }}
 
       - run: mix deps.get
+
+      - name: Compile NIF from source (avoids downloading at compile time)
+        run: mix compile
 
       - name: Generate checksums from GitHub Release
         run: mix rustler_precompiled.download ExDataSketch.Nif --all --print

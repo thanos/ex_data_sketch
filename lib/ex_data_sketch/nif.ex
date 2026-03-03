@@ -8,7 +8,6 @@ defmodule ExDataSketch.Nif do
       otp_app: :ex_data_sketch,
       crate: "ex_data_sketch_nif",
       base_url: "https://github.com/thanos/ex_data_sketch/releases/download/v#{version}",
-      force_build: System.get_env("EX_DATA_SKETCH_BUILD") in ["1", "true"],
       version: version,
       nif_versions: ["2.16", "2.17"],
       targets: [
