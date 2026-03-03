@@ -20,72 +20,48 @@ jobs:
           - { target: aarch64-apple-darwin, os: macos-14 }
           - { target: x86_64-apple-darwin, os: macos-13 }
           - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04 }
-          - { target: x86_64-unknown-linux-musl, os: ubuntu-22.04 }
-          - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04 }
-          - { target: aarch64-unknown-linux-musl, os: ubuntu-22.04 }
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-22.04, use-cross: true }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04, use-cross: true }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-22.04, use-cross: true }
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: erlef/setup-beam@v1
-        with:
-          otp-version: "27"
-          elixir-version: "1.18"
+      - name: Extract project version
+        shell: bash
+        run: |
+          echo "PROJECT_VERSION=$(sed -n 's/^  @version "\(.*\)"/\1/p' mix.exs | head -n1)" >> $GITHUB_ENV
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.job.target }}
 
-      - name: Install cross-compilation tools (Linux ARM GNU)
-        if: matrix.job.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-
-      - name: Install musl tools (x86_64)
-        if: matrix.job.target == 'x86_64-unknown-linux-musl'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools
-
-      - name: Install cross-compilation tools (Linux ARM musl)
-        if: matrix.job.target == 'aarch64-unknown-linux-musl'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu musl-tools
-          wget -q https://musl.cc/aarch64-linux-musl-cross.tgz
-          tar xzf aarch64-linux-musl-cross.tgz -C /opt/
-          echo "/opt/aarch64-linux-musl-cross/bin" >> $GITHUB_PATH
-
-      - name: Cache deps
-        uses: actions/cache@v4
-        with:
-          path: deps
-          key: deps-${{ hashFiles('mix.lock') }}
-
-      - run: mix deps.get
-
       - name: Build precompiled NIF
-        run: |
-          mix rustler_precompiled.build ExDataSketch.Nif \
-            --target ${{ matrix.job.target }} \
-            --nif-version ${{ matrix.nif }}
-        env:
-          EX_DATA_SKETCH_BUILD: "true"
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-musl-gcc
-          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
-          CC_aarch64_unknown_linux_musl: aarch64-linux-musl-gcc
+        id: build-crate
+        uses: philss/rustler-precompiled-action@v1.1.4
+        with:
+          project-name: ex_data_sketch_nif
+          project-version: ${{ env.PROJECT_VERSION }}
+          target: ${{ matrix.job.target }}
+          nif-version: ${{ matrix.nif }}
+          use-cross: ${{ matrix.job.use-cross || false }}
+          project-dir: "native/ex_data_sketch_nif"
 
-      - name: Upload built NIF artifact
+      - name: Upload NIF artifact
         uses: actions/upload-artifact@v4
         with:
-          name: nif-${{ matrix.job.target }}-nif${{ matrix.nif }}
-          path: priv/native/*
-          if-no-files-found: error
+          name: ${{ steps.build-crate.outputs.file-name }}
+          path: ${{ steps.build-crate.outputs.file-path }}
 
-  publish_release:
-    name: Publish GitHub Release & Hex package
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.build-crate.outputs.file-path }}
+        if: startsWith(github.ref, 'refs/tags/')
+
+  publish_hex:
+    name: Publish to Hex.pm
     needs: build_release
     runs-on: ubuntu-latest
     steps:
@@ -103,28 +79,16 @@ jobs:
           key: deps-${{ hashFiles('mix.lock') }}
 
       - run: mix deps.get
+        env:
+          EX_DATA_SKETCH_SKIP_NIF: "true"
 
-      - name: Download all NIF artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: priv/native
-          pattern: nif-*
-          merge-multiple: true
-
-      - name: List downloaded artifacts
-        run: ls -lR priv/native/
-
-      - name: Generate checksums
-        run: mix rustler_precompiled.checksum ExDataSketch.Nif --all
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            priv/native/libex_data_sketch_nif-*.tar.gz
-          generate_release_notes: true
+      - name: Generate checksums from GitHub Release
+        run: mix rustler_precompiled.download ExDataSketch.Nif --all --print
+        env:
+          EX_DATA_SKETCH_SKIP_NIF: "true"
 
       - name: Publish to Hex
         run: mix hex.publish --yes
         env:
           HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
+          EX_DATA_SKETCH_SKIP_NIF: "true"
