@@ -10,6 +10,7 @@ defmodule ExDataSketch.Nif do
       base_url: "https://github.com/thanos/ex_data_sketch/releases/download/v#{version}",
       force_build: System.get_env("EX_DATA_SKETCH_BUILD") in ["1", "true"],
       version: version,
+      nif_versions: ["2.16", "2.17"],
       targets: [
         "aarch64-apple-darwin",
         "x86_64-apple-darwin",
