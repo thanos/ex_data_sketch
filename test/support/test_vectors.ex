@@ -135,20 +135,16 @@ defmodule ExDataSketch.TestVectors do
       expected_estimate ->
         actual = sketch.__struct__.estimate(sketch)
         tolerance = expected["tolerance"] || 0
+        # Always use assert_in_delta with a minimum epsilon to avoid brittle
+        # exact float equality across libm/OTP/Rust versions.
+        delta = max(tolerance, 1.0e-9)
 
-        if tolerance == 0 do
-          ExUnit.Assertions.assert(
-            actual == expected_estimate,
-            "Estimate mismatch for #{context}: expected #{expected_estimate}, got #{actual}"
-          )
-        else
-          ExUnit.Assertions.assert_in_delta(
-            actual,
-            expected_estimate,
-            tolerance,
-            "Estimate out of tolerance for #{context}"
-          )
-        end
+        ExUnit.Assertions.assert_in_delta(
+          actual,
+          expected_estimate,
+          delta,
+          "Estimate out of tolerance for #{context}: expected #{expected_estimate}, got #{actual} (delta: #{delta})"
+        )
     end
   end
 end

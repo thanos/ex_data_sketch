@@ -23,7 +23,7 @@ defmodule ExDataSketch.ParityTest do
       rust = HLL.new(backend: Rust) |> HLL.update_many(@items_1000)
 
       assert HLL.serialize(pure) == HLL.serialize(rust)
-      assert HLL.estimate(pure) == HLL.estimate(rust)
+      assert_in_delta HLL.estimate(pure), HLL.estimate(rust), 1.0e-9
     end
 
     test "merge produces identical serialization and estimate" do
@@ -36,7 +36,7 @@ defmodule ExDataSketch.ParityTest do
       rust_merged = HLL.merge(rust_a, rust_b)
 
       assert HLL.serialize(pure_merged) == HLL.serialize(rust_merged)
-      assert HLL.estimate(pure_merged) == HLL.estimate(rust_merged)
+      assert_in_delta HLL.estimate(pure_merged), HLL.estimate(rust_merged), 1.0e-9
     end
   end
 
@@ -82,7 +82,7 @@ defmodule ExDataSketch.ParityTest do
       rust = Theta.new(backend: Rust) |> Theta.update_many(@items_1000)
 
       assert Theta.serialize(pure) == Theta.serialize(rust)
-      assert Theta.estimate(pure) == Theta.estimate(rust)
+      assert_in_delta Theta.estimate(pure), Theta.estimate(rust), 1.0e-9
     end
 
     test "merge produces identical serialization and estimate" do
@@ -95,7 +95,7 @@ defmodule ExDataSketch.ParityTest do
       rust_merged = Theta.merge(rust_a, rust_b)
 
       assert Theta.serialize(pure_merged) == Theta.serialize(rust_merged)
-      assert Theta.estimate(pure_merged) == Theta.estimate(rust_merged)
+      assert_in_delta Theta.estimate(pure_merged), Theta.estimate(rust_merged), 1.0e-9
     end
 
     test "compact + merge produces identical serialization and estimate" do
@@ -108,7 +108,7 @@ defmodule ExDataSketch.ParityTest do
       rust_merged = Theta.merge(rust_a, rust_b)
 
       assert Theta.serialize(pure_merged) == Theta.serialize(rust_merged)
-      assert Theta.estimate(pure_merged) == Theta.estimate(rust_merged)
+      assert_in_delta Theta.estimate(pure_merged), Theta.estimate(rust_merged), 1.0e-9
     end
   end
 end

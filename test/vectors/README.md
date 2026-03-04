@@ -41,9 +41,9 @@ expected outputs.
 | `algorithm_opts` | object | Constructor options (e.g. `{"p": 14}`) |
 | `input_items` | array | Deterministic list of strings/integers |
 | `expected.canonical_exsk_base64` | string | Base64-encoded `serialize/1` output |
-| `expected.estimate` | number | Expected estimate value |
-| `expected.tolerance` | number | Allowed absolute difference (0 = exact) |
-| `expected.point_estimates` | object | CMS only: `{"item": count}` map |
+| `expected.estimate` | number or null | Expected estimate value. `null` for CMS (use `point_estimates` instead) |
+| `expected.tolerance` | number | _(optional)_ Allowed absolute difference. Defaults to 0; a small epsilon (1e-9) is applied for float estimates |
+| `expected.point_estimates` | object | _(optional, CMS only)_ Per-item expected counts: `{"item": count}` |
 
 ### Merge Vectors
 
@@ -53,7 +53,8 @@ Merge vectors include additional fields:
 |-------|------|-------------|
 | `merge_inputs` | array | Second sketch's input items |
 | `merge_expected.canonical_exsk_base64` | string | Expected merged state |
-| `merge_expected.estimate` | number | Expected merged estimate |
+| `merge_expected.estimate` | number or null | Expected merged estimate. `null` for CMS |
+| `merge_expected.point_estimates` | object | _(optional, CMS only)_ Per-item expected counts after merge |
 
 ## Legacy Binary Vectors
 
