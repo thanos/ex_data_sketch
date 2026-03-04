@@ -188,7 +188,6 @@ jobs:
         with:
           path: priv/plts
           key: plt-1.19-28-${{ hashFiles('mix.lock') }}
-          restore-keys: plt-1.19-28-
 
       - run: mix deps.get
       - run: mkdir -p priv/plts
