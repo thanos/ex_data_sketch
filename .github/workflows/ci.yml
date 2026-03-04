@@ -166,6 +166,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: erlef/setup-beam@v1
+        id: setup-beam
         with:
           elixir-version: "1.19"
           otp-version: "28"
@@ -184,14 +185,19 @@ jobs:
           restore-keys: build-dev-1.19-28-
 
       - name: Cache PLTs
+        id: plt-cache
         uses: actions/cache@v4
         with:
           path: priv/plts
-          key: plt-1.19-28-${{ hashFiles('mix.lock') }}
-          restore-keys: plt-1.19-28-
+          key: plt-${{ steps.setup-beam.outputs.elixir-version }}-${{ steps.setup-beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
 
       - run: mix deps.get
       - run: mkdir -p priv/plts
+
+      - name: Remove stale PLT on cache miss
+        if: steps.plt-cache.outputs.cache-hit != 'true'
+        run: rm -f priv/plts/dialyzer.plt
+
       - run: mix dialyzer
 
   bench:

@@ -284,8 +284,10 @@ defmodule ExDataSketch.CMS do
   @doc """
   Serializes the sketch to Apache DataSketches CMS format.
 
-  Not planned for v1. DataSketches does not define a standard CMS binary
-  format. This function is reserved for future compatibility.
+  Not implemented. Apache DataSketches does not define a standard CMS binary
+  format. Only Theta sketches support DataSketches interop via
+  `ExDataSketch.Theta.serialize_datasketches/1`. For CMS serialization,
+  use `serialize/1` (ExDataSketch-native EXSK format).
 
   ## Examples
 
@@ -307,7 +309,7 @@ defmodule ExDataSketch.CMS do
   @doc """
   Deserializes an Apache DataSketches CMS binary.
 
-  Not planned for v1. Reserved for future compatibility.
+  Not implemented. See `serialize_datasketches/1` for details.
 
   ## Examples
 

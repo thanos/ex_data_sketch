@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-03-04
+
+### Added
+
+- Deterministic golden vector test fixtures for HLL, CMS, and Theta (JSON format with versioned schema).
+- Pure vs Rust parity test suite ensuring byte-identical serialization and estimates.
+- Merge-law property tests (associativity, commutativity, identity, chunking equivalence) for all sketch types.
+- Compatibility and Stability section in README documenting serialization and parity guarantees.
+- CI regression tracking for coverage and benchmark baselines.
+
+### Changed
+
+- Stabilized benchmark scripts with deterministic datasets and JSON output.
+- Clarified HLL and CMS DataSketches interop stubs as intentionally unimplemented (not "future").
+- Removed stale "Phase 2" language from module documentation.
+
 ## [0.1.0] - 2026-03-02
 
 ### Added

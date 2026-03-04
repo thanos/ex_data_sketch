@@ -19,7 +19,7 @@ defmodule ExDataSketch do
     NIF resources.
   - **Backend system**: Computation is dispatched through backend modules.
     `ExDataSketch.Backend.Pure` (pure Elixir) is always available.
-    `ExDataSketch.Backend.Rust` (optional, Phase 2) provides NIF acceleration.
+    `ExDataSketch.Backend.Rust` (optional, precompiled binaries provided) provides NIF acceleration.
   - **Serialization**: ExDataSketch-native format (EXSK) for all sketches,
     plus Apache DataSketches interop for Theta CompactSketch.
   - **Deterministic hashing**: `ExDataSketch.Hash` provides a stable 64-bit

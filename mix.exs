@@ -1,7 +1,7 @@
 defmodule ExDataSketch.MixProject do
   use Mix.Project
 
-  @version "0.1.0-alpha.12"
+  @version "0.1.1"
   @source_url "https://github.com/thanos/ex_data_sketch"
 
   def project do
@@ -9,6 +9,7 @@ defmodule ExDataSketch.MixProject do
       app: :ex_data_sketch,
       version: @version,
       elixir: "~> 1.15",
+      elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       aliases: aliases(),
@@ -49,6 +50,9 @@ defmodule ExDataSketch.MixProject do
     ]
   end
 
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_), do: ["lib"]
+
   defp deps do
     [
       {:rustler, "~> 0.36", optional: true, runtime: false},
@@ -59,6 +63,7 @@ defmodule ExDataSketch.MixProject do
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: :dev, runtime: false},
+      {:jason, "~> 1.4"},
       {:excoveralls, "~> 0.18", only: :test, runtime: false}
     ]
   end
@@ -138,6 +143,7 @@ defmodule ExDataSketch.MixProject do
       {"compile --warnings-as-errors", :dev},
       {"format --check-formatted", :dev},
       {"credo --strict", :dev},
+      {"dialyzer", :dev},
       {"test --cover", :test},
       {"docs --warnings-as-errors", :dev}
     ]

@@ -242,8 +242,10 @@ defmodule ExDataSketch.HLL do
   @doc """
   Serializes the sketch to Apache DataSketches HLL format.
 
-  Not yet implemented. Will be available in a future release.
-  Interop priority: Theta first, then HLL.
+  Not implemented. Apache DataSketches HLL interop is not planned for the
+  current release series. Only Theta sketches support DataSketches interop
+  via `ExDataSketch.Theta.serialize_datasketches/1`. For HLL serialization,
+  use `serialize/1` (ExDataSketch-native EXSK format).
 
   ## Examples
 
@@ -265,7 +267,7 @@ defmodule ExDataSketch.HLL do
   @doc """
   Deserializes an Apache DataSketches HLL binary.
 
-  Not yet implemented. Will be available in a future release.
+  Not implemented. See `serialize_datasketches/1` for details.
 
   ## Examples
 
