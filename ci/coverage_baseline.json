@@ -1,5 +1,5 @@
 {
-  "threshold": 84.0,
-  "updated_at": "2026-03-02",
-  "notes": "CI baseline (Pure-only, no Rust NIF). Local with Rust: ~91.8%."
+  "threshold": 85.0,
+  "updated_at": "2026-03-04",
+  "notes": "CI baseline (Pure-only, no Rust NIF). Local with Rust: ~93.2%."
 }
