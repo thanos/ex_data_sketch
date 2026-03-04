@@ -8,6 +8,7 @@ IO.puts("ExDataSketch HLL Benchmark")
 IO.puts("==========================")
 IO.puts("Elixir: #{System.version()}")
 IO.puts("OTP: #{System.otp_release()}")
+IO.puts("Arch: #{:erlang.system_info(:system_architecture)}")
 IO.puts("Rust NIF: #{Backend.Rust.available?()}")
 IO.puts("")
 
