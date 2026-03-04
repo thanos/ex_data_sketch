@@ -43,11 +43,25 @@ Full documentation is available at [HexDocs](https://hexdocs.pm/ex_data_sketch).
 
 ## Architecture
 
-- **Binary state**: All sketch state is canonical Elixir binaries.
-- **Backend system**: Pure Elixir reference implementation with optional Rust NIF acceleration.
-- **Serialization**: ExDataSketch-native format (EXSK) plus Apache DataSketches CompactSketch interop for Theta.
-- **Deterministic hashing**: Stable 64-bit hash for reproducible results.
-- **Backend parity**: Both backends produce byte-identical output for the same inputs.
+- **Binary state**: All sketch state is canonical Elixir binaries. No opaque NIF resources.
+- **Backend system**: Pure Elixir reference implementation with optional Rust NIF acceleration. The Rust backend falls back to Pure automatically when unavailable.
+- **Serialization**: ExDataSketch-native format (EXSK) for all sketches, plus Apache DataSketches CompactSketch interop for Theta.
+- **Deterministic hashing**: Stable 64-bit hash (`ExDataSketch.Hash`) for reproducible results.
+- **Backend parity**: Both backends produce byte-identical serialized output for the same inputs.
+
+## Compatibility and Stability
+
+The following guarantees apply within the v0.1.x release series:
+
+- **EXSK serialization**: The ExDataSketch-native binary format is stable. Binaries produced by any v0.1.x release can be deserialized by any other v0.1.x release.
+- **Pure vs Rust parity**: Given identical inputs, both backends produce byte-identical serialized state and identical estimates.
+- **Deterministic output**: The same input sequence always produces the same sketch state and estimate, regardless of backend.
+
+Not guaranteed:
+
+- **Cross-language interop**: Only Theta supports Apache DataSketches CompactSketch format. HLL and CMS DataSketches interop is not implemented.
+- **Performance stability**: Benchmark results may vary across hardware and OTP versions.
+- **EXSK format across major versions**: The binary format may change in future major releases.
 
 ## Development
 
