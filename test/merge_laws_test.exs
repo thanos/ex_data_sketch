@@ -6,7 +6,7 @@ defmodule ExDataSketch.MergeLawsTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
-  alias ExDataSketch.{CMS, DDSketch, HLL, KLL, Theta}
+  alias ExDataSketch.{CMS, DDSketch, FrequentItems, HLL, KLL, Theta}
 
   @max_runs 50
   @hll_opts [p: 10]
@@ -14,6 +14,7 @@ defmodule ExDataSketch.MergeLawsTest do
   @theta_opts [k: 1024]
   @kll_opts [k: 200]
   @dds_opts [alpha: 0.01]
+  @fi_opts [k: 16]
 
   defp string_list(max_length \\ 20) do
     list_of(string(:alphanumeric, min_length: 1), min_length: 1, max_length: max_length)
@@ -375,6 +376,51 @@ defmodule ExDataSketch.MergeLawsTest do
         merged = DDSketch.merge(sa, sb)
         assert DDSketch.min_value(merged) == min(DDSketch.min_value(sa), DDSketch.min_value(sb))
         assert DDSketch.max_value(merged) == max(DDSketch.max_value(sa), DDSketch.max_value(sb))
+      end
+    end
+  end
+
+  describe "FrequentItems merge laws" do
+    property "commutativity" do
+      check all(
+              a <- string_list(),
+              b <- string_list(),
+              max_runs: @max_runs
+            ) do
+        sa = FrequentItems.from_enumerable(a, @fi_opts)
+        sb = FrequentItems.from_enumerable(b, @fi_opts)
+
+        assert FrequentItems.serialize(FrequentItems.merge(sa, sb)) ==
+                 FrequentItems.serialize(FrequentItems.merge(sb, sa))
+      end
+    end
+
+    property "identity: merge with empty" do
+      check all(items <- string_list(), max_runs: @max_runs) do
+        sketch = FrequentItems.from_enumerable(items, @fi_opts)
+        empty = FrequentItems.new(@fi_opts)
+
+        assert FrequentItems.serialize(FrequentItems.merge(sketch, empty)) ==
+                 FrequentItems.serialize(sketch)
+
+        assert FrequentItems.serialize(FrequentItems.merge(empty, sketch)) ==
+                 FrequentItems.serialize(sketch)
+      end
+    end
+
+    property "count conservation" do
+      check all(
+              a <- string_list(),
+              b <- string_list(),
+              max_runs: @max_runs
+            ) do
+        sa = FrequentItems.from_enumerable(a, @fi_opts)
+        sb = FrequentItems.from_enumerable(b, @fi_opts)
+
+        merged = FrequentItems.merge(sa, sb)
+
+        assert FrequentItems.count(merged) ==
+                 FrequentItems.count(sa) + FrequentItems.count(sb)
       end
     end
   end
