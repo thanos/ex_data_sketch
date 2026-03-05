@@ -63,6 +63,27 @@ Value-relative error: the returned quantile value v satisfies
 | 0.005 | 0.5%          | ~1840 |
 | 0.001 | 0.1%          | ~9200 |
 
+### FrequentItems Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `:k` | pos_integer | 10 | Maximum number of counters. Controls how many distinct items can be tracked. Higher values give more accurate frequency estimates. |
+| `:key_encoding` | atom/tuple | `:binary` | Key encoding policy: `:binary` (raw binaries), `:int` (64-bit LE integers), or `{:term, :external}` (Erlang external term format). |
+| `:backend` | module | `ExDataSketch.Backend.Pure` | Backend module for computation. |
+
+FrequentItems uses the SpaceSaving algorithm to track the top-k most
+frequent items in a data stream. It maintains at most `k` counters, each
+storing an item, its estimated count, and a maximum overcount error.
+
+When a new item arrives and all k slots are full, the item with the minimum
+count is evicted (ties broken by lexicographically smallest key). The new
+item inherits the evicted count plus one, and the evicted count is recorded
+as the error bound.
+
+Frequency estimates are always upper bounds -- the true frequency may be
+lower, but never higher. The `lower` field gives a guaranteed lower bound:
+`max(estimate - error, 0)`.
+
 ### KLL vs DDSketch
 
 Both are quantile sketches available through `ExDataSketch.Quantiles`, but they
@@ -220,7 +241,7 @@ The EXSK format structure:
 |-------|------|-------------|
 | Magic | 4 bytes | `"EXSK"` |
 | Version | 1 byte | Format version (currently 1) |
-| Sketch ID | 1 byte | Identifies sketch type (HLL=1, CMS=2, Theta=3, KLL=4, DDSketch=5) |
+| Sketch ID | 1 byte | Identifies sketch type (HLL=1, CMS=2, Theta=3, KLL=4, DDSketch=5, FrequentItems=6) |
 | Params length | 4 bytes | Little-endian u32, byte length of params |
 | Params | variable | Sketch-specific parameters |
 | State length | 4 bytes | Little-endian u32, byte length of state |

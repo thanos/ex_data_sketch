@@ -5,4 +5,6 @@ exclude =
     [:rust_nif]
   end
 
+Mox.defmock(ExDataSketch.MockBackend, for: ExDataSketch.Backend)
+
 ExUnit.start(exclude: exclude)

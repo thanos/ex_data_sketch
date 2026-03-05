@@ -14,6 +14,7 @@ defmodule ExDataSketch do
   - `ExDataSketch.Theta` -- Theta Sketch for set operations on cardinalities.
   - `ExDataSketch.KLL` -- KLL Sketch for rank and quantile estimation.
   - `ExDataSketch.DDSketch` -- DDSketch for value-relative-accuracy quantile estimation.
+  - `ExDataSketch.FrequentItems` -- SpaceSaving for approximate heavy-hitter detection.
   - `ExDataSketch.Quantiles` -- Facade for quantile sketch algorithms.
 
   ## Architecture
@@ -55,7 +56,7 @@ defmodule ExDataSketch do
   See the [Quick Start guide](quick_start.md) for more examples.
   """
 
-  alias ExDataSketch.{CMS, DDSketch, HLL, KLL, Theta}
+  alias ExDataSketch.{CMS, DDSketch, FrequentItems, HLL, KLL, Theta}
 
   @doc """
   Updates a sketch with multiple items in a single pass.
@@ -72,13 +73,16 @@ defmodule ExDataSketch do
 
   """
   @spec update_many(
-          HLL.t() | CMS.t() | Theta.t() | KLL.t() | DDSketch.t(),
+          HLL.t() | CMS.t() | Theta.t() | KLL.t() | DDSketch.t() | FrequentItems.t(),
           Enumerable.t()
         ) ::
-          HLL.t() | CMS.t() | Theta.t() | KLL.t() | DDSketch.t()
+          HLL.t() | CMS.t() | Theta.t() | KLL.t() | DDSketch.t() | FrequentItems.t()
   def update_many(%HLL{} = sketch, items), do: HLL.update_many(sketch, items)
   def update_many(%CMS{} = sketch, items), do: CMS.update_many(sketch, items)
   def update_many(%Theta{} = sketch, items), do: Theta.update_many(sketch, items)
   def update_many(%KLL{} = sketch, items), do: KLL.update_many(sketch, items)
   def update_many(%DDSketch{} = sketch, items), do: DDSketch.update_many(sketch, items)
+
+  def update_many(%FrequentItems{} = sketch, items),
+    do: FrequentItems.update_many(sketch, items)
 end

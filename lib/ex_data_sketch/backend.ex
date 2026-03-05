@@ -146,6 +146,33 @@ defmodule ExDataSketch.Backend do
   @doc "Return the maximum value in DDSketch state, or nil if empty."
   @callback ddsketch_max(state_bin(), opts()) :: float() | nil
 
+  # -- FrequentItems callbacks --
+
+  @doc "Create a new FrequentItems state binary with the given options."
+  @callback fi_new(opts()) :: state_bin()
+
+  @doc "Update FrequentItems state with a single item_bytes value."
+  @callback fi_update(state_bin(), binary(), opts()) :: state_bin()
+
+  @doc "Update FrequentItems state with a list of item_bytes values in a single pass."
+  @callback fi_update_many(state_bin(), [binary()], opts()) :: state_bin()
+
+  @doc "Merge two FrequentItems state binaries."
+  @callback fi_merge(state_bin(), state_bin(), opts()) :: state_bin()
+
+  @doc "Return the frequency estimate for a given item_bytes from FrequentItems state."
+  @callback fi_estimate(state_bin(), binary(), opts()) ::
+              {:ok, map()} | {:error, :not_tracked}
+
+  @doc "Return the top-k entries sorted by count descending from FrequentItems state."
+  @callback fi_top_k(state_bin(), non_neg_integer(), opts()) :: [map()]
+
+  @doc "Return the total count of observed items from FrequentItems state."
+  @callback fi_count(state_bin(), opts()) :: non_neg_integer()
+
+  @doc "Return the number of distinct tracked entries from FrequentItems state."
+  @callback fi_entry_count(state_bin(), opts()) :: non_neg_integer()
+
   @doc """
   Returns the default backend module.
 

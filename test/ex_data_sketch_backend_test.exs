@@ -36,6 +36,14 @@ defmodule ExDataSketch.BackendTest.StubBackend do
   def ddsketch_count(_s, _o), do: 0
   def ddsketch_min(_s, _o), do: nil
   def ddsketch_max(_s, _o), do: nil
+  def fi_new(_opts), do: <<>>
+  def fi_update(s, _ib, _o), do: s
+  def fi_update_many(s, _items, _o), do: s
+  def fi_merge(s, _b, _o), do: s
+  def fi_estimate(_s, _ib, _o), do: {:error, :not_tracked}
+  def fi_top_k(_s, _l, _o), do: []
+  def fi_count(_s, _o), do: 0
+  def fi_entry_count(_s, _o), do: 0
 end
 
 defmodule ExDataSketch.BackendTest do

@@ -1428,4 +1428,49 @@ defmodule ExDataSketch.Backend.Pure do
   defp dds_bucket_midpoint(gamma, index) do
     2.0 * :math.pow(gamma, index + 1) / (gamma + 1.0)
   end
+
+  # ============================================================
+  # FrequentItems Implementation (stubs)
+  # ============================================================
+
+  @impl true
+  @spec fi_new(keyword()) :: binary()
+  def fi_new(_opts) do
+    raise RuntimeError, "FrequentItems fi_new not yet implemented"
+  end
+
+  @impl true
+  def fi_update(_state_bin, _item_bytes, _opts) do
+    raise RuntimeError, "FrequentItems fi_update not yet implemented"
+  end
+
+  @impl true
+  def fi_update_many(_state_bin, _items, _opts) do
+    raise RuntimeError, "FrequentItems fi_update_many not yet implemented"
+  end
+
+  @impl true
+  def fi_merge(_state_a, _state_b, _opts) do
+    raise RuntimeError, "FrequentItems fi_merge not yet implemented"
+  end
+
+  @impl true
+  def fi_estimate(_state_bin, _item_bytes, _opts) do
+    raise RuntimeError, "FrequentItems fi_estimate not yet implemented"
+  end
+
+  @impl true
+  def fi_top_k(_state_bin, _limit, _opts) do
+    raise RuntimeError, "FrequentItems fi_top_k not yet implemented"
+  end
+
+  @impl true
+  def fi_count(_state_bin, _opts) do
+    raise RuntimeError, "FrequentItems fi_count not yet implemented"
+  end
+
+  @impl true
+  def fi_entry_count(_state_bin, _opts) do
+    raise RuntimeError, "FrequentItems fi_entry_count not yet implemented"
+  end
 end

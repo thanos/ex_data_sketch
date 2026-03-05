@@ -323,6 +323,32 @@ defmodule ExDataSketch.Backend.Rust do
   @impl true
   def ddsketch_max(state_bin, opts), do: Pure.ddsketch_max(state_bin, opts)
 
+  # -- FrequentItems callbacks --
+
+  @impl true
+  def fi_new(opts), do: Pure.fi_new(opts)
+
+  @impl true
+  def fi_update(state_bin, item_bytes, opts), do: Pure.fi_update(state_bin, item_bytes, opts)
+
+  @impl true
+  def fi_update_many(state_bin, items, opts), do: Pure.fi_update_many(state_bin, items, opts)
+
+  @impl true
+  def fi_merge(state_a, state_b, opts), do: Pure.fi_merge(state_a, state_b, opts)
+
+  @impl true
+  def fi_estimate(state_bin, item_bytes, opts), do: Pure.fi_estimate(state_bin, item_bytes, opts)
+
+  @impl true
+  def fi_top_k(state_bin, limit, opts), do: Pure.fi_top_k(state_bin, limit, opts)
+
+  @impl true
+  def fi_count(state_bin, opts), do: Pure.fi_count(state_bin, opts)
+
+  @impl true
+  def fi_entry_count(state_bin, opts), do: Pure.fi_entry_count(state_bin, opts)
+
   # -- Private helpers --
 
   defp encode_f64s(values) do
