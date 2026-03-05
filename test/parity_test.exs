@@ -8,7 +8,7 @@ defmodule ExDataSketch.ParityTest do
   use ExUnit.Case, async: true
 
   alias ExDataSketch.Backend.{Pure, Rust}
-  alias ExDataSketch.{CMS, HLL, Theta}
+  alias ExDataSketch.{CMS, HLL, KLL, Theta}
 
   # Deterministic input strings
   @items_1000 Enum.map(0..999, &"parity_item_#{&1}")
@@ -71,6 +71,37 @@ defmodule ExDataSketch.ParityTest do
         assert CMS.estimate(pure_merged, item) == CMS.estimate(rust_merged, item),
                "CMS merge estimate mismatch for #{item}"
       end
+    end
+  end
+
+  describe "KLL parity" do
+    @describetag :rust_nif
+
+    @kll_items Enum.map(1..1000, &(&1 * 1.0))
+    @kll_a Enum.map(1..500, &(&1 * 1.0))
+    @kll_b Enum.map(501..1000, &(&1 * 1.0))
+
+    test "update_many produces identical serialization and quantile estimates" do
+      pure = KLL.new(k: 200, backend: Pure) |> KLL.update_many(@kll_items)
+      rust = KLL.new(k: 200, backend: Rust) |> KLL.update_many(@kll_items)
+
+      assert KLL.serialize(pure) == KLL.serialize(rust)
+      assert KLL.count(pure) == KLL.count(rust)
+      assert_in_delta KLL.quantile(pure, 0.5), KLL.quantile(rust, 0.5), 1.0e-9
+    end
+
+    test "merge produces identical serialization and quantile estimates" do
+      pure_a = KLL.new(k: 200, backend: Pure) |> KLL.update_many(@kll_a)
+      pure_b = KLL.new(k: 200, backend: Pure) |> KLL.update_many(@kll_b)
+      pure_merged = KLL.merge(pure_a, pure_b)
+
+      rust_a = KLL.new(k: 200, backend: Rust) |> KLL.update_many(@kll_a)
+      rust_b = KLL.new(k: 200, backend: Rust) |> KLL.update_many(@kll_b)
+      rust_merged = KLL.merge(rust_a, rust_b)
+
+      assert KLL.serialize(pure_merged) == KLL.serialize(rust_merged)
+      assert KLL.count(pure_merged) == KLL.count(rust_merged)
+      assert_in_delta KLL.quantile(pure_merged, 0.5), KLL.quantile(rust_merged, 0.5), 1.0e-9
     end
   end
 

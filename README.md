@@ -2,10 +2,10 @@
 
 Production-grade streaming data sketching algorithms for Elixir.
 
-ExDataSketch provides probabilistic data structures for approximate counting and
-frequency estimation on streaming data. All sketch state is stored as
-Elixir-owned binaries, enabling straightforward serialization, distribution,
-and persistence.
+ExDataSketch provides probabilistic data structures for approximate counting,
+frequency estimation, and quantile computation on streaming data. All sketch
+state is stored as Elixir-owned binaries, enabling straightforward
+serialization, distribution, and persistence.
 
 [![CI](https://github.com/thanos/ex_data_sketch/actions/workflows/ci.yml/badge.svg)](https://github.com/thanos/ex_data_sketch/actions/workflows/ci.yml)
 [![Hex version](https://img.shields.io/hexpm/v/ex_data_sketch.svg)](https://hex.pm/packages/ex_data_sketch)
@@ -20,6 +20,7 @@ and persistence.
 | HyperLogLog (HLL) | Cardinality estimation | Implemented (Pure + Rust) |
 | Count-Min Sketch (CMS) | Frequency estimation | Implemented (Pure + Rust) |
 | Theta Sketch | Set operations on cardinalities | Implemented (Pure + Rust) |
+| KLL Quantiles | Rank and quantile estimation | Implemented (Pure + Rust) |
 
 ## Installation
 
@@ -28,14 +29,25 @@ Add `ex_data_sketch` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:ex_data_sketch, "~> 0.1.0"}
+    {:ex_data_sketch, "~> 0.2.0"}
   ]
 end
 ```
 
 ## Quick Start
 
-See the [Quick Start Guide](guides/quick_start.md) for usage examples.
+```elixir
+# HLL: count distinct elements
+hll = ExDataSketch.HLL.new() |> ExDataSketch.HLL.update_many(1..100_000)
+ExDataSketch.HLL.estimate(hll)  # ~100_000
+
+# KLL: quantile estimation
+kll = ExDataSketch.KLL.new() |> ExDataSketch.KLL.update_many(1..100_000)
+ExDataSketch.KLL.quantile(kll, 0.5)   # approximate median (~50_000)
+ExDataSketch.KLL.quantile(kll, 0.99)  # 99th percentile (~99_000)
+```
+
+See the [Quick Start Guide](guides/quick_start.md) for more examples.
 
 ## Documentation
 
@@ -51,9 +63,9 @@ Full documentation is available at [HexDocs](https://hexdocs.pm/ex_data_sketch).
 
 ## Compatibility and Stability
 
-The following guarantees apply within the v0.1.x release series:
+The following guarantees apply within the v0.x release series:
 
-- **EXSK serialization**: The ExDataSketch-native binary format is stable. Binaries produced by any v0.1.x release can be deserialized by any other v0.1.x release.
+- **EXSK serialization**: The ExDataSketch-native binary format is stable. Binaries produced by any v0.x release can be deserialized by any other v0.x release.
 - **Pure vs Rust parity**: Given identical inputs, both backends produce byte-identical serialized state and identical estimates.
 - **Deterministic output**: The same input sequence always produces the same sketch state and estimate, regardless of backend.
 

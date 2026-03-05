@@ -37,6 +37,25 @@ where `e` is Euler's number.
 | `:k` | pos_integer | 4096 | Nominal number of entries. Controls accuracy. |
 | `:backend` | module | `ExDataSketch.Backend.Pure` | Backend module for computation. |
 
+### KLL Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `:k` | integer | 200 | Accuracy parameter. Valid range: 8..65535. Higher values use more memory but give better accuracy. |
+| `:backend` | module | `ExDataSketch.Backend.Pure` | Backend module for computation. |
+
+Rank error: approximately `1.65 / k`.
+
+### Quantiles Facade
+
+The `ExDataSketch.Quantiles` module provides a type-dispatched facade:
+
+```elixir
+sketch = ExDataSketch.Quantiles.new(type: :kll, k: 200)
+sketch = ExDataSketch.Quantiles.update_many(sketch, 1..1000)
+ExDataSketch.Quantiles.quantile(sketch, 0.5)  # approximate median
+```
+
 ## Backend System
 
 ExDataSketch uses a backend system to allow swapping computation engines
@@ -106,6 +125,7 @@ The Rust backend accelerates batch and traversal operations via NIFs:
 | `hll_update_many`, `hll_merge`, `hll_estimate` | `hll_new`, `hll_update` |
 | `cms_update_many`, `cms_merge` | `cms_new`, `cms_update`, `cms_estimate` |
 | `theta_update_many`, `theta_merge` | `theta_new`, `theta_update`, `theta_compact`, `theta_estimate` |
+| `kll_update_many`, `kll_merge` | `kll_new`, `kll_update`, `kll_quantile`, `kll_rank`, `kll_count`, `kll_min`, `kll_max` |
 
 #### Dirty Scheduler Thresholds
 
@@ -117,8 +137,10 @@ exceeds configurable thresholds:
 | `hll_update_many` | 10,000 hashes |
 | `cms_update_many` | 10,000 pairs |
 | `theta_update_many` | 10,000 hashes |
+| `kll_update_many` | 10,000 values |
 | `cms_merge` | 100,000 total counters |
 | `theta_merge` | 50,000 combined entries |
+| `kll_merge` | 50,000 combined items |
 
 Override globally:
 
@@ -158,7 +180,7 @@ The EXSK format structure:
 |-------|------|-------------|
 | Magic | 4 bytes | `"EXSK"` |
 | Version | 1 byte | Format version (currently 1) |
-| Sketch ID | 1 byte | Identifies sketch type (HLL=1, CMS=2, Theta=3) |
+| Sketch ID | 1 byte | Identifies sketch type (HLL=1, CMS=2, Theta=3, KLL=4) |
 | Params length | 4 bytes | Little-endian u32, byte length of params |
 | Params | variable | Sketch-specific parameters |
 | State length | 4 bytes | Little-endian u32, byte length of state |
@@ -176,6 +198,7 @@ binary = ExDataSketch.Theta.serialize_datasketches(theta_sketch)
 ```
 
 Interop priority order: Theta (CompactSketch), then HLL, then KLL.
+KLL DataSketches interop is stubbed but not yet implemented.
 
 ## Hashing
 

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-03-04
+
+### Added
+
+- KLL quantiles sketch (`ExDataSketch.KLL`) with Pure Elixir and Rust NIF backends.
+- `ExDataSketch.Quantiles` facade module for type-dispatched quantile sketch access.
+- KLL backend callbacks: `kll_new/1`, `kll_update/3`, `kll_update_many/3`, `kll_merge/3`, `kll_quantile/3`, `kll_rank/3`, `kll_count/2`, `kll_min/2`, `kll_max/2`.
+- Rust NIF acceleration for `kll_update_many` and `kll_merge` with dirty scheduler support.
+- KLL merge law properties (associativity, commutativity, identity, count additivity, min/max preservation).
+- KLL golden vector test fixtures (empty, single, small_set, merge).
+- KLL parity tests ensuring byte-identical output between Pure and Rust backends.
+- KLL benchmark suite (`bench/kll_bench.exs`).
+- EXSK codec sketch ID 4 for KLL.
+
 ## [0.1.1] - 2026-03-04
 
 ### Added

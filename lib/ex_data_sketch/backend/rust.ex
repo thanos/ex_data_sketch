@@ -21,6 +21,8 @@ defmodule ExDataSketch.Backend.Rust do
   - `theta_update_many`: 10,000 hashes
   - `cms_merge`: 100,000 total counters
   - `theta_merge`: 50,000 combined entries
+  - `kll_update_many`: 10,000 values
+  - `kll_merge`: 50,000 combined items
 
   Override globally via application config:
 
@@ -41,7 +43,9 @@ defmodule ExDataSketch.Backend.Rust do
     cms_update_many: 10_000,
     theta_update_many: 10_000,
     cms_merge: 100_000,
-    theta_merge: 50_000
+    theta_merge: 50_000,
+    kll_update_many: 10_000,
+    kll_merge: 50_000
   }
 
   @doc """
@@ -206,7 +210,69 @@ defmodule ExDataSketch.Backend.Rust do
     Pure.theta_from_components(k, theta, entries)
   end
 
+  # -- KLL callbacks --
+
+  @impl true
+  def kll_new(opts), do: Pure.kll_new(opts)
+
+  @impl true
+  def kll_update(state_bin, value, opts), do: Pure.kll_update(state_bin, value, opts)
+
+  @impl true
+  def kll_update_many(state_bin, values, opts) do
+    threshold = dirty_threshold(:kll_update_many, opts)
+    values_bin = encode_f64s(values)
+
+    result =
+      if length(values) > threshold do
+        ExDataSketch.Nif.kll_update_many_dirty_nif(state_bin, values_bin)
+      else
+        ExDataSketch.Nif.kll_update_many_nif(state_bin, values_bin)
+      end
+
+    unwrap_ok!(result)
+  end
+
+  @impl true
+  def kll_merge(a_bin, b_bin, opts) do
+    threshold = dirty_threshold(:kll_merge, opts)
+
+    # Use total items as proxy for work size
+    a_n = kll_count(a_bin, opts)
+    b_n = kll_count(b_bin, opts)
+
+    result =
+      if a_n + b_n > threshold do
+        ExDataSketch.Nif.kll_merge_dirty_nif(a_bin, b_bin)
+      else
+        ExDataSketch.Nif.kll_merge_nif(a_bin, b_bin)
+      end
+
+    unwrap_ok!(result)
+  end
+
+  @impl true
+  def kll_quantile(state_bin, rank, opts), do: Pure.kll_quantile(state_bin, rank, opts)
+
+  @impl true
+  def kll_rank(state_bin, value, opts), do: Pure.kll_rank(state_bin, value, opts)
+
+  @impl true
+  def kll_count(state_bin, opts), do: Pure.kll_count(state_bin, opts)
+
+  @impl true
+  def kll_min(state_bin, opts), do: Pure.kll_min(state_bin, opts)
+
+  @impl true
+  def kll_max(state_bin, opts), do: Pure.kll_max(state_bin, opts)
+
   # -- Private helpers --
+
+  defp encode_f64s(values) do
+    values
+    |> Enum.map(fn v -> <<v::float-little-64>> end)
+    |> IO.iodata_to_binary()
+  end
 
   defp encode_hashes(hashes) do
     hashes

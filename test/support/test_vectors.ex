@@ -9,7 +9,7 @@ defmodule ExDataSketch.TestVectors do
   Returns a list of `{filename, map}` tuples.
   """
   @spec load_vectors(String.t()) :: [{String.t(), map()}]
-  def load_vectors(algorithm) when algorithm in ["hll", "cms", "theta"] do
+  def load_vectors(algorithm) when algorithm in ["hll", "cms", "theta", "kll"] do
     dir = Path.join(@vectors_dir, algorithm)
 
     dir
@@ -92,15 +92,78 @@ defmodule ExDataSketch.TestVectors do
   end
 
   def normalize_opts("theta", %{"k" => k}), do: [k: k]
+  def normalize_opts("kll", %{"k" => k}), do: [k: k]
 
   # -- Private --
 
   defp sketch_module("hll"), do: ExDataSketch.HLL
   defp sketch_module("cms"), do: ExDataSketch.CMS
   defp sketch_module("theta"), do: ExDataSketch.Theta
+  defp sketch_module("kll"), do: ExDataSketch.KLL
 
   defp build_sketch(mod, opts, []), do: mod.new(opts)
+
+  defp build_sketch(ExDataSketch.KLL, opts, items) do
+    # KLL takes numeric values directly (no hashing)
+    values = Enum.map(items, fn v when is_number(v) -> v * 1.0 end)
+    ExDataSketch.KLL.from_enumerable(values, opts)
+  end
+
   defp build_sketch(mod, opts, items), do: mod.from_enumerable(items, opts)
+
+  defp assert_estimate(ExDataSketch.KLL, sketch, expected, _vector, context) do
+    tolerance = expected["tolerance"] || 0
+    delta = max(tolerance, 1.0e-9)
+
+    # Assert count
+    if expected["count"] do
+      actual_count = ExDataSketch.KLL.count(sketch)
+
+      ExUnit.Assertions.assert(
+        actual_count == expected["count"],
+        "KLL count mismatch for #{context}: expected #{expected["count"]}, got #{actual_count}"
+      )
+    end
+
+    # Assert min/max
+    if Map.has_key?(expected, "min") do
+      actual_min = ExDataSketch.KLL.min_value(sketch)
+
+      ExUnit.Assertions.assert(
+        actual_min == expected["min"],
+        "KLL min mismatch for #{context}: expected #{inspect(expected["min"])}, got #{inspect(actual_min)}"
+      )
+    end
+
+    if Map.has_key?(expected, "max") do
+      actual_max = ExDataSketch.KLL.max_value(sketch)
+
+      ExUnit.Assertions.assert(
+        actual_max == expected["max"],
+        "KLL max mismatch for #{context}: expected #{inspect(expected["max"])}, got #{inspect(actual_max)}"
+      )
+    end
+
+    # Assert quantile estimates
+    case expected["quantile_estimates"] do
+      estimates when is_map(estimates) and map_size(estimates) > 0 ->
+        for {rank_str, expected_val} <- estimates do
+          rank = String.to_float(rank_str)
+          actual = ExDataSketch.KLL.quantile(sketch, rank)
+
+          ExUnit.Assertions.assert_in_delta(
+            actual,
+            expected_val,
+            delta,
+            "KLL quantile(#{rank}) mismatch for #{context}: " <>
+              "expected #{expected_val}, got #{actual} (delta: #{delta})"
+          )
+        end
+
+      _ ->
+        :ok
+    end
+  end
 
   defp assert_estimate(ExDataSketch.CMS, sketch, expected, _vector, context) do
     # CMS vectors include point query estimates
