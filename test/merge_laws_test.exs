@@ -238,8 +238,10 @@ defmodule ExDataSketch.MergeLawsTest do
         left = KLL.merge(sa, KLL.merge(sb, sc))
         right = KLL.merge(KLL.merge(sa, sb), sc)
 
+        # With k=200 and at most 30 items, no compaction occurs —
+        # quantile answers are exact and must match.
         assert KLL.count(left) == KLL.count(right)
-        assert_in_delta KLL.quantile(left, 0.5), KLL.quantile(right, 0.5), 50.0
+        assert KLL.quantile(left, 0.5) == KLL.quantile(right, 0.5)
       end
     end
 
@@ -255,8 +257,10 @@ defmodule ExDataSketch.MergeLawsTest do
         left = KLL.merge(sa, sb)
         right = KLL.merge(sb, sa)
 
+        # With k=200 and at most 40 items, no compaction occurs —
+        # quantile answers are exact and must match.
         assert KLL.count(left) == KLL.count(right)
-        assert_in_delta KLL.quantile(left, 0.5), KLL.quantile(right, 0.5), 50.0
+        assert KLL.quantile(left, 0.5) == KLL.quantile(right, 0.5)
       end
     end
 

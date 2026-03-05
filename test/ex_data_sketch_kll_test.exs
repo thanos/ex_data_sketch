@@ -126,6 +126,39 @@ defmodule ExDataSketch.KLLTest do
         # Quantile estimates should be close
         assert_in_delta KLL.quantile(batch, 0.5), KLL.quantile(sequential, 0.5), 5.0
       end
+
+      test "successive batch updates match Pure backend" do
+        first = Enum.map(1..100, &(&1 * 1.0))
+        second = Enum.map(101..300, &(&1 * 1.0))
+
+        pure =
+          KLL.new(k: 200, backend: Backend.Pure)
+          |> KLL.update_many(first)
+          |> KLL.update_many(second)
+
+        tested =
+          KLL.new(k: 200, backend: unquote(backend))
+          |> KLL.update_many(first)
+          |> KLL.update_many(second)
+
+        assert KLL.serialize(pure) == KLL.serialize(tested)
+      end
+
+      test "update then update_many matches Pure backend" do
+        pure =
+          KLL.new(k: 200, backend: Backend.Pure)
+          |> KLL.update(0.0)
+          |> KLL.update(1.0)
+          |> KLL.update_many(Enum.map(2..100, &(&1 * 1.0)))
+
+        tested =
+          KLL.new(k: 200, backend: unquote(backend))
+          |> KLL.update(0.0)
+          |> KLL.update(1.0)
+          |> KLL.update_many(Enum.map(2..100, &(&1 * 1.0)))
+
+        assert KLL.serialize(pure) == KLL.serialize(tested)
+      end
     end
 
     describe "quantile/2 [#{backend_name}]" do

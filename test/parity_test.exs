@@ -90,6 +90,21 @@ defmodule ExDataSketch.ParityTest do
       assert_in_delta KLL.quantile(pure, 0.5), KLL.quantile(rust, 0.5), 1.0e-9
     end
 
+    test "successive update_many calls produce identical serialization" do
+      pure =
+        KLL.new(k: 200, backend: Pure)
+        |> KLL.update_many(@kll_a)
+        |> KLL.update_many(@kll_b)
+
+      rust =
+        KLL.new(k: 200, backend: Rust)
+        |> KLL.update_many(@kll_a)
+        |> KLL.update_many(@kll_b)
+
+      assert KLL.serialize(pure) == KLL.serialize(rust)
+      assert KLL.count(pure) == KLL.count(rust)
+    end
+
     test "merge produces identical serialization and quantile estimates" do
       pure_a = KLL.new(k: 200, backend: Pure) |> KLL.update_many(@kll_a)
       pure_b = KLL.new(k: 200, backend: Pure) |> KLL.update_many(@kll_b)

@@ -285,15 +285,17 @@ fn kll_update_many_impl<'a>(env: Env<'a>, state_bin: Binary, values_bin: Binary)
         None => return error::error_string(env, "invalid KLL state"),
     };
 
+    // Level 0 arrives in Elixir's prepend order (newest first). Reverse to
+    // append order so push() extends in the correct chronological direction.
+    state.levels[0].reverse();
+
     let values = values_bin.as_slice();
     for chunk in values.chunks_exact(8) {
         let val = f64::from_le_bytes(chunk.try_into().unwrap());
         insert_value(&mut state, val);
     }
 
-    // Reverse level 0 to match Elixir's prepend ([value | level0]) order.
-    // Items inserted since the last compaction are in append order; reversing
-    // produces the same serialization as the Pure backend.
+    // Reverse level 0 back to prepend order for byte-identical encoding.
     state.levels[0].reverse();
 
     let result = encode_state(&state);

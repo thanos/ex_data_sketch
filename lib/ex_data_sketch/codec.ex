@@ -28,6 +28,7 @@ defmodule ExDataSketch.Codec do
   - 1: HLL (HyperLogLog)
   - 2: CMS (Count-Min Sketch)
   - 3: Theta
+  - 4: KLL (Quantiles)
 
   ## Versioning
 
@@ -130,7 +131,7 @@ defmodule ExDataSketch.Codec do
 
   ## Parameters
 
-  - `sketch_id` - sketch type identifier (1=HLL, 2=CMS, 3=Theta)
+  - `sketch_id` - sketch type identifier (1=HLL, 2=CMS, 3=Theta, 4=KLL)
   - `version` - format version (use `Codec.version/0` for current)
   - `params_bin` - binary-encoded sketch parameters
   - `state_bin` - raw sketch state binary
