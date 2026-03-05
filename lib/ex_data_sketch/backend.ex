@@ -120,6 +120,32 @@ defmodule ExDataSketch.Backend do
   @doc "Return the maximum value in KLL state, or nil if empty."
   @callback kll_max(state_bin(), opts()) :: float() | nil
 
+  # -- DDSketch callbacks --
+
+  @doc "Create a new DDSketch state binary with the given options."
+  @callback ddsketch_new(opts()) :: state_bin()
+
+  @doc "Update DDSketch state with a single float64 value."
+  @callback ddsketch_update(state_bin(), float(), opts()) :: state_bin()
+
+  @doc "Update DDSketch state with a list of float64 values in a single pass."
+  @callback ddsketch_update_many(state_bin(), [float()], opts()) :: state_bin()
+
+  @doc "Merge two DDSketch state binaries."
+  @callback ddsketch_merge(state_bin(), state_bin(), opts()) :: state_bin()
+
+  @doc "Return the approximate value at a given normalized rank from DDSketch state."
+  @callback ddsketch_quantile(state_bin(), float(), opts()) :: float() | nil
+
+  @doc "Return the count of items inserted into DDSketch state."
+  @callback ddsketch_count(state_bin(), opts()) :: non_neg_integer()
+
+  @doc "Return the minimum value in DDSketch state, or nil if empty."
+  @callback ddsketch_min(state_bin(), opts()) :: float() | nil
+
+  @doc "Return the maximum value in DDSketch state, or nil if empty."
+  @callback ddsketch_max(state_bin(), opts()) :: float() | nil
+
   @doc """
   Returns the default backend module.
 

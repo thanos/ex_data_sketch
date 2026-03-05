@@ -17,8 +17,8 @@ defmodule ExDataSketch.QuantilesTest do
       assert sketch.opts == [k: 100]
     end
 
-    test "type: :ddsketch raises NotImplementedError" do
-      assert_raise ExDataSketch.Errors.NotImplementedError, fn ->
+    test "type: :ddsketch raises RuntimeError (backend stub)" do
+      assert_raise RuntimeError, ~r/not yet implemented/, fn ->
         Quantiles.new(type: :ddsketch)
       end
     end

@@ -46,14 +46,54 @@ where `e` is Euler's number.
 
 Rank error: approximately `1.65 / k`.
 
+### DDSketch Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `:alpha` | float | 0.01 | Relative accuracy parameter. Controls bucket width. Must be in (0.0, 1.0). |
+| `:backend` | module | `ExDataSketch.Backend.Pure` | Backend module for computation. |
+
+Value-relative error: the returned quantile value v satisfies
+`v_true * (1 - alpha) <= v <= v_true * (1 + alpha)`.
+
+| alpha | Relative Error | Bucket Count (for 1ms..10s range) |
+|-------|---------------|-----------------------------------|
+| 0.05  | 5%            | ~185 |
+| 0.01  | 1%            | ~920 |
+| 0.005 | 0.5%          | ~1840 |
+| 0.001 | 0.1%          | ~9200 |
+
+### KLL vs DDSketch
+
+Both are quantile sketches available through `ExDataSketch.Quantiles`, but they
+provide different accuracy guarantees:
+
+| Property | KLL | DDSketch |
+|----------|-----|----------|
+| Error type | Rank error | Value-relative error |
+| Best for | General rank queries | Latency percentiles, SLOs |
+| Parameter | `k` (default 200) | `alpha` (default 0.01) |
+| Guarantee | True rank within ~1.65/k | True value within factor (1 +/- alpha) |
+| Negative values | Supported | Rejected |
+| Memory | Fixed by k | Grows with log(max/min) |
+
+Use KLL when you need rank accuracy (e.g., "what fraction of values are below X?").
+Use DDSketch when you need value accuracy (e.g., "p99 latency is 142ms +/- 1%").
+
 ### Quantiles Facade
 
 The `ExDataSketch.Quantiles` module provides a type-dispatched facade:
 
 ```elixir
+# KLL (default)
 sketch = ExDataSketch.Quantiles.new(type: :kll, k: 200)
 sketch = ExDataSketch.Quantiles.update_many(sketch, 1..1000)
 ExDataSketch.Quantiles.quantile(sketch, 0.5)  # approximate median
+
+# DDSketch
+sketch = ExDataSketch.Quantiles.new(type: :ddsketch, alpha: 0.01)
+sketch = ExDataSketch.Quantiles.update_many(sketch, latency_samples)
+ExDataSketch.Quantiles.quantile(sketch, 0.99)  # p99 with relative accuracy
 ```
 
 ## Backend System
@@ -180,7 +220,7 @@ The EXSK format structure:
 |-------|------|-------------|
 | Magic | 4 bytes | `"EXSK"` |
 | Version | 1 byte | Format version (currently 1) |
-| Sketch ID | 1 byte | Identifies sketch type (HLL=1, CMS=2, Theta=3, KLL=4) |
+| Sketch ID | 1 byte | Identifies sketch type (HLL=1, CMS=2, Theta=3, KLL=4, DDSketch=5) |
 | Params length | 4 bytes | Little-endian u32, byte length of params |
 | Params | variable | Sketch-specific parameters |
 | State length | 4 bytes | Little-endian u32, byte length of state |

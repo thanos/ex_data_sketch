@@ -112,6 +112,7 @@ defmodule ExDataSketch.MixProject do
           ExDataSketch.CMS,
           ExDataSketch.Theta,
           ExDataSketch.KLL,
+          ExDataSketch.DDSketch,
           ExDataSketch.Quantiles
         ],
         Infrastructure: [

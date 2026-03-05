@@ -28,6 +28,14 @@ defmodule ExDataSketch.BackendTest.StubBackend do
   def kll_count(_s, _o), do: 0
   def kll_min(_s, _o), do: nil
   def kll_max(_s, _o), do: nil
+  def ddsketch_new(_opts), do: <<>>
+  def ddsketch_update(s, _v, _o), do: s
+  def ddsketch_update_many(s, _v, _o), do: s
+  def ddsketch_merge(s, _b, _o), do: s
+  def ddsketch_quantile(_s, _r, _o), do: nil
+  def ddsketch_count(_s, _o), do: 0
+  def ddsketch_min(_s, _o), do: nil
+  def ddsketch_max(_s, _o), do: nil
 end
 
 defmodule ExDataSketch.BackendTest do

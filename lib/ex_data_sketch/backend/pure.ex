@@ -1082,4 +1082,56 @@ defmodule ExDataSketch.Backend.Pure do
     state = kll_compact_if_needed(state, level)
     kll_recompact(state, level + 1)
   end
+
+  # ============================================================
+  # DDSketch Implementation (stubs -- implemented in Step 2)
+  # ============================================================
+
+  @impl true
+  @spec ddsketch_new(keyword()) :: binary()
+  def ddsketch_new(_opts) do
+    raise "DDSketch Pure backend not yet implemented"
+  end
+
+  @impl true
+  @spec ddsketch_update(binary(), float(), keyword()) :: binary()
+  def ddsketch_update(_state_bin, _value, _opts) do
+    raise "DDSketch Pure backend not yet implemented"
+  end
+
+  @impl true
+  @spec ddsketch_update_many(binary(), [float()], keyword()) :: binary()
+  def ddsketch_update_many(_state_bin, _values, _opts) do
+    raise "DDSketch Pure backend not yet implemented"
+  end
+
+  @impl true
+  @spec ddsketch_merge(binary(), binary(), keyword()) :: binary()
+  def ddsketch_merge(_state_bin_a, _state_bin_b, _opts) do
+    raise "DDSketch Pure backend not yet implemented"
+  end
+
+  @impl true
+  @spec ddsketch_quantile(binary(), float(), keyword()) :: float() | nil
+  def ddsketch_quantile(_state_bin, _rank, _opts) do
+    raise "DDSketch Pure backend not yet implemented"
+  end
+
+  @impl true
+  @spec ddsketch_count(binary(), keyword()) :: non_neg_integer()
+  def ddsketch_count(_state_bin, _opts) do
+    raise "DDSketch Pure backend not yet implemented"
+  end
+
+  @impl true
+  @spec ddsketch_min(binary(), keyword()) :: float() | nil
+  def ddsketch_min(_state_bin, _opts) do
+    raise "DDSketch Pure backend not yet implemented"
+  end
+
+  @impl true
+  @spec ddsketch_max(binary(), keyword()) :: float() | nil
+  def ddsketch_max(_state_bin, _opts) do
+    raise "DDSketch Pure backend not yet implemented"
+  end
 end

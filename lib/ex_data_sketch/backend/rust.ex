@@ -266,6 +266,34 @@ defmodule ExDataSketch.Backend.Rust do
   @impl true
   def kll_max(state_bin, opts), do: Pure.kll_max(state_bin, opts)
 
+  # -- DDSketch callbacks --
+
+  @impl true
+  def ddsketch_new(opts), do: Pure.ddsketch_new(opts)
+
+  @impl true
+  def ddsketch_update(state_bin, value, opts), do: Pure.ddsketch_update(state_bin, value, opts)
+
+  @impl true
+  def ddsketch_update_many(state_bin, values, opts),
+    do: Pure.ddsketch_update_many(state_bin, values, opts)
+
+  @impl true
+  def ddsketch_merge(a_bin, b_bin, opts), do: Pure.ddsketch_merge(a_bin, b_bin, opts)
+
+  @impl true
+  def ddsketch_quantile(state_bin, rank, opts),
+    do: Pure.ddsketch_quantile(state_bin, rank, opts)
+
+  @impl true
+  def ddsketch_count(state_bin, opts), do: Pure.ddsketch_count(state_bin, opts)
+
+  @impl true
+  def ddsketch_min(state_bin, opts), do: Pure.ddsketch_min(state_bin, opts)
+
+  @impl true
+  def ddsketch_max(state_bin, opts), do: Pure.ddsketch_max(state_bin, opts)
+
   # -- Private helpers --
 
   defp encode_f64s(values) do
