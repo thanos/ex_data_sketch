@@ -9,7 +9,7 @@ defmodule ExDataSketch.TestVectors do
   Returns a list of `{filename, map}` tuples.
   """
   @spec load_vectors(String.t()) :: [{String.t(), map()}]
-  def load_vectors(algorithm) when algorithm in ["hll", "cms", "theta", "kll"] do
+  def load_vectors(algorithm) when algorithm in ["hll", "cms", "theta", "kll", "ddsketch"] do
     dir = Path.join(@vectors_dir, algorithm)
 
     dir
@@ -93,6 +93,7 @@ defmodule ExDataSketch.TestVectors do
 
   def normalize_opts("theta", %{"k" => k}), do: [k: k]
   def normalize_opts("kll", %{"k" => k}), do: [k: k]
+  def normalize_opts("ddsketch", %{"alpha" => alpha}), do: [alpha: alpha]
 
   # -- Private --
 
@@ -100,6 +101,7 @@ defmodule ExDataSketch.TestVectors do
   defp sketch_module("cms"), do: ExDataSketch.CMS
   defp sketch_module("theta"), do: ExDataSketch.Theta
   defp sketch_module("kll"), do: ExDataSketch.KLL
+  defp sketch_module("ddsketch"), do: ExDataSketch.DDSketch
 
   defp build_sketch(mod, opts, []), do: mod.new(opts)
 
@@ -107,6 +109,12 @@ defmodule ExDataSketch.TestVectors do
     # KLL takes numeric values directly (no hashing)
     values = Enum.map(items, fn v when is_number(v) -> v * 1.0 end)
     ExDataSketch.KLL.from_enumerable(values, opts)
+  end
+
+  defp build_sketch(ExDataSketch.DDSketch, opts, items) do
+    # DDSketch takes numeric values directly (no hashing)
+    values = Enum.map(items, fn v when is_number(v) -> v * 1.0 end)
+    ExDataSketch.DDSketch.from_enumerable(values, opts)
   end
 
   defp build_sketch(mod, opts, items), do: mod.from_enumerable(items, opts)
@@ -156,6 +164,57 @@ defmodule ExDataSketch.TestVectors do
             expected_val,
             delta,
             "KLL quantile(#{rank}) mismatch for #{context}: " <>
+              "expected #{expected_val}, got #{actual} (delta: #{delta})"
+          )
+        end
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp assert_estimate(ExDataSketch.DDSketch, sketch, expected, _vector, context) do
+    tolerance = expected["tolerance"] || 0
+    delta = max(tolerance, 1.0e-9)
+
+    if expected["count"] do
+      actual_count = ExDataSketch.DDSketch.count(sketch)
+
+      ExUnit.Assertions.assert(
+        actual_count == expected["count"],
+        "DDSketch count mismatch for #{context}: expected #{expected["count"]}, got #{actual_count}"
+      )
+    end
+
+    if Map.has_key?(expected, "min") do
+      actual_min = ExDataSketch.DDSketch.min_value(sketch)
+
+      ExUnit.Assertions.assert(
+        actual_min == expected["min"],
+        "DDSketch min mismatch for #{context}: expected #{inspect(expected["min"])}, got #{inspect(actual_min)}"
+      )
+    end
+
+    if Map.has_key?(expected, "max") do
+      actual_max = ExDataSketch.DDSketch.max_value(sketch)
+
+      ExUnit.Assertions.assert(
+        actual_max == expected["max"],
+        "DDSketch max mismatch for #{context}: expected #{inspect(expected["max"])}, got #{inspect(actual_max)}"
+      )
+    end
+
+    case expected["quantile_estimates"] do
+      estimates when is_map(estimates) and map_size(estimates) > 0 ->
+        for {rank_str, expected_val} <- estimates do
+          rank = String.to_float(rank_str)
+          actual = ExDataSketch.DDSketch.quantile(sketch, rank)
+
+          ExUnit.Assertions.assert_in_delta(
+            actual,
+            expected_val,
+            delta,
+            "DDSketch quantile(#{rank}) mismatch for #{context}: " <>
               "expected #{expected_val}, got #{actual} (delta: #{delta})"
           )
         end

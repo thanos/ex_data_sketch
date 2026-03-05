@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-03-05
+
+### Added
+
+- DDSketch quantiles sketch (`ExDataSketch.DDSketch`) with Pure Elixir and Rust NIF backends.
+- DDSketch backend callbacks: `ddsketch_new/1`, `ddsketch_update/3`, `ddsketch_update_many/3`, `ddsketch_merge/3`, `ddsketch_quantile/3`, `ddsketch_count/2`, `ddsketch_min/2`, `ddsketch_max/2`.
+- Rust NIF acceleration for `ddsketch_update_many` and `ddsketch_merge` with dirty scheduler support.
+- DDSketch support in `ExDataSketch.Quantiles` facade (`type: :ddsketch`).
+- DDSketch merge law properties (commutativity, identity, count additivity, min/max preservation).
+- DDSketch golden vector test fixtures (empty, single, small_set, merge, zeros).
+- DDSketch parity tests ensuring byte-identical output between Pure and Rust backends.
+- DDSketch benchmark suite (`bench/ddsketch_bench.exs`).
+- EXSK codec sketch ID 5 for DDSketch.
+- DDSketch usage documentation in usage guide with KLL vs DDSketch comparison table.
+
 ## [0.2.0] - 2026-03-04
 
 ### Added

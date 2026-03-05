@@ -21,6 +21,7 @@ serialization, distribution, and persistence.
 | Count-Min Sketch (CMS) | Frequency estimation | Implemented (Pure + Rust) |
 | Theta Sketch | Set operations on cardinalities | Implemented (Pure + Rust) |
 | KLL Quantiles | Rank and quantile estimation | Implemented (Pure + Rust) |
+| DDSketch | Relative-error quantile estimation | Implemented (Pure + Rust) |
 
 ## Installation
 
@@ -29,7 +30,7 @@ Add `ex_data_sketch` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:ex_data_sketch, "~> 0.2.0"}
+    {:ex_data_sketch, "~> 0.2.1"}
   ]
 end
 ```

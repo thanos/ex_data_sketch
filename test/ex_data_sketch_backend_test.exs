@@ -185,6 +185,25 @@ defmodule ExDataSketch.BackendTest do
         ExDataSketch.Nif.kll_merge_dirty_nif(<<>>, <<>>)
       end
     end
+
+    @tag :no_rust_nif
+    test "ddsketch stubs raise when NIF is not loaded" do
+      assert_raise ErlangError, fn ->
+        ExDataSketch.Nif.ddsketch_update_many_nif(<<>>, <<>>)
+      end
+
+      assert_raise ErlangError, fn ->
+        ExDataSketch.Nif.ddsketch_update_many_dirty_nif(<<>>, <<>>)
+      end
+
+      assert_raise ErlangError, fn ->
+        ExDataSketch.Nif.ddsketch_merge_nif(<<>>, <<>>)
+      end
+
+      assert_raise ErlangError, fn ->
+        ExDataSketch.Nif.ddsketch_merge_dirty_nif(<<>>, <<>>)
+      end
+    end
   end
 
   describe "Rust backend dirty scheduler paths" do

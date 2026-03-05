@@ -3,7 +3,7 @@ defmodule ExDataSketch.JsonVectorTest do
 
   alias ExDataSketch.TestVectors
 
-  for algo <- ["hll", "cms", "theta", "kll"] do
+  for algo <- ["hll", "cms", "theta", "kll", "ddsketch"] do
     describe "#{algo} JSON vectors" do
       for {filename, vector} <- TestVectors.load_vectors(algo) do
         @vector vector

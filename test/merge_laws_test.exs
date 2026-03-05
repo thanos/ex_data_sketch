@@ -6,13 +6,14 @@ defmodule ExDataSketch.MergeLawsTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
-  alias ExDataSketch.{CMS, HLL, KLL, Theta}
+  alias ExDataSketch.{CMS, DDSketch, HLL, KLL, Theta}
 
   @max_runs 50
   @hll_opts [p: 10]
   @cms_opts [width: 256, depth: 4, counter_width: 32]
   @theta_opts [k: 1024]
   @kll_opts [k: 200]
+  @dds_opts [alpha: 0.01]
 
   defp string_list(max_length \\ 20) do
     list_of(string(:alphanumeric, min_length: 1), min_length: 1, max_length: max_length)
@@ -308,6 +309,72 @@ defmodule ExDataSketch.MergeLawsTest do
         merged = KLL.merge(sa, sb)
         assert KLL.min_value(merged) == min(KLL.min_value(sa), KLL.min_value(sb))
         assert KLL.max_value(merged) == max(KLL.max_value(sa), KLL.max_value(sb))
+      end
+    end
+  end
+
+  describe "DDSketch merge laws" do
+    defp positive_float_list(max_length \\ 20) do
+      list_of(float(min: 0.0, max: 1_000.0), min_length: 1, max_length: max_length)
+    end
+
+    property "commutativity" do
+      check all(
+              a <- positive_float_list(),
+              b <- positive_float_list(),
+              max_runs: @max_runs
+            ) do
+        sa = DDSketch.from_enumerable(a, @dds_opts)
+        sb = DDSketch.from_enumerable(b, @dds_opts)
+
+        left = DDSketch.merge(sa, sb)
+        right = DDSketch.merge(sb, sa)
+
+        assert DDSketch.serialize(left) == DDSketch.serialize(right)
+      end
+    end
+
+    property "identity: merge with empty" do
+      check all(items <- positive_float_list(), max_runs: @max_runs) do
+        sketch = DDSketch.from_enumerable(items, @dds_opts)
+        empty = DDSketch.new(@dds_opts)
+
+        merged_right = DDSketch.merge(sketch, empty)
+        merged_left = DDSketch.merge(empty, sketch)
+
+        assert DDSketch.count(merged_right) == DDSketch.count(sketch)
+        assert DDSketch.count(merged_left) == DDSketch.count(sketch)
+        assert DDSketch.serialize(merged_right) == DDSketch.serialize(sketch)
+        assert DDSketch.serialize(merged_left) == DDSketch.serialize(sketch)
+      end
+    end
+
+    property "count additivity" do
+      check all(
+              a <- positive_float_list(),
+              b <- positive_float_list(),
+              max_runs: @max_runs
+            ) do
+        sa = DDSketch.from_enumerable(a, @dds_opts)
+        sb = DDSketch.from_enumerable(b, @dds_opts)
+
+        merged = DDSketch.merge(sa, sb)
+        assert DDSketch.count(merged) == DDSketch.count(sa) + DDSketch.count(sb)
+      end
+    end
+
+    property "min/max preservation" do
+      check all(
+              a <- positive_float_list(),
+              b <- positive_float_list(),
+              max_runs: @max_runs
+            ) do
+        sa = DDSketch.from_enumerable(a, @dds_opts)
+        sb = DDSketch.from_enumerable(b, @dds_opts)
+
+        merged = DDSketch.merge(sa, sb)
+        assert DDSketch.min_value(merged) == min(DDSketch.min_value(sa), DDSketch.min_value(sb))
+        assert DDSketch.max_value(merged) == max(DDSketch.max_value(sa), DDSketch.max_value(sb))
       end
     end
   end
