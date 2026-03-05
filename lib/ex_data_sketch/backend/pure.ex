@@ -756,14 +756,14 @@ defmodule ExDataSketch.Backend.Pure do
     parity_bytes = div(num_levels + 7, 8)
 
     <<
-      compaction_bits::binary-size(parity_bytes),
+      compaction_bits::binary-size(^parity_bytes),
       rest2::binary
     >> = rest
 
     level_sizes_bytes = num_levels * 4
 
     <<
-      level_sizes_bin::binary-size(level_sizes_bytes),
+      level_sizes_bin::binary-size(^level_sizes_bytes),
       items_bin::binary
     >> = rest2
 
@@ -800,7 +800,7 @@ defmodule ExDataSketch.Backend.Pure do
 
   defp kll_decode_levels(bin, [size | rest_sizes], acc) do
     bytes = size * 8
-    <<level_bin::binary-size(bytes), rest_bin::binary>> = bin
+    <<level_bin::binary-size(^bytes), rest_bin::binary>> = bin
     level = kll_decode_f64_list(level_bin, [])
     kll_decode_levels(rest_bin, rest_sizes, [level | acc])
   end
@@ -958,14 +958,14 @@ defmodule ExDataSketch.Backend.Pure do
   defp kll_get_parity(compaction_bits, level) do
     byte_idx = div(level, 8)
     bit_idx = rem(level, 8)
-    <<_::binary-size(byte_idx), byte::unsigned-8, _::binary>> = compaction_bits
+    <<_::binary-size(^byte_idx), byte::unsigned-8, _::binary>> = compaction_bits
     byte >>> bit_idx &&& 1
   end
 
   defp kll_flip_parity(compaction_bits, level) do
     byte_idx = div(level, 8)
     bit_idx = rem(level, 8)
-    <<before::binary-size(byte_idx), byte::unsigned-8, after_bytes::binary>> = compaction_bits
+    <<before::binary-size(^byte_idx), byte::unsigned-8, after_bytes::binary>> = compaction_bits
     new_byte = bxor(byte, 1 <<< bit_idx)
     <<before::binary, new_byte::unsigned-8, after_bytes::binary>>
   end
