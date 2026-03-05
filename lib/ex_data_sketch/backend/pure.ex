@@ -1082,4 +1082,350 @@ defmodule ExDataSketch.Backend.Pure do
     state = kll_compact_if_needed(state, level)
     kll_recompact(state, level + 1)
   end
+
+  # ============================================================
+  # DDSketch Implementation
+  # ============================================================
+  #
+  # DDSketch quantiles sketch using logarithmic bucket mapping.
+  #
+  # State binary layout (DDS1):
+  #   Offset  Size  Field
+  #   0       4     Magic "DDS1"
+  #   4       1     Version (u8, 1)
+  #   5       1     Flags (u8, bit0=negative_support, 0 in v0.2.1)
+  #   6       2     Reserved (u16 LE, 0)
+  #   8       8     alpha (f64 LE)
+  #   16      8     gamma (f64 LE)
+  #   24      8     log_gamma (f64 LE)
+  #   32      8     min_indexable (f64 LE)
+  #   40      8     n (u64 LE)
+  #   48      8     zero_count (u64 LE)
+  #   56      8     min_value (f64 LE, NaN=empty)
+  #   64      8     max_value (f64 LE, NaN=empty)
+  #   72      4     sparse_count (u32 LE)
+  #   76      4     dense_min_index (i32 LE, 0)
+  #   80      4     dense_len (u32 LE, 0)
+  #   84      4     reserved2 (u32 LE, 0)
+  #   88..    sparse_count * 8  Sparse bins (i32 index + u32 count each)
+
+  @dds_magic "DDS1"
+
+  @impl true
+  @spec ddsketch_new(keyword()) :: binary()
+  def ddsketch_new(opts) do
+    alpha = Keyword.fetch!(opts, :alpha)
+    gamma = (1.0 + alpha) / (1.0 - alpha)
+    log_gamma = :math.log(gamma)
+
+    # Smallest positive value whose log-index maps cleanly
+    min_pos = 5.0e-324
+    min_idx = floor(:math.log(min_pos) / log_gamma)
+    min_indexable = max(min_pos, :math.exp(log_gamma * (min_idx + 1)))
+
+    dds_encode_from_map(%{
+      alpha: alpha,
+      gamma: gamma,
+      log_gamma: log_gamma,
+      min_indexable: min_indexable,
+      n: 0,
+      zero_count: 0,
+      min_value: :nan,
+      max_value: :nan,
+      bins: []
+    })
+  end
+
+  @impl true
+  @spec ddsketch_update(binary(), float(), keyword()) :: binary()
+  def ddsketch_update(state_bin, value, opts) do
+    ddsketch_update_many(state_bin, [value], opts)
+  end
+
+  @impl true
+  @spec ddsketch_update_many(binary(), [float()], keyword()) :: binary()
+  def ddsketch_update_many(state_bin, [], _opts), do: state_bin
+
+  def ddsketch_update_many(state_bin, values, _opts) do
+    state = dds_decode_state(state_bin)
+
+    {n_delta, zero_delta, index_counts, new_min, new_max} =
+      Enum.reduce(
+        values,
+        {0, 0, %{}, state.min_value, state.max_value},
+        fn value, {nd, zd, idx_map, mn, mx} ->
+          dds_validate_value!(value)
+
+          new_mn = if mn == :nan, do: value, else: min(mn, value)
+          new_mx = if mx == :nan, do: value, else: max(mx, value)
+
+          if value == 0.0 do
+            {nd + 1, zd + 1, idx_map, new_mn, new_mx}
+          else
+            idx = dds_compute_index(value, state.min_indexable, state.log_gamma)
+            {nd + 1, zd, Map.update(idx_map, idx, 1, &(&1 + 1)), new_mn, new_mx}
+          end
+        end
+      )
+
+    merged_bins = dds_merge_index_counts(state.bins, index_counts)
+
+    dds_encode_from_map(%{
+      state
+      | n: state.n + n_delta,
+        zero_count: state.zero_count + zero_delta,
+        min_value: new_min,
+        max_value: new_max,
+        bins: merged_bins
+    })
+  end
+
+  @impl true
+  @spec ddsketch_merge(binary(), binary(), keyword()) :: binary()
+  def ddsketch_merge(state_bin_a, state_bin_b, _opts) do
+    # Validate alpha bytes match (byte comparison, not float equality)
+    <<_magic_a::binary-size(8), alpha_a_bytes::binary-size(8), _::binary>> = state_bin_a
+    <<_magic_b::binary-size(8), alpha_b_bytes::binary-size(8), _::binary>> = state_bin_b
+
+    a = dds_decode_state(state_bin_a)
+    b = dds_decode_state(state_bin_b)
+
+    if alpha_a_bytes != alpha_b_bytes do
+      raise ExDataSketch.Errors.IncompatibleSketchesError,
+        reason: "DDSketch alpha mismatch: #{a.alpha} vs #{b.alpha}"
+    end
+
+    {new_min, new_max} =
+      case {a.min_value, b.min_value} do
+        {:nan, :nan} -> {:nan, :nan}
+        {:nan, _} -> {b.min_value, b.max_value}
+        {_, :nan} -> {a.min_value, a.max_value}
+        _ -> {min(a.min_value, b.min_value), max(a.max_value, b.max_value)}
+      end
+
+    merged_bins = dds_merge_sorted_bins(a.bins, b.bins)
+
+    dds_encode_from_map(%{
+      a
+      | n: a.n + b.n,
+        zero_count: a.zero_count + b.zero_count,
+        min_value: new_min,
+        max_value: new_max,
+        bins: merged_bins
+    })
+  end
+
+  @impl true
+  @spec ddsketch_quantile(binary(), float(), keyword()) :: float() | nil
+  def ddsketch_quantile(state_bin, rank, _opts) do
+    state = dds_decode_state(state_bin)
+
+    cond do
+      state.n == 0 ->
+        nil
+
+      rank == 0.0 ->
+        state.min_value
+
+      rank == 1.0 ->
+        state.max_value
+
+      true ->
+        target = rank * state.n
+        dds_walk_quantile(state.zero_count, state.bins, state.gamma, target)
+    end
+  end
+
+  @impl true
+  @spec ddsketch_count(binary(), keyword()) :: non_neg_integer()
+  def ddsketch_count(state_bin, _opts) do
+    <<_pre::binary-size(40), n::unsigned-little-64, _rest::binary>> = state_bin
+    n
+  end
+
+  @impl true
+  @spec ddsketch_min(binary(), keyword()) :: float() | nil
+  def ddsketch_min(state_bin, _opts) do
+    <<_pre::binary-size(40), n::unsigned-little-64, _zero_count::binary-size(8),
+      min_bin::binary-size(8), _rest::binary>> = state_bin
+
+    if n == 0, do: nil, else: dds_decode_f64_value(min_bin)
+  end
+
+  @impl true
+  @spec ddsketch_max(binary(), keyword()) :: float() | nil
+  def ddsketch_max(state_bin, _opts) do
+    <<_pre::binary-size(40), n::unsigned-little-64, _zero_count::binary-size(8),
+      _min_bin::binary-size(8), max_bin::binary-size(8), _rest::binary>> = state_bin
+
+    if n == 0, do: nil, else: dds_decode_f64_value(max_bin)
+  end
+
+  # -- DDSketch Private Helpers --
+
+  defp dds_validate_value!(value) when is_float(value) and value < 0.0 do
+    raise ArgumentError, "DDSketch does not support negative values, got: #{value}"
+  end
+
+  defp dds_validate_value!(value) when is_float(value) do
+    <<_sign::1, exponent::11, _mantissa::52>> = <<value::float-64>>
+
+    if exponent == 2047 do
+      raise ArgumentError, "DDSketch does not support NaN or Inf values"
+    end
+  end
+
+  defp dds_compute_index(value, min_indexable, log_gamma) do
+    if value < min_indexable do
+      floor(:math.log(min_indexable) / log_gamma)
+    else
+      floor(:math.log(value) / log_gamma)
+    end
+  end
+
+  defp dds_decode_state(state_bin) do
+    <<
+      @dds_magic::binary,
+      1::unsigned-8,
+      _flags::unsigned-8,
+      _reserved::unsigned-little-16,
+      alpha::float-little-64,
+      gamma::float-little-64,
+      log_gamma::float-little-64,
+      min_indexable::float-little-64,
+      n::unsigned-little-64,
+      zero_count::unsigned-little-64,
+      min_bin::binary-size(8),
+      max_bin::binary-size(8),
+      sparse_count::unsigned-little-32,
+      _dense_min_index::signed-little-32,
+      _dense_len::unsigned-little-32,
+      _reserved2::unsigned-little-32,
+      body::binary
+    >> = state_bin
+
+    bins = dds_decode_sparse_bins(body, sparse_count)
+    min_value = dds_decode_f64(min_bin, n)
+    max_value = dds_decode_f64(max_bin, n)
+
+    %{
+      alpha: alpha,
+      gamma: gamma,
+      log_gamma: log_gamma,
+      min_indexable: min_indexable,
+      n: n,
+      zero_count: zero_count,
+      min_value: min_value,
+      max_value: max_value,
+      bins: bins
+    }
+  end
+
+  defp dds_decode_f64(@kll_nan, _n), do: :nan
+  defp dds_decode_f64(_bin, 0), do: :nan
+  defp dds_decode_f64(<<val::float-little-64>>, _n), do: val
+
+  defp dds_decode_f64_value(@kll_nan), do: nil
+  defp dds_decode_f64_value(<<val::float-little-64>>), do: val
+
+  defp dds_encode_f64(:nan), do: @kll_nan
+  defp dds_encode_f64(val) when is_float(val), do: <<val::float-little-64>>
+
+  defp dds_encode_from_map(state) do
+    min_bin = dds_encode_f64(state.min_value)
+    max_bin = dds_encode_f64(state.max_value)
+    sparse_count = length(state.bins)
+    bins_bin = dds_encode_sparse_bins(state.bins)
+
+    <<
+      @dds_magic::binary,
+      1::unsigned-8,
+      0::unsigned-8,
+      0::unsigned-little-16,
+      state.alpha::float-little-64,
+      state.gamma::float-little-64,
+      state.log_gamma::float-little-64,
+      state.min_indexable::float-little-64,
+      state.n::unsigned-little-64,
+      state.zero_count::unsigned-little-64,
+      min_bin::binary,
+      max_bin::binary,
+      sparse_count::unsigned-little-32,
+      0::signed-little-32,
+      0::unsigned-little-32,
+      0::unsigned-little-32,
+      bins_bin::binary
+    >>
+  end
+
+  defp dds_decode_sparse_bins(_body, 0), do: []
+
+  defp dds_decode_sparse_bins(body, count) do
+    dds_decode_bins_acc(body, count, []) |> Enum.reverse()
+  end
+
+  defp dds_decode_bins_acc(_bin, 0, acc), do: acc
+
+  defp dds_decode_bins_acc(
+         <<index::signed-little-32, count::unsigned-little-32, rest::binary>>,
+         remaining,
+         acc
+       ) do
+    dds_decode_bins_acc(rest, remaining - 1, [{index, count} | acc])
+  end
+
+  defp dds_encode_sparse_bins(bins) do
+    bins
+    |> Enum.map(fn {index, count} ->
+      <<index::signed-little-32, count::unsigned-little-32>>
+    end)
+    |> IO.iodata_to_binary()
+  end
+
+  defp dds_merge_index_counts(existing_bins, new_counts) when map_size(new_counts) == 0 do
+    existing_bins
+  end
+
+  defp dds_merge_index_counts(existing_bins, new_counts) do
+    existing_map = Map.new(existing_bins)
+    merged = Map.merge(existing_map, new_counts, fn _k, v1, v2 -> v1 + v2 end)
+    merged |> Enum.sort_by(&elem(&1, 0))
+  end
+
+  defp dds_merge_sorted_bins([], bs), do: bs
+  defp dds_merge_sorted_bins(as, []), do: as
+
+  defp dds_merge_sorted_bins([{ia, ca} | rest_a], [{ib, cb} | rest_b]) do
+    cond do
+      ia < ib -> [{ia, ca} | dds_merge_sorted_bins(rest_a, [{ib, cb} | rest_b])]
+      ia > ib -> [{ib, cb} | dds_merge_sorted_bins([{ia, ca} | rest_a], rest_b)]
+      true -> [{ia, ca + cb} | dds_merge_sorted_bins(rest_a, rest_b)]
+    end
+  end
+
+  defp dds_walk_quantile(zero_count, bins, gamma, target) do
+    cumulative = zero_count
+
+    if cumulative >= target and zero_count > 0 do
+      0.0
+    else
+      dds_walk_bins(bins, gamma, target, cumulative)
+    end
+  end
+
+  defp dds_walk_bins([], _gamma, _target, _cumulative), do: nil
+
+  defp dds_walk_bins([{index, count} | rest], gamma, target, cumulative) do
+    new_cumulative = cumulative + count
+
+    if new_cumulative >= target do
+      dds_bucket_midpoint(gamma, index)
+    else
+      dds_walk_bins(rest, gamma, target, new_cumulative)
+    end
+  end
+
+  defp dds_bucket_midpoint(gamma, index) do
+    2.0 * :math.pow(gamma, index + 1) / (gamma + 1.0)
+  end
 end

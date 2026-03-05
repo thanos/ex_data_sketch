@@ -8,7 +8,7 @@ defmodule ExDataSketch.ParityTest do
   use ExUnit.Case, async: true
 
   alias ExDataSketch.Backend.{Pure, Rust}
-  alias ExDataSketch.{CMS, HLL, KLL, Theta}
+  alias ExDataSketch.{CMS, DDSketch, HLL, KLL, Theta}
 
   # Deterministic input strings
   @items_1000 Enum.map(0..999, &"parity_item_#{&1}")
@@ -117,6 +117,55 @@ defmodule ExDataSketch.ParityTest do
       assert KLL.serialize(pure_merged) == KLL.serialize(rust_merged)
       assert KLL.count(pure_merged) == KLL.count(rust_merged)
       assert_in_delta KLL.quantile(pure_merged, 0.5), KLL.quantile(rust_merged, 0.5), 1.0e-9
+    end
+  end
+
+  describe "DDSketch parity" do
+    @describetag :rust_nif
+
+    @dds_items Enum.map(1..1000, &(&1 * 1.0))
+    @dds_a Enum.map(1..500, &(&1 * 1.0))
+    @dds_b Enum.map(501..1000, &(&1 * 1.0))
+
+    test "update_many produces identical serialization and quantile estimates" do
+      pure = DDSketch.new(alpha: 0.01, backend: Pure) |> DDSketch.update_many(@dds_items)
+      rust = DDSketch.new(alpha: 0.01, backend: Rust) |> DDSketch.update_many(@dds_items)
+
+      assert DDSketch.serialize(pure) == DDSketch.serialize(rust)
+      assert DDSketch.count(pure) == DDSketch.count(rust)
+      assert_in_delta DDSketch.quantile(pure, 0.5), DDSketch.quantile(rust, 0.5), 1.0e-9
+    end
+
+    test "successive update_many calls produce identical serialization" do
+      pure =
+        DDSketch.new(alpha: 0.01, backend: Pure)
+        |> DDSketch.update_many(@dds_a)
+        |> DDSketch.update_many(@dds_b)
+
+      rust =
+        DDSketch.new(alpha: 0.01, backend: Rust)
+        |> DDSketch.update_many(@dds_a)
+        |> DDSketch.update_many(@dds_b)
+
+      assert DDSketch.serialize(pure) == DDSketch.serialize(rust)
+      assert DDSketch.count(pure) == DDSketch.count(rust)
+    end
+
+    test "merge produces identical serialization and quantile estimates" do
+      pure_a = DDSketch.new(alpha: 0.01, backend: Pure) |> DDSketch.update_many(@dds_a)
+      pure_b = DDSketch.new(alpha: 0.01, backend: Pure) |> DDSketch.update_many(@dds_b)
+      pure_merged = DDSketch.merge(pure_a, pure_b)
+
+      rust_a = DDSketch.new(alpha: 0.01, backend: Rust) |> DDSketch.update_many(@dds_a)
+      rust_b = DDSketch.new(alpha: 0.01, backend: Rust) |> DDSketch.update_many(@dds_b)
+      rust_merged = DDSketch.merge(rust_a, rust_b)
+
+      assert DDSketch.serialize(pure_merged) == DDSketch.serialize(rust_merged)
+      assert DDSketch.count(pure_merged) == DDSketch.count(rust_merged)
+
+      assert_in_delta DDSketch.quantile(pure_merged, 0.5),
+                      DDSketch.quantile(rust_merged, 0.5),
+                      1.0e-9
     end
   end
 

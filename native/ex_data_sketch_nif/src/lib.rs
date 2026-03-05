@@ -1,4 +1,5 @@
 mod cms;
+mod ddsketch;
 mod error;
 mod hll;
 mod kll;

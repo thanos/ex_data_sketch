@@ -1,7 +1,7 @@
 defmodule ExDataSketch.MixProject do
   use Mix.Project
 
-  @version "0.2.0"
+  @version "0.2.1"
   @source_url "https://github.com/thanos/ex_data_sketch"
 
   def project do
@@ -112,6 +112,7 @@ defmodule ExDataSketch.MixProject do
           ExDataSketch.CMS,
           ExDataSketch.Theta,
           ExDataSketch.KLL,
+          ExDataSketch.DDSketch,
           ExDataSketch.Quantiles
         ],
         Infrastructure: [

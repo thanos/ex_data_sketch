@@ -17,10 +17,10 @@ defmodule ExDataSketch.QuantilesTest do
       assert sketch.opts == [k: 100]
     end
 
-    test "type: :ddsketch raises NotImplementedError" do
-      assert_raise ExDataSketch.Errors.NotImplementedError, fn ->
-        Quantiles.new(type: :ddsketch)
-      end
+    test "type: :ddsketch creates DDSketch" do
+      sketch = Quantiles.new(type: :ddsketch, alpha: 0.01)
+      assert sketch.__struct__ == ExDataSketch.DDSketch
+      assert sketch.opts == [alpha: 0.01]
     end
 
     test "unknown type raises ArgumentError" do

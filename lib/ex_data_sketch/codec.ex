@@ -29,6 +29,7 @@ defmodule ExDataSketch.Codec do
   - 2: CMS (Count-Min Sketch)
   - 3: Theta
   - 4: KLL (Quantiles)
+  - 5: DDSketch (Quantiles)
 
   ## Versioning
 
@@ -45,8 +46,9 @@ defmodule ExDataSketch.Codec do
   @sketch_id_cms 2
   @sketch_id_theta 3
   @sketch_id_kll 4
+  @sketch_id_ddsketch 5
 
-  @type sketch_id :: 1 | 2 | 3 | 4
+  @type sketch_id :: 1 | 2 | 3 | 4 | 5
   @type decoded :: %{
           version: pos_integer(),
           sketch_id: sketch_id(),
@@ -127,11 +129,23 @@ defmodule ExDataSketch.Codec do
   def sketch_id_kll, do: @sketch_id_kll
 
   @doc """
+  Returns the sketch ID constant for DDSketch.
+
+  ## Examples
+
+      iex> ExDataSketch.Codec.sketch_id_ddsketch()
+      5
+
+  """
+  @spec sketch_id_ddsketch() :: sketch_id()
+  def sketch_id_ddsketch, do: @sketch_id_ddsketch
+
+  @doc """
   Encodes sketch data into the EXSK binary format.
 
   ## Parameters
 
-  - `sketch_id` - sketch type identifier (1=HLL, 2=CMS, 3=Theta, 4=KLL)
+  - `sketch_id` - sketch type identifier (1=HLL, 2=CMS, 3=Theta, 4=KLL, 5=DDSketch)
   - `version` - format version (use `Codec.version/0` for current)
   - `params_bin` - binary-encoded sketch parameters
   - `state_bin` - raw sketch state binary

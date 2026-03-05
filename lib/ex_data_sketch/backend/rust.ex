@@ -23,6 +23,8 @@ defmodule ExDataSketch.Backend.Rust do
   - `theta_merge`: 50,000 combined entries
   - `kll_update_many`: 10,000 values
   - `kll_merge`: 50,000 combined items
+  - `ddsketch_update_many`: 10,000 values
+  - `ddsketch_merge`: 50,000 combined count
 
   Override globally via application config:
 
@@ -45,7 +47,9 @@ defmodule ExDataSketch.Backend.Rust do
     cms_merge: 100_000,
     theta_merge: 50_000,
     kll_update_many: 10_000,
-    kll_merge: 50_000
+    kll_merge: 50_000,
+    ddsketch_update_many: 10_000,
+    ddsketch_merge: 50_000
   }
 
   @doc """
@@ -265,6 +269,59 @@ defmodule ExDataSketch.Backend.Rust do
 
   @impl true
   def kll_max(state_bin, opts), do: Pure.kll_max(state_bin, opts)
+
+  # -- DDSketch callbacks --
+
+  @impl true
+  def ddsketch_new(opts), do: Pure.ddsketch_new(opts)
+
+  @impl true
+  def ddsketch_update(state_bin, value, opts), do: Pure.ddsketch_update(state_bin, value, opts)
+
+  @impl true
+  def ddsketch_update_many(state_bin, values, opts) do
+    threshold = dirty_threshold(:ddsketch_update_many, opts)
+    values_bin = encode_f64s(values)
+
+    result =
+      if length(values) > threshold do
+        ExDataSketch.Nif.ddsketch_update_many_dirty_nif(state_bin, values_bin)
+      else
+        ExDataSketch.Nif.ddsketch_update_many_nif(state_bin, values_bin)
+      end
+
+    unwrap_ok!(result)
+  end
+
+  @impl true
+  def ddsketch_merge(a_bin, b_bin, opts) do
+    threshold = dirty_threshold(:ddsketch_merge, opts)
+
+    a_n = ddsketch_count(a_bin, opts)
+    b_n = ddsketch_count(b_bin, opts)
+
+    result =
+      if a_n + b_n > threshold do
+        ExDataSketch.Nif.ddsketch_merge_dirty_nif(a_bin, b_bin)
+      else
+        ExDataSketch.Nif.ddsketch_merge_nif(a_bin, b_bin)
+      end
+
+    unwrap_ok!(result)
+  end
+
+  @impl true
+  def ddsketch_quantile(state_bin, rank, opts),
+    do: Pure.ddsketch_quantile(state_bin, rank, opts)
+
+  @impl true
+  def ddsketch_count(state_bin, opts), do: Pure.ddsketch_count(state_bin, opts)
+
+  @impl true
+  def ddsketch_min(state_bin, opts), do: Pure.ddsketch_min(state_bin, opts)
+
+  @impl true
+  def ddsketch_max(state_bin, opts), do: Pure.ddsketch_max(state_bin, opts)
 
   # -- Private helpers --
 
