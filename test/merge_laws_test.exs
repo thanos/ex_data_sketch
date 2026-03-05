@@ -6,12 +6,13 @@ defmodule ExDataSketch.MergeLawsTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
-  alias ExDataSketch.{CMS, HLL, Theta}
+  alias ExDataSketch.{CMS, HLL, KLL, Theta}
 
   @max_runs 50
   @hll_opts [p: 10]
   @cms_opts [width: 256, depth: 4, counter_width: 32]
   @theta_opts [k: 1024]
+  @kll_opts [k: 200]
 
   defp string_list(max_length \\ 20) do
     list_of(string(:alphanumeric, min_length: 1), min_length: 1, max_length: max_length)
@@ -214,6 +215,99 @@ defmodule ExDataSketch.MergeLawsTest do
         sketch = Theta.from_enumerable(items, @theta_opts)
 
         assert Theta.estimate(Theta.merge(sketch, sketch)) == Theta.estimate(sketch)
+      end
+    end
+  end
+
+  describe "KLL merge laws" do
+    defp float_list(max_length \\ 20) do
+      list_of(float(min: -1_000.0, max: 1_000.0), min_length: 1, max_length: max_length)
+    end
+
+    property "associativity" do
+      check all(
+              a <- float_list(10),
+              b <- float_list(10),
+              c <- float_list(10),
+              max_runs: @max_runs
+            ) do
+        sa = KLL.from_enumerable(a, @kll_opts)
+        sb = KLL.from_enumerable(b, @kll_opts)
+        sc = KLL.from_enumerable(c, @kll_opts)
+
+        left = KLL.merge(sa, KLL.merge(sb, sc))
+        right = KLL.merge(KLL.merge(sa, sb), sc)
+
+        # With k=200 and at most 30 items, no compaction occurs —
+        # quantile answers are exact and must match.
+        assert KLL.count(left) == KLL.count(right)
+        assert KLL.quantile(left, 0.5) == KLL.quantile(right, 0.5)
+      end
+    end
+
+    property "commutativity" do
+      check all(
+              a <- float_list(),
+              b <- float_list(),
+              max_runs: @max_runs
+            ) do
+        sa = KLL.from_enumerable(a, @kll_opts)
+        sb = KLL.from_enumerable(b, @kll_opts)
+
+        left = KLL.merge(sa, sb)
+        right = KLL.merge(sb, sa)
+
+        # With k=200 and at most 40 items, no compaction occurs —
+        # quantile answers are exact and must match.
+        assert KLL.count(left) == KLL.count(right)
+        assert KLL.quantile(left, 0.5) == KLL.quantile(right, 0.5)
+      end
+    end
+
+    property "identity: merge with empty" do
+      check all(items <- float_list(), max_runs: @max_runs) do
+        sketch = KLL.from_enumerable(items, @kll_opts)
+        empty = KLL.new(@kll_opts)
+
+        merged_right = KLL.merge(sketch, empty)
+        merged_left = KLL.merge(empty, sketch)
+
+        assert KLL.count(merged_right) == KLL.count(sketch)
+        assert KLL.count(merged_left) == KLL.count(sketch)
+
+        if KLL.count(sketch) > 0 do
+          assert_in_delta KLL.quantile(merged_right, 0.5), KLL.quantile(sketch, 0.5), 1.0e-9
+          assert_in_delta KLL.quantile(merged_left, 0.5), KLL.quantile(sketch, 0.5), 1.0e-9
+        end
+      end
+    end
+
+    property "count additivity" do
+      check all(
+              a <- float_list(),
+              b <- float_list(),
+              max_runs: @max_runs
+            ) do
+        sa = KLL.from_enumerable(a, @kll_opts)
+        sb = KLL.from_enumerable(b, @kll_opts)
+
+        merged = KLL.merge(sa, sb)
+        assert KLL.count(merged) == KLL.count(sa) + KLL.count(sb)
+      end
+    end
+
+    property "min/max preservation" do
+      check all(
+              a <- float_list(),
+              b <- float_list(),
+              max_runs: @max_runs
+            ) do
+        sa = KLL.from_enumerable(a, @kll_opts)
+        sb = KLL.from_enumerable(b, @kll_opts)
+
+        merged = KLL.merge(sa, sb)
+        assert KLL.min_value(merged) == min(KLL.min_value(sa), KLL.min_value(sb))
+        assert KLL.max_value(merged) == max(KLL.max_value(sa), KLL.max_value(sb))
       end
     end
   end

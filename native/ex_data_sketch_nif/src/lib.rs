@@ -1,6 +1,7 @@
 mod cms;
 mod error;
 mod hll;
+mod kll;
 mod theta;
 
 rustler::atoms! {

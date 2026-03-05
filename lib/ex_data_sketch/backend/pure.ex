@@ -568,4 +568,518 @@ defmodule ExDataSketch.Backend.Pure do
   defp theta_insert_sorted([h | t], value) when value < h, do: [value, h | t]
 
   defp theta_insert_sorted([h | t], value), do: [h | theta_insert_sorted(t, value)]
+
+  # ============================================================
+  # KLL Implementation
+  # ============================================================
+  #
+  # KLL (Karnin-Lang-Liberty) quantiles sketch.
+  #
+  # State binary layout (v1):
+  #   version:         u8  = 1
+  #   k:               u32 little-endian
+  #   n:               u64 little-endian
+  #   min_val:         f64 little-endian (NaN = empty sentinel)
+  #   max_val:         f64 little-endian (NaN = empty sentinel)
+  #   num_levels:      u8
+  #   compaction_bits: ceil(num_levels/8) bytes (1 bit per level parity)
+  #   level_sizes:     num_levels x u32 little-endian
+  #   items:           sum(level_sizes) x f64 little-endian (level 0 first)
+  #
+  # Capacity per level: max(2, floor(k * (2/3)^(num_levels - 1 - level)) + 1)
+  # Compaction: sort level, select even/odd indexed items based on parity bit,
+  #             promote selected to next level, flip parity bit for that level.
+
+  @kll_nan <<0, 0, 0, 0, 0, 0, 248, 127>>
+
+  @impl true
+  @spec kll_new(keyword()) :: binary()
+  def kll_new(opts) do
+    k = Keyword.fetch!(opts, :k)
+    # Start with 2 levels. Levels grow dynamically as the top level overflows.
+    num_levels = 2
+    parity_bytes = div(num_levels + 7, 8)
+    compaction_bits = :binary.copy(<<0>>, parity_bytes)
+    level_sizes = List.duplicate(0, num_levels)
+    levels = List.duplicate([], num_levels)
+    kll_encode_state(k, 0, :nan, :nan, num_levels, compaction_bits, level_sizes, levels)
+  end
+
+  @impl true
+  @spec kll_update(binary(), float(), keyword()) :: binary()
+  def kll_update(state_bin, value, _opts) do
+    state = kll_decode_state(state_bin)
+    state = kll_insert_value(state, value)
+    kll_encode_from_map(state)
+  end
+
+  @impl true
+  @spec kll_update_many(binary(), [float()], keyword()) :: binary()
+  def kll_update_many(state_bin, values, _opts) do
+    state = kll_decode_state(state_bin)
+    state = Enum.reduce(values, state, &kll_insert_value(&2, &1))
+    kll_encode_from_map(state)
+  end
+
+  @impl true
+  @spec kll_merge(binary(), binary(), keyword()) :: binary()
+  def kll_merge(state_bin_a, state_bin_b, _opts) do
+    a = kll_decode_state(state_bin_a)
+    b = kll_decode_state(state_bin_b)
+    merged = kll_do_merge(a, b)
+    kll_encode_from_map(merged)
+  end
+
+  @impl true
+  @spec kll_quantile(binary(), float(), keyword()) :: float() | nil
+  def kll_quantile(state_bin, rank, _opts) do
+    state = kll_decode_state(state_bin)
+
+    cond do
+      state.n == 0 ->
+        nil
+
+      rank == 0.0 ->
+        state.min_val
+
+      rank == 1.0 ->
+        state.max_val
+
+      true ->
+        sorted_view = kll_build_sorted_view(state)
+        kll_query_quantile(sorted_view, state.n, rank)
+    end
+  end
+
+  @impl true
+  @spec kll_rank(binary(), float(), keyword()) :: float() | nil
+  def kll_rank(state_bin, value, _opts) do
+    state = kll_decode_state(state_bin)
+
+    if state.n == 0 do
+      nil
+    else
+      sorted_view = kll_build_sorted_view(state)
+      kll_query_rank(sorted_view, state.n, value)
+    end
+  end
+
+  @impl true
+  @spec kll_count(binary(), keyword()) :: non_neg_integer()
+  def kll_count(state_bin, _opts) do
+    <<_version::8, _k::unsigned-little-32, n::unsigned-little-64, _rest::binary>> = state_bin
+    n
+  end
+
+  @impl true
+  @spec kll_min(binary(), keyword()) :: float() | nil
+  def kll_min(state_bin, _opts) do
+    <<_version::8, _k::unsigned-little-32, n::unsigned-little-64, min_bin::binary-size(8),
+      _rest::binary>> = state_bin
+
+    if n == 0, do: nil, else: kll_decode_f64_value(min_bin)
+  end
+
+  @impl true
+  @spec kll_max(binary(), keyword()) :: float() | nil
+  def kll_max(state_bin, _opts) do
+    <<_version::8, _k::unsigned-little-32, n::unsigned-little-64, _min_bin::binary-size(8),
+      max_bin::binary-size(8), _rest::binary>> = state_bin
+
+    if n == 0, do: nil, else: kll_decode_f64_value(max_bin)
+  end
+
+  # -- KLL Private Helpers --
+
+  defp kll_level_capacity(k, level, num_levels) do
+    # DataSketches-style depth-from-top capacity formula.
+    # Bottom levels have small capacity (compact frequently), top levels have
+    # large capacity (accumulate many items for better resolution).
+    depth = num_levels - 1 - level
+    max(2, floor(k * :math.pow(2 / 3, depth)) + 1)
+  end
+
+  defp kll_encode_state(k, n, min_val, max_val, num_levels, compaction_bits, level_sizes, items) do
+    min_bin = kll_encode_f64(min_val)
+    max_bin = kll_encode_f64(max_val)
+    parity_bytes = div(num_levels + 7, 8)
+
+    # Pad compaction_bits to correct size
+    compaction_bin =
+      if byte_size(compaction_bits) < parity_bytes do
+        <<compaction_bits::binary, 0::size((parity_bytes - byte_size(compaction_bits)) * 8)>>
+      else
+        binary_part(compaction_bits, 0, parity_bytes)
+      end
+
+    level_sizes_bin =
+      level_sizes
+      |> Enum.map(fn s -> <<s::unsigned-little-32>> end)
+      |> IO.iodata_to_binary()
+
+    items_bin =
+      items
+      |> List.flatten()
+      |> Enum.map(fn v -> <<v::float-little-64>> end)
+      |> IO.iodata_to_binary()
+
+    <<
+      1::unsigned-8,
+      k::unsigned-little-32,
+      n::unsigned-little-64,
+      min_bin::binary-size(8),
+      max_bin::binary-size(8),
+      num_levels::unsigned-8,
+      compaction_bin::binary,
+      level_sizes_bin::binary,
+      items_bin::binary
+    >>
+  end
+
+  defp kll_encode_f64(:nan), do: @kll_nan
+  defp kll_encode_f64(val) when is_float(val), do: <<val::float-little-64>>
+
+  defp kll_decode_state(state_bin) do
+    <<
+      1::unsigned-8,
+      k::unsigned-little-32,
+      n::unsigned-little-64,
+      min_bin::binary-size(8),
+      max_bin::binary-size(8),
+      num_levels::unsigned-8,
+      rest::binary
+    >> = state_bin
+
+    min_val = kll_decode_f64(min_bin, n)
+    max_val = kll_decode_f64(max_bin, n)
+
+    parity_bytes = div(num_levels + 7, 8)
+
+    <<
+      compaction_bits::binary-size(^parity_bytes),
+      rest2::binary
+    >> = rest
+
+    level_sizes_bytes = num_levels * 4
+
+    <<
+      level_sizes_bin::binary-size(^level_sizes_bytes),
+      items_bin::binary
+    >> = rest2
+
+    level_sizes = kll_decode_u32_list(level_sizes_bin, [])
+
+    levels = kll_decode_levels(items_bin, level_sizes, [])
+
+    %{
+      k: k,
+      n: n,
+      min_val: min_val,
+      max_val: max_val,
+      num_levels: num_levels,
+      compaction_bits: compaction_bits,
+      level_sizes: level_sizes,
+      levels: levels
+    }
+  end
+
+  defp kll_decode_f64(@kll_nan, _n), do: :nan
+  defp kll_decode_f64(_bin, 0), do: :nan
+  defp kll_decode_f64(<<val::float-little-64>>, _n), do: val
+
+  defp kll_decode_f64_value(@kll_nan), do: nil
+  defp kll_decode_f64_value(<<val::float-little-64>>), do: val
+
+  defp kll_decode_u32_list(<<>>, acc), do: Enum.reverse(acc)
+
+  defp kll_decode_u32_list(<<v::unsigned-little-32, rest::binary>>, acc) do
+    kll_decode_u32_list(rest, [v | acc])
+  end
+
+  defp kll_decode_levels(<<>>, [], acc), do: Enum.reverse(acc)
+
+  defp kll_decode_levels(bin, [size | rest_sizes], acc) do
+    bytes = size * 8
+    <<level_bin::binary-size(^bytes), rest_bin::binary>> = bin
+    level = kll_decode_f64_list(level_bin, [])
+    kll_decode_levels(rest_bin, rest_sizes, [level | acc])
+  end
+
+  defp kll_decode_f64_list(<<>>, acc), do: Enum.reverse(acc)
+
+  defp kll_decode_f64_list(<<v::float-little-64, rest::binary>>, acc) do
+    kll_decode_f64_list(rest, [v | acc])
+  end
+
+  defp kll_encode_from_map(state) do
+    kll_encode_state(
+      state.k,
+      state.n,
+      state.min_val,
+      state.max_val,
+      state.num_levels,
+      state.compaction_bits,
+      state.level_sizes,
+      state.levels
+    )
+  end
+
+  defp kll_insert_value(state, value) do
+    # Update min/max
+    new_min =
+      case state.min_val do
+        :nan -> value
+        cur -> min(cur, value)
+      end
+
+    new_max =
+      case state.max_val do
+        :nan -> value
+        cur -> max(cur, value)
+      end
+
+    # Insert into level 0
+    [level0 | rest_levels] = state.levels
+    new_level0 = [value | level0]
+    new_level0_size = hd(state.level_sizes) + 1
+
+    state = %{
+      state
+      | n: state.n + 1,
+        min_val: new_min,
+        max_val: new_max,
+        levels: [new_level0 | rest_levels],
+        level_sizes: [new_level0_size | tl(state.level_sizes)]
+    }
+
+    # Compact if level 0 is at capacity, then check if top level needs growth
+    state = kll_compact_if_needed(state, 0)
+    kll_check_grow(state)
+  end
+
+  defp kll_compact_if_needed(state, level) do
+    # Top level (num_levels - 1) never compacts
+    if level >= state.num_levels - 1 do
+      state
+    else
+      capacity = kll_level_capacity(state.k, level, state.num_levels)
+      level_size = Enum.at(state.level_sizes, level)
+
+      if level_size >= capacity do
+        kll_compact_level(state, level)
+      else
+        state
+      end
+    end
+  end
+
+  defp kll_check_grow(state) do
+    top = state.num_levels - 1
+    top_cap = kll_level_capacity(state.k, top, state.num_levels)
+    top_size = Enum.at(state.level_sizes, top)
+
+    if top_size >= top_cap do
+      kll_grow_levels(state)
+    else
+      state
+    end
+  end
+
+  defp kll_grow_levels(state) do
+    new_num_levels = state.num_levels + 1
+
+    # Extend levels and sizes with empty new top level
+    new_levels = state.levels ++ [[]]
+    new_level_sizes = state.level_sizes ++ [0]
+
+    # Extend compaction bits if needed
+    new_parity_bytes = div(new_num_levels + 7, 8)
+    old_parity_bytes = byte_size(state.compaction_bits)
+
+    new_compaction_bits =
+      if new_parity_bytes > old_parity_bytes do
+        state.compaction_bits <> <<0>>
+      else
+        state.compaction_bits
+      end
+
+    state = %{
+      state
+      | num_levels: new_num_levels,
+        levels: new_levels,
+        level_sizes: new_level_sizes,
+        compaction_bits: new_compaction_bits
+    }
+
+    # Capacities changed (depth increased for all levels). Recompact from bottom up.
+    # The old top level (now at num_levels-2) can now compact.
+    state = kll_recompact(state, 0)
+
+    # Check if we need to grow again (very rare)
+    kll_check_grow(state)
+  end
+
+  defp kll_compact_level(state, level) do
+    current_level = Enum.at(state.levels, level)
+    sorted = Enum.sort(current_level)
+
+    # Get parity bit for this level
+    parity = kll_get_parity(state.compaction_bits, level)
+
+    # Clear-the-level compaction (original KLL paper):
+    # Half the items are promoted to the next level, the rest are discarded.
+    # The current level is cleared.
+    promoted = kll_select_half(sorted, parity)
+
+    # Flip parity bit
+    new_compaction_bits = kll_flip_parity(state.compaction_bits, level)
+
+    # Clear current level
+    new_levels = List.replace_at(state.levels, level, [])
+    new_level_sizes = List.replace_at(state.level_sizes, level, 0)
+
+    # Add promoted items to next level
+    next_level = Enum.at(new_levels, level + 1)
+    new_next_level = promoted ++ next_level
+    new_levels = List.replace_at(new_levels, level + 1, new_next_level)
+    new_level_sizes = List.replace_at(new_level_sizes, level + 1, length(new_next_level))
+
+    state = %{
+      state
+      | levels: new_levels,
+        level_sizes: new_level_sizes,
+        compaction_bits: new_compaction_bits
+    }
+
+    # Recursively compact if next level is now full (but not the top level)
+    kll_compact_if_needed(state, level + 1)
+  end
+
+  defp kll_get_parity(compaction_bits, level) do
+    byte_idx = div(level, 8)
+    bit_idx = rem(level, 8)
+    <<_::binary-size(^byte_idx), byte::unsigned-8, _::binary>> = compaction_bits
+    byte >>> bit_idx &&& 1
+  end
+
+  defp kll_flip_parity(compaction_bits, level) do
+    byte_idx = div(level, 8)
+    bit_idx = rem(level, 8)
+    <<before::binary-size(^byte_idx), byte::unsigned-8, after_bytes::binary>> = compaction_bits
+    new_byte = bxor(byte, 1 <<< bit_idx)
+    <<before::binary, new_byte::unsigned-8, after_bytes::binary>>
+  end
+
+  defp kll_select_half(sorted, parity) do
+    # parity=0: select even-indexed items (0, 2, 4, ...)
+    # parity=1: select odd-indexed items (1, 3, 5, ...)
+    sorted
+    |> Enum.with_index()
+    |> Enum.filter(fn {_val, idx} -> rem(idx, 2) == parity end)
+    |> Enum.map(&elem(&1, 0))
+  end
+
+  defp kll_build_sorted_view(state) do
+    # Build weighted (value, weight) pairs from all levels
+    state.levels
+    |> Enum.with_index()
+    |> Enum.flat_map(fn {level, idx} ->
+      weight = 1 <<< idx
+      Enum.map(level, fn val -> {val, weight} end)
+    end)
+    |> Enum.sort_by(&elem(&1, 0))
+  end
+
+  defp kll_query_quantile(sorted_view, _n, rank) do
+    total_weight = Enum.reduce(sorted_view, 0, fn {_val, weight}, acc -> acc + weight end)
+    target = rank * total_weight
+    kll_walk_quantile(sorted_view, target, 0)
+  end
+
+  defp kll_walk_quantile([{val, _weight}], _target, _cumulative), do: val
+
+  defp kll_walk_quantile([{val, weight} | rest], target, cumulative) do
+    new_cumulative = cumulative + weight
+
+    if new_cumulative > target do
+      val
+    else
+      kll_walk_quantile(rest, target, new_cumulative)
+    end
+  end
+
+  defp kll_query_rank(sorted_view, _n, value) do
+    total_weight = Enum.reduce(sorted_view, 0, fn {_val, weight}, acc -> acc + weight end)
+
+    weight_below =
+      Enum.reduce(sorted_view, 0, fn {val, weight}, acc ->
+        if val <= value, do: acc + weight, else: acc
+      end)
+
+    weight_below / total_weight
+  end
+
+  defp kll_do_merge(a, b) do
+    # Handle merging with empty sketch
+    {new_min, new_max} =
+      case {a.min_val, b.min_val} do
+        {:nan, :nan} -> {:nan, :nan}
+        {:nan, _} -> {b.min_val, b.max_val}
+        {_, :nan} -> {a.min_val, a.max_val}
+        _ -> {min(a.min_val, b.min_val), max(a.max_val, b.max_val)}
+      end
+
+    new_n = a.n + b.n
+
+    # Merge levels: concatenate items at each level
+    max_levels = max(a.num_levels, b.num_levels)
+
+    a_levels = a.levels ++ List.duplicate([], max_levels - a.num_levels)
+    b_levels = b.levels ++ List.duplicate([], max_levels - b.num_levels)
+
+    merged_levels = Enum.zip_with(a_levels, b_levels, fn al, bl -> al ++ bl end)
+    merged_sizes = Enum.map(merged_levels, &length/1)
+
+    # Merge compaction bits (OR them together)
+    a_bits = kll_pad_bits(a.compaction_bits, max_levels)
+    b_bits = kll_pad_bits(b.compaction_bits, max_levels)
+
+    merged_bits =
+      :binary.bin_to_list(a_bits)
+      |> Enum.zip(:binary.bin_to_list(b_bits))
+      |> Enum.map(fn {ab, bb} -> bor(ab, bb) end)
+      |> :binary.list_to_bin()
+
+    state = %{
+      k: a.k,
+      n: new_n,
+      min_val: new_min,
+      max_val: new_max,
+      num_levels: max_levels,
+      compaction_bits: merged_bits,
+      level_sizes: merged_sizes,
+      levels: merged_levels
+    }
+
+    # Re-compact from bottom up
+    kll_recompact(state, 0)
+  end
+
+  defp kll_pad_bits(bits, num_levels) do
+    needed = div(num_levels + 7, 8)
+    current = byte_size(bits)
+
+    if current < needed do
+      <<bits::binary, 0::size((needed - current) * 8)>>
+    else
+      binary_part(bits, 0, needed)
+    end
+  end
+
+  defp kll_recompact(state, level) when level >= state.num_levels, do: state
+
+  defp kll_recompact(state, level) do
+    state = kll_compact_if_needed(state, level)
+    kll_recompact(state, level + 1)
+  end
 end

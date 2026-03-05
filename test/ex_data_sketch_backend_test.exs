@@ -19,6 +19,15 @@ defmodule ExDataSketch.BackendTest.StubBackend do
   def theta_merge(s, _b, _o), do: s
   def theta_estimate(_s, _o), do: 0.0
   def theta_from_components(_k, _t, _e), do: <<>>
+  def kll_new(_opts), do: <<>>
+  def kll_update(s, _v, _o), do: s
+  def kll_update_many(s, _v, _o), do: s
+  def kll_merge(s, _b, _o), do: s
+  def kll_quantile(_s, _r, _o), do: nil
+  def kll_rank(_s, _v, _o), do: nil
+  def kll_count(_s, _o), do: 0
+  def kll_min(_s, _o), do: nil
+  def kll_max(_s, _o), do: nil
 end
 
 defmodule ExDataSketch.BackendTest do
@@ -147,6 +156,25 @@ defmodule ExDataSketch.BackendTest do
 
       assert_raise ErlangError, fn ->
         ExDataSketch.Nif.theta_merge_dirty_nif(<<>>, <<>>)
+      end
+    end
+
+    @tag :no_rust_nif
+    test "kll stubs raise when NIF is not loaded" do
+      assert_raise ErlangError, fn ->
+        ExDataSketch.Nif.kll_update_many_nif(<<>>, <<>>)
+      end
+
+      assert_raise ErlangError, fn ->
+        ExDataSketch.Nif.kll_update_many_dirty_nif(<<>>, <<>>)
+      end
+
+      assert_raise ErlangError, fn ->
+        ExDataSketch.Nif.kll_merge_nif(<<>>, <<>>)
+      end
+
+      assert_raise ErlangError, fn ->
+        ExDataSketch.Nif.kll_merge_dirty_nif(<<>>, <<>>)
       end
     end
   end

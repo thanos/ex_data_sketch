@@ -1,0 +1,15 @@
+{
+  "algorithm": "kll",
+  "vector_version": 1,
+  "algorithm_opts": {
+    "k": 200
+  },
+  "input_items": [],
+  "expected": {
+    "canonical_exsk_base64": "RVhTSwEEBAAAAMgAAAAnAAAAAcgAAAAAAAAAAAAAAAAAAAAAAPh/AAAAAAAA+H8CAAAAAAAAAAAA",
+    "count": 0,
+    "min": null,
+    "max": null,
+    "quantile_estimates": {}
+  }
+}

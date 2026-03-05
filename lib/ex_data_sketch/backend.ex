@@ -91,6 +91,35 @@ defmodule ExDataSketch.Backend do
   @callback theta_from_components(non_neg_integer(), non_neg_integer(), [non_neg_integer()]) ::
               state_bin()
 
+  # -- KLL callbacks --
+
+  @doc "Create a new KLL state binary with the given options."
+  @callback kll_new(opts()) :: state_bin()
+
+  @doc "Update KLL state with a single float64 value."
+  @callback kll_update(state_bin(), float(), opts()) :: state_bin()
+
+  @doc "Update KLL state with a list of float64 values in a single pass."
+  @callback kll_update_many(state_bin(), [float()], opts()) :: state_bin()
+
+  @doc "Merge two KLL state binaries."
+  @callback kll_merge(state_bin(), state_bin(), opts()) :: state_bin()
+
+  @doc "Return the approximate value at a given normalized rank from KLL state."
+  @callback kll_quantile(state_bin(), float(), opts()) :: float() | nil
+
+  @doc "Return the approximate normalized rank of a given value from KLL state."
+  @callback kll_rank(state_bin(), float(), opts()) :: float() | nil
+
+  @doc "Return the count of items inserted into KLL state."
+  @callback kll_count(state_bin(), opts()) :: non_neg_integer()
+
+  @doc "Return the minimum value in KLL state, or nil if empty."
+  @callback kll_min(state_bin(), opts()) :: float() | nil
+
+  @doc "Return the maximum value in KLL state, or nil if empty."
+  @callback kll_max(state_bin(), opts()) :: float() | nil
+
   @doc """
   Returns the default backend module.
 
