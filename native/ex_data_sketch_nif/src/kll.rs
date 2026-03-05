@@ -34,10 +34,18 @@ fn decode_state(data: &[u8]) -> Option<KllState> {
     }
 
     let k = u32::from_le_bytes(data[1..5].try_into().ok()?);
+    if k < 8 || k > 65535 {
+        return None;
+    }
+
     let n = u64::from_le_bytes(data[5..13].try_into().ok()?);
     let min_val = f64::from_le_bytes(data[13..21].try_into().ok()?);
     let max_val = f64::from_le_bytes(data[21..29].try_into().ok()?);
     let num_levels = data[29] as usize;
+
+    if num_levels < 2 {
+        return None;
+    }
 
     let parity_bytes = (num_levels + 7) / 8;
     let mut pos = 30;
@@ -48,25 +56,29 @@ fn decode_state(data: &[u8]) -> Option<KllState> {
     let compaction_bits = data[pos..pos + parity_bytes].to_vec();
     pos += parity_bytes;
 
-    let level_sizes_bytes = num_levels * 4;
+    let level_sizes_bytes = num_levels.checked_mul(4)?;
     if data.len() < pos + level_sizes_bytes {
         return None;
     }
 
     let mut level_sizes = Vec::with_capacity(num_levels);
+    let mut total_items: usize = 0;
     for i in 0..num_levels {
         let offset = pos + i * 4;
         let sz = u32::from_le_bytes(data[offset..offset + 4].try_into().ok()?) as usize;
+        total_items = total_items.checked_add(sz)?;
         level_sizes.push(sz);
     }
     pos += level_sizes_bytes;
 
+    let total_item_bytes = total_items.checked_mul(8)?;
+    if data.len() < pos + total_item_bytes {
+        return None;
+    }
+
     let mut levels = Vec::with_capacity(num_levels);
     for &sz in &level_sizes {
         let bytes_needed = sz * 8;
-        if data.len() < pos + bytes_needed {
-            return None;
-        }
         let mut level = Vec::with_capacity(sz);
         for j in 0..sz {
             let offset = pos + j * 8;
@@ -254,8 +266,10 @@ fn insert_value(state: &mut KllState, value: f64) {
 
     state.n += 1;
 
-    // Prepend to level 0 (matching Elixir's [value | level0])
-    state.levels[0].insert(0, value);
+    // Append to level 0 (O(1) amortized). Level 0 is reversed before
+    // encoding to match Elixir's prepend order. Compaction sorts first,
+    // so insertion order does not affect compacted results.
+    state.levels[0].push(value);
 
     compact_if_needed(state, 0);
     check_grow(state);
@@ -276,6 +290,11 @@ fn kll_update_many_impl<'a>(env: Env<'a>, state_bin: Binary, values_bin: Binary)
         let val = f64::from_le_bytes(chunk.try_into().unwrap());
         insert_value(&mut state, val);
     }
+
+    // Reverse level 0 to match Elixir's prepend ([value | level0]) order.
+    // Items inserted since the last compaction are in append order; reversing
+    // produces the same serialization as the Pure backend.
+    state.levels[0].reverse();
 
     let result = encode_state(&state);
     error::ok_binary(env, &result)

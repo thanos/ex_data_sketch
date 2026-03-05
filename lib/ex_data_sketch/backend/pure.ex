@@ -586,7 +586,7 @@ defmodule ExDataSketch.Backend.Pure do
   #   level_sizes:     num_levels x u32 little-endian
   #   items:           sum(level_sizes) x f64 little-endian (level 0 first)
   #
-  # Capacity per level: max(2, floor(k * (2/3)^level) + 1)
+  # Capacity per level: max(2, floor(k * (2/3)^(num_levels - 1 - level)) + 1)
   # Compaction: sort level, select even/odd indexed items based on parity bit,
   #             promote selected to next level, flip parity bit for that level.
 
