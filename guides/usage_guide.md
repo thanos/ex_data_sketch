@@ -297,6 +297,579 @@ The default hash implementation uses `:erlang.phash2/2` combined with
 additional mixing to produce a full 64-bit output. This is deterministic
 within the same BEAM instance.
 
+## Use Cases
+
+### Algorithm Selection Guide
+
+| Use Case | Algorithm | Key Option | What You Get |
+|----------|-----------|------------|--------------|
+| Count distinct users / IPs / sessions | HLL | `p: 14` | Cardinality estimate with ~0.8% error |
+| Frequency of specific items (query counts, error codes) | CMS | `width: 2048, depth: 5` | Per-item count estimates (always >= true count) |
+| Set intersection / union cardinality | Theta | `k: 4096` | Jaccard similarity, union/intersection sizes |
+| Percentiles and rank queries (general) | KLL | `k: 200` | Median, P95, P99 with rank-error guarantees |
+| Latency percentiles and SLO monitoring | DDSketch | `alpha: 0.01` | P99 with value-relative error (e.g., 142ms +/- 1%) |
+| Top-k / heavy hitter detection | FrequentItems | `k: 64` | Most frequent items with count and error bounds |
+| Membership testing (seen before?) | Bloom | `capacity: 100_000` | "Probably yes" or "definitely no" with tunable FPR |
+
+### HLL: Real-time unique visitor counting
+
+A web analytics service needs to count unique visitors per page per day
+without storing every visitor ID. HLL provides bounded-memory cardinality
+estimation that can be merged across time windows and server instances.
+
+```elixir
+defmodule Analytics.UniqueVisitors do
+  alias ExDataSketch.HLL
+
+  # Each page gets its own HLL sketch, stored in ETS or Redis
+  def record_visit(page_id, visitor_id) do
+    sketch = get_or_create_sketch(page_id)
+    updated = HLL.update(sketch, visitor_id)
+    store_sketch(page_id, updated)
+  end
+
+  def unique_count(page_id) do
+    page_id
+    |> get_or_create_sketch()
+    |> HLL.estimate()
+    |> round()
+  end
+
+  # Merge hourly sketches into a daily rollup
+  def daily_rollup(page_id, date) do
+    0..23
+    |> Enum.map(&get_hourly_sketch(page_id, date, &1))
+    |> Enum.reject(&is_nil/1)
+    |> HLL.merge_many()
+  end
+
+  # Compare unique visitors across two pages
+  def overlap_estimate(page_a, page_b) do
+    sketch_a = get_or_create_sketch(page_a)
+    sketch_b = get_or_create_sketch(page_b)
+    merged = HLL.merge(sketch_a, sketch_b)
+
+    count_a = HLL.estimate(sketch_a)
+    count_b = HLL.estimate(sketch_b)
+    count_union = HLL.estimate(merged)
+
+    # Inclusion-exclusion: |A intersect B| = |A| + |B| - |A union B|
+    overlap = max(count_a + count_b - count_union, 0)
+    %{page_a: round(count_a), page_b: round(count_b), overlap: round(overlap)}
+  end
+
+  defp get_or_create_sketch(page_id) do
+    case :ets.lookup(:hll_sketches, page_id) do
+      [{_, bin}] ->
+        {:ok, sketch} = HLL.deserialize(bin)
+        sketch
+      [] ->
+        HLL.new(p: 14)
+    end
+  end
+
+  defp store_sketch(page_id, sketch) do
+    :ets.insert(:hll_sketches, {page_id, HLL.serialize(sketch)})
+  end
+
+  defp get_hourly_sketch(page_id, date, hour) do
+    key = {page_id, date, hour}
+    case :ets.lookup(:hll_hourly, key) do
+      [{_, bin}] -> {:ok, s} = HLL.deserialize(bin); s
+      [] -> nil
+    end
+  end
+end
+```
+
+### CMS: API rate limiting with frequency tracking
+
+An API gateway needs to track request counts per API key to enforce rate
+limits. CMS provides constant-memory frequency estimation -- counts are
+always at least the true count, so rate limits are never under-enforced.
+
+```elixir
+defmodule Gateway.RateLimiter do
+  use GenServer
+
+  alias ExDataSketch.CMS
+
+  @rate_limit 1000  # max requests per window
+  @window_ms 60_000  # 1-minute windows
+
+  def start_link(opts) do
+    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+  end
+
+  def check_and_record(api_key) do
+    GenServer.call(__MODULE__, {:check, api_key})
+  end
+
+  def top_consumers do
+    GenServer.call(__MODULE__, :top_consumers)
+  end
+
+  @impl true
+  def init(_opts) do
+    schedule_rotation()
+    {:ok, %{sketch: CMS.new(width: 4096, depth: 5), keys_seen: MapSet.new()}}
+  end
+
+  @impl true
+  def handle_call({:check, api_key}, _from, state) do
+    current_count = CMS.estimate(state.sketch, api_key)
+
+    if current_count >= @rate_limit do
+      {:reply, {:error, :rate_limited, current_count}, state}
+    else
+      updated_sketch = CMS.update(state.sketch, api_key)
+      updated_keys = MapSet.put(state.keys_seen, api_key)
+      {:reply, {:ok, current_count + 1}, %{state | sketch: updated_sketch, keys_seen: updated_keys}}
+    end
+  end
+
+  @impl true
+  def handle_call(:top_consumers, _from, state) do
+    # Check counts for all observed keys
+    top =
+      state.keys_seen
+      |> Enum.map(fn key -> {key, CMS.estimate(state.sketch, key)} end)
+      |> Enum.sort_by(fn {_k, count} -> -count end)
+      |> Enum.take(10)
+
+    {:reply, top, state}
+  end
+
+  @impl true
+  def handle_info(:rotate, _state) do
+    schedule_rotation()
+    {:noreply, %{sketch: CMS.new(width: 4096, depth: 5), keys_seen: MapSet.new()}}
+  end
+
+  defp schedule_rotation, do: Process.send_after(self(), :rotate, @window_ms)
+end
+```
+
+### Theta: A/B test audience overlap analysis
+
+A product team needs to measure how much overlap exists between users
+exposed to experiment A vs experiment B. Theta sketches support set
+operations (union, intersection) on cardinalities, giving overlap estimates
+without storing every user ID.
+
+```elixir
+defmodule Experiments.OverlapAnalysis do
+  alias ExDataSketch.Theta
+
+  def analyze_overlap(experiment_a_users, experiment_b_users) do
+    sketch_a = Theta.from_enumerable(experiment_a_users, k: 4096)
+    sketch_b = Theta.from_enumerable(experiment_b_users, k: 4096)
+
+    union = Theta.merge(sketch_a, sketch_b)
+
+    count_a = Theta.estimate(sketch_a)
+    count_b = Theta.estimate(sketch_b)
+    count_union = Theta.estimate(union)
+
+    # Inclusion-exclusion principle
+    count_intersection = max(count_a + count_b - count_union, 0.0)
+
+    jaccard = if count_union > 0, do: count_intersection / count_union, else: 0.0
+
+    %{
+      group_a_size: round(count_a),
+      group_b_size: round(count_b),
+      union_size: round(count_union),
+      intersection_size: round(count_intersection),
+      jaccard_similarity: Float.round(jaccard, 4),
+      overlap_pct_of_a: Float.round(count_intersection / max(count_a, 1) * 100, 1),
+      overlap_pct_of_b: Float.round(count_intersection / max(count_b, 1) * 100, 1)
+    }
+  end
+
+  # Compare overlap across multiple experiment cohorts
+  def pairwise_overlap(cohorts) when is_map(cohorts) do
+    sketches =
+      Map.new(cohorts, fn {name, users} ->
+        {name, Theta.from_enumerable(users, k: 4096)}
+      end)
+
+    names = Map.keys(sketches)
+
+    for a <- names, b <- names, a < b do
+      union = Theta.merge(sketches[a], sketches[b])
+      est_a = Theta.estimate(sketches[a])
+      est_b = Theta.estimate(sketches[b])
+      est_union = Theta.estimate(union)
+      intersection = max(est_a + est_b - est_union, 0.0)
+
+      {a, b, round(intersection)}
+    end
+  end
+end
+```
+
+### KLL: Monitoring response size distributions
+
+A CDN needs to track the distribution of response body sizes to plan
+cache shard capacity. KLL provides rank-accurate quantiles -- useful when
+you care about "what fraction of responses are below X bytes?"
+
+```elixir
+defmodule CDN.ResponseSizeMonitor do
+  use GenServer
+
+  alias ExDataSketch.KLL
+
+  def start_link(opts) do
+    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+  end
+
+  def record_response(size_bytes) do
+    GenServer.cast(__MODULE__, {:record, size_bytes})
+  end
+
+  def record_batch(sizes) do
+    GenServer.cast(__MODULE__, {:record_batch, sizes})
+  end
+
+  def distribution_report do
+    GenServer.call(__MODULE__, :report)
+  end
+
+  @impl true
+  def init(_opts) do
+    {:ok, %{sketch: KLL.new(k: 200)}}
+  end
+
+  @impl true
+  def handle_cast({:record, size}, state) do
+    {:noreply, %{state | sketch: KLL.update(state.sketch, size)}}
+  end
+
+  @impl true
+  def handle_cast({:record_batch, sizes}, state) do
+    {:noreply, %{state | sketch: KLL.update_many(state.sketch, sizes)}}
+  end
+
+  @impl true
+  def handle_call(:report, _from, state) do
+    sketch = state.sketch
+    n = KLL.count(sketch)
+
+    report =
+      if n > 0 do
+        %{
+          count: n,
+          min: KLL.min(sketch),
+          p25: KLL.quantile(sketch, 0.25),
+          median: KLL.quantile(sketch, 0.5),
+          p75: KLL.quantile(sketch, 0.75),
+          p90: KLL.quantile(sketch, 0.90),
+          p99: KLL.quantile(sketch, 0.99),
+          max: KLL.max(sketch),
+          # What fraction of responses are under 1 MB?
+          pct_under_1mb: Float.round(KLL.rank(sketch, 1_048_576) * 100, 1)
+        }
+      else
+        %{count: 0}
+      end
+
+    {:reply, report, state}
+  end
+end
+
+# Usage:
+# CDN.ResponseSizeMonitor.record_batch(response_sizes)
+# CDN.ResponseSizeMonitor.distribution_report()
+# => %{count: 1_500_000, median: 24576, p99: 4_194_304, pct_under_1mb: 92.3, ...}
+```
+
+### DDSketch: SLO compliance monitoring
+
+A platform team needs to track API latency percentiles for SLO reporting.
+DDSketch provides value-relative error -- when the SLO says "P99 < 200ms",
+DDSketch guarantees the reported P99 is within 1% of the true value, not
+just within a rank tolerance.
+
+```elixir
+defmodule Platform.SLOMonitor do
+  use GenServer
+
+  alias ExDataSketch.DDSketch
+
+  @slo_rules [
+    {:p50, 0.5, 50},    # P50 < 50ms
+    {:p95, 0.95, 150},  # P95 < 150ms
+    {:p99, 0.99, 200}   # P99 < 200ms
+  ]
+
+  def start_link(opts) do
+    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+  end
+
+  def record_latency(endpoint, latency_ms) do
+    GenServer.cast(__MODULE__, {:record, endpoint, latency_ms})
+  end
+
+  def record_latencies(endpoint, latencies) do
+    GenServer.cast(__MODULE__, {:record_batch, endpoint, latencies})
+  end
+
+  def slo_report(endpoint) do
+    GenServer.call(__MODULE__, {:report, endpoint})
+  end
+
+  @impl true
+  def init(_opts) do
+    {:ok, %{sketches: %{}}}
+  end
+
+  @impl true
+  def handle_cast({:record, endpoint, latency_ms}, state) do
+    sketch = Map.get(state.sketches, endpoint, DDSketch.new(alpha: 0.01))
+    updated = DDSketch.update(sketch, latency_ms)
+    {:noreply, %{state | sketches: Map.put(state.sketches, endpoint, updated)}}
+  end
+
+  @impl true
+  def handle_cast({:record_batch, endpoint, latencies}, state) do
+    sketch = Map.get(state.sketches, endpoint, DDSketch.new(alpha: 0.01))
+    updated = DDSketch.update_many(sketch, latencies)
+    {:noreply, %{state | sketches: Map.put(state.sketches, endpoint, updated)}}
+  end
+
+  @impl true
+  def handle_call({:report, endpoint}, _from, state) do
+    case Map.fetch(state.sketches, endpoint) do
+      {:ok, sketch} ->
+        n = DDSketch.count(sketch)
+
+        checks =
+          Enum.map(@slo_rules, fn {label, quantile, threshold_ms} ->
+            actual = DDSketch.quantile(sketch, quantile)
+            %{
+              metric: label,
+              threshold_ms: threshold_ms,
+              actual_ms: Float.round(actual, 2),
+              passing: actual <= threshold_ms
+            }
+          end)
+
+        all_passing = Enum.all?(checks, & &1.passing)
+
+        report = %{
+          endpoint: endpoint,
+          sample_count: n,
+          min_ms: Float.round(DDSketch.min(sketch), 2),
+          max_ms: Float.round(DDSketch.max(sketch), 2),
+          slo_checks: checks,
+          compliant: all_passing
+        }
+
+        {:reply, {:ok, report}, state}
+
+      :error ->
+        {:reply, {:error, :no_data}, state}
+    end
+  end
+end
+
+# Usage:
+# Platform.SLOMonitor.record_latencies("/api/search", latency_samples)
+# Platform.SLOMonitor.slo_report("/api/search")
+# => {:ok, %{compliant: true, slo_checks: [
+#      %{metric: :p99, threshold_ms: 200, actual_ms: 142.37, passing: true}, ...]}}
+```
+
+### FrequentItems: Trending search queries
+
+A search engine needs to identify the most popular queries in real time
+to populate autocomplete suggestions and trending lists. FrequentItems
+(SpaceSaving) tracks the top-k items with bounded memory, providing count
+estimates and error bounds.
+
+```elixir
+defmodule Search.TrendingQueries do
+  use GenServer
+
+  alias ExDataSketch.FrequentItems
+
+  def start_link(opts) do
+    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+  end
+
+  def record_query(query) do
+    GenServer.cast(__MODULE__, {:query, query})
+  end
+
+  def record_queries(queries) do
+    GenServer.cast(__MODULE__, {:queries, queries})
+  end
+
+  def trending(limit \\ 10) do
+    GenServer.call(__MODULE__, {:trending, limit})
+  end
+
+  def query_estimate(query) do
+    GenServer.call(__MODULE__, {:estimate, query})
+  end
+
+  @impl true
+  def init(_opts) do
+    {:ok, %{sketch: FrequentItems.new(k: 128)}}
+  end
+
+  @impl true
+  def handle_cast({:query, query}, state) do
+    normalized = query |> String.downcase() |> String.trim()
+    {:noreply, %{state | sketch: FrequentItems.update(state.sketch, normalized)}}
+  end
+
+  @impl true
+  def handle_cast({:queries, queries}, state) do
+    normalized = Enum.map(queries, &(&1 |> String.downcase() |> String.trim()))
+    {:noreply, %{state | sketch: FrequentItems.update_many(state.sketch, normalized)}}
+  end
+
+  @impl true
+  def handle_call({:trending, limit}, _from, state) do
+    top =
+      state.sketch
+      |> FrequentItems.top_k(limit: limit)
+      |> Enum.map(fn entry ->
+        %{
+          query: entry.item,
+          estimated_count: entry.count,
+          min_count: entry.lower,
+          max_count: entry.upper
+        }
+      end)
+
+    {:reply, top, state}
+  end
+
+  @impl true
+  def handle_call({:estimate, query}, _from, state) do
+    normalized = query |> String.downcase() |> String.trim()
+    result = FrequentItems.estimate(state.sketch, normalized)
+    {:reply, result, state}
+  end
+end
+
+# Usage:
+# Search.TrendingQueries.record_queries(batch_of_queries)
+# Search.TrendingQueries.trending(5)
+# => [%{query: "elixir genserver", estimated_count: 4821, min_count: 4750, max_count: 4821},
+#     %{query: "phoenix liveview", estimated_count: 3102, min_count: 3010, max_count: 3102}, ...]
+```
+
+### Bloom: Deduplication in event processing
+
+An event pipeline receives millions of events per hour and needs to filter
+duplicates without storing every event ID. A Bloom filter provides
+space-efficient "have I seen this before?" checks -- false positives mean
+an occasional duplicate slips through, but no event is ever wrongly dropped.
+
+```elixir
+defmodule Events.Deduplicator do
+  use GenServer
+
+  alias ExDataSketch.Bloom
+
+  @capacity 10_000_000  # expected events per window
+  @fpr 0.001            # 0.1% false positive rate
+
+  def start_link(opts) do
+    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+  end
+
+  # Returns :new if not seen before, :duplicate if probably seen
+  def check_and_insert(event_id) do
+    GenServer.call(__MODULE__, {:check, event_id})
+  end
+
+  # Batch check for Broadway/Flow pipelines
+  def filter_duplicates(event_ids) do
+    GenServer.call(__MODULE__, {:filter_batch, event_ids})
+  end
+
+  def stats do
+    GenServer.call(__MODULE__, :stats)
+  end
+
+  @impl true
+  def init(_opts) do
+    {:ok, %{
+      bloom: Bloom.new(capacity: @capacity, false_positive_rate: @fpr),
+      checked: 0,
+      duplicates: 0
+    }}
+  end
+
+  @impl true
+  def handle_call({:check, event_id}, _from, state) do
+    if Bloom.member?(state.bloom, event_id) do
+      {:reply, :duplicate, %{state | checked: state.checked + 1, duplicates: state.duplicates + 1}}
+    else
+      updated_bloom = Bloom.put(state.bloom, event_id)
+      {:reply, :new, %{state | bloom: updated_bloom, checked: state.checked + 1}}
+    end
+  end
+
+  @impl true
+  def handle_call({:filter_batch, event_ids}, _from, state) do
+    {new_ids, bloom, dup_count} =
+      Enum.reduce(event_ids, {[], state.bloom, 0}, fn id, {acc, bloom, dups} ->
+        if Bloom.member?(bloom, id) do
+          {acc, bloom, dups + 1}
+        else
+          {[id | acc], Bloom.put(bloom, id), dups}
+        end
+      end)
+
+    new_state = %{state |
+      bloom: bloom,
+      checked: state.checked + length(event_ids),
+      duplicates: state.duplicates + dup_count
+    }
+
+    {:reply, Enum.reverse(new_ids), new_state}
+  end
+
+  @impl true
+  def handle_call(:stats, _from, state) do
+    reply = %{
+      checked: state.checked,
+      duplicates: state.duplicates,
+      approximate_unique: Bloom.count(state.bloom),
+      filter_size_bytes: Bloom.size_bytes(state.bloom),
+      configured_fpr: Bloom.error_rate(state.bloom)
+    }
+
+    {:reply, reply, state}
+  end
+end
+
+# Usage in a Broadway pipeline:
+defmodule MyPipeline do
+  use Broadway
+
+  @impl true
+  def handle_batch(_batcher, messages, _batch_info, _context) do
+    ids = Enum.map(messages, & &1.data.event_id)
+    new_ids = Events.Deduplicator.filter_duplicates(ids)
+    new_id_set = MapSet.new(new_ids)
+
+    messages
+    |> Enum.filter(fn msg -> MapSet.member?(new_id_set, msg.data.event_id) end)
+    |> Enum.each(&process_event/1)
+
+    messages
+  end
+end
+```
+
 ## Error Handling
 
 ExDataSketch uses tagged tuples for recoverable errors:

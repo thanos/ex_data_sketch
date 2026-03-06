@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Bloom filter (`ExDataSketch.Bloom`) with Pure Elixir backend.
 - BLM1 binary state format (40-byte header + LSB-first packed bitset).
-- Double hashing (Kirsch-Mitzenmacker) deriving k bit positions from a single 64-bit hash.
+- Double hashing (Kirsch-Mitzenmacher) deriving k bit positions from a single 64-bit hash.
 - Bloom backend callbacks: `bloom_new/1`, `bloom_put/3`, `bloom_put_many/3`, `bloom_member?/3`, `bloom_merge/3`, `bloom_count/2`.
 - Automatic parameter derivation from capacity and false_positive_rate options.
 - Bloom merge via bitwise OR with validation of matching bit_count, hash_count, and seed.

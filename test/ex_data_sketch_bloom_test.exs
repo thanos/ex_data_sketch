@@ -46,6 +46,19 @@ defmodule ExDataSketch.BloomTest do
       end
     end
 
+    test "capacity exceeding u32 raises" do
+      assert_raise ExDataSketch.Errors.InvalidOptionError, ~r/u32/, fn ->
+        Bloom.new(capacity: 0xFFFFFFFF + 1)
+      end
+    end
+
+    test "capacity that overflows bit_count u32 raises" do
+      # 500M items at 1% FPR requires ~4.8 billion bits, exceeding u32
+      assert_raise ExDataSketch.Errors.InvalidOptionError, ~r/exceeds the u32 maximum/, fn ->
+        Bloom.new(capacity: 500_000_000, false_positive_rate: 0.01)
+      end
+    end
+
     test "invalid FPR raises" do
       assert_raise ExDataSketch.Errors.InvalidOptionError, fn ->
         Bloom.new(false_positive_rate: 0.0)

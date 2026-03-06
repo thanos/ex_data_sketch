@@ -25,7 +25,7 @@ defmodule ExDataSketch.Bloom do
 
   Items are hashed via `ExDataSketch.Hash.hash64/1` at the API boundary.
   The 64-bit hash is split into two 32-bit halves for double hashing
-  (Kirsch-Mitzenmacker optimization):
+  (Kirsch-Mitzenmacher optimization):
 
       h1 = hash >>> 32
       h2 = hash &&& 0xFFFFFFFF
@@ -90,6 +90,7 @@ defmodule ExDataSketch.Bloom do
     validate_fpr!(fpr)
 
     bit_count = derive_bit_count(capacity, fpr)
+    validate_bit_count!(bit_count, capacity, fpr)
     hash_count = derive_hash_count(bit_count, capacity)
 
     backend = Backend.resolve(opts)
@@ -390,8 +391,16 @@ defmodule ExDataSketch.Bloom do
   end
 
   defp validate_capacity!(capacity)
-       when is_integer(capacity) and capacity > 0,
+       when is_integer(capacity) and capacity > 0 and capacity <= 0xFFFFFFFF,
        do: :ok
+
+  defp validate_capacity!(capacity) when is_integer(capacity) and capacity > 0xFFFFFFFF do
+    raise Errors.InvalidOptionError,
+      option: :capacity,
+      value: capacity,
+      message:
+        "capacity must fit in a u32 (max #{0xFFFFFFFF}), got: #{capacity}"
+  end
 
   defp validate_capacity!(capacity) do
     raise Errors.InvalidOptionError,
@@ -399,6 +408,17 @@ defmodule ExDataSketch.Bloom do
       value: capacity,
       message: "capacity must be a positive integer, got: #{inspect(capacity)}"
   end
+
+  defp validate_bit_count!(bit_count, capacity, fpr) when bit_count > 0xFFFFFFFF do
+    raise Errors.InvalidOptionError,
+      option: :capacity,
+      value: capacity,
+      message:
+        "capacity #{capacity} with false_positive_rate #{fpr} requires #{bit_count} bits, " <>
+          "which exceeds the u32 maximum (#{0xFFFFFFFF}). Reduce capacity or increase false_positive_rate."
+  end
+
+  defp validate_bit_count!(_bit_count, _capacity, _fpr), do: :ok
 
   defp validate_fpr!(fpr) when is_float(fpr) and fpr > 0.0 and fpr < 1.0, do: :ok
 
