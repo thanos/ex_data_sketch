@@ -49,12 +49,9 @@ File.mkdir_p!("bench/output")
 bench_opts = [warmup: 1, time: 3, formatters: [Benchee.Formatters.Console]]
 
 groups = [
-  {"bloom_put_many 1k",
-   fn s -> fn -> Bloom.put_many(s.sketch, items_1k) end end},
-  {"bloom_put_many 100k",
-   fn s -> fn -> Bloom.put_many(s.sketch, items_100k) end end},
-  {"bloom_merge",
-   fn s -> fn -> Bloom.merge(s.merge_a, s.merge_b) end end},
+  {"bloom_put_many 1k", fn s -> fn -> Bloom.put_many(s.sketch, items_1k) end end},
+  {"bloom_put_many 100k", fn s -> fn -> Bloom.put_many(s.sketch, items_100k) end end},
+  {"bloom_merge", fn s -> fn -> Bloom.merge(s.merge_a, s.merge_b) end end},
   {"bloom_member? (hit)",
    fn s ->
      fn -> Enum.each(lookup_items, &Bloom.member?(s.sketch_populated, &1)) end
