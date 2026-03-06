@@ -1566,7 +1566,7 @@ defmodule ExDataSketch.Backend.Pure do
       pos = rem(h1 + i * h2, bit_count)
       byte_idx = div(pos, 8)
       bit_idx = rem(pos, 8)
-      <<_before::binary-size(byte_idx), byte::unsigned-8, _::binary>> = bitset
+      <<_before::binary-size(^byte_idx), byte::unsigned-8, _::binary>> = bitset
       (byte &&& 1 <<< bit_idx) != 0
     end)
   end
@@ -1595,7 +1595,7 @@ defmodule ExDataSketch.Backend.Pure do
   defp blm_set_bit(bitset, pos) do
     byte_idx = div(pos, 8)
     bit_idx = rem(pos, 8)
-    <<before::binary-size(byte_idx), byte::unsigned-8, rest::binary>> = bitset
+    <<before::binary-size(^byte_idx), byte::unsigned-8, rest::binary>> = bitset
     <<before::binary, byte ||| 1 <<< bit_idx::unsigned-8, rest::binary>>
   end
 
