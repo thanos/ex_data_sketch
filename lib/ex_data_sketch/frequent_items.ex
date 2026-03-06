@@ -358,7 +358,8 @@ defmodule ExDataSketch.FrequentItems do
   def deserialize(binary) when is_binary(binary) do
     with {:ok, decoded} <- Codec.decode(binary),
          :ok <- validate_sketch_id(decoded.sketch_id),
-         {:ok, opts} <- decode_params(decoded.params) do
+         {:ok, opts} <- decode_params(decoded.params),
+         :ok <- validate_state_header(decoded.state, opts) do
       backend = Backend.default()
 
       {:ok,
@@ -472,6 +473,47 @@ defmodule ExDataSketch.FrequentItems do
     {:error,
      Errors.DeserializationError.exception(
        reason: "expected FrequentItems sketch ID (6), got #{id}"
+     )}
+  end
+
+  defp validate_state_header(
+         <<"FI1\0", 1::unsigned-8, flags::unsigned-8, _reserved::binary-size(2),
+           k::unsigned-little-32, _rest::binary>>,
+         opts
+       ) do
+    expected_k = Keyword.fetch!(opts, :k)
+    expected_flags = Keyword.fetch!(opts, :flags)
+
+    cond do
+      k != expected_k ->
+        {:error,
+         Errors.DeserializationError.exception(
+           reason: "FI1 state header k (#{k}) does not match EXSK params k (#{expected_k})"
+         )}
+
+      flags != expected_flags ->
+        {:error,
+         Errors.DeserializationError.exception(
+           reason:
+             "FI1 state header flags (#{flags}) does not match EXSK params flags (#{expected_flags})"
+         )}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_state_header(state, _opts) when byte_size(state) < 32 do
+    {:error,
+     Errors.DeserializationError.exception(
+       reason: "FI1 state too short: expected at least 32 bytes, got #{byte_size(state)}"
+     )}
+  end
+
+  defp validate_state_header(_state, _opts) do
+    {:error,
+     Errors.DeserializationError.exception(
+       reason: "FI1 state header invalid: bad magic or version"
      )}
   end
 

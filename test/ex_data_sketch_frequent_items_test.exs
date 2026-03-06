@@ -270,6 +270,55 @@ defmodule ExDataSketch.FrequentItemsTest do
 
       assert msg =~ "invalid FrequentItems params binary"
     end
+
+    test "rejects state with mismatched k" do
+      # Build a valid FI1 state with k=5, then wrap in EXSK params with k=10
+      sketch = FrequentItems.new(k: 5)
+      params_bin = <<10::unsigned-little-32, 0::unsigned-8>>
+      bin = ExDataSketch.Codec.encode(6, 1, params_bin, sketch.state)
+
+      assert {:error, %ExDataSketch.Errors.DeserializationError{message: msg}} =
+               FrequentItems.deserialize(bin)
+
+      assert msg =~ "k (5) does not match EXSK params k (10)"
+    end
+
+    test "rejects state with mismatched flags" do
+      # Build a valid FI1 state with flags=0 (:binary), then wrap in EXSK params with flags=1 (:int)
+      sketch = FrequentItems.new(k: 5, key_encoding: :binary)
+      params_bin = <<5::unsigned-little-32, 1::unsigned-8>>
+      bin = ExDataSketch.Codec.encode(6, 1, params_bin, sketch.state)
+
+      assert {:error, %ExDataSketch.Errors.DeserializationError{message: msg}} =
+               FrequentItems.deserialize(bin)
+
+      assert msg =~ "flags (0) does not match EXSK params flags (1)"
+    end
+
+    test "rejects state with bad magic/version" do
+      # Craft a 32-byte state with wrong magic
+      bad_state =
+        <<"BAD\0", 1::8, 0::8, 0::16, 5::unsigned-little-32, 0::unsigned-little-64,
+          0::unsigned-little-32, 0::unsigned-little-32, 0::unsigned-little-32>>
+
+      params_bin = <<5::unsigned-little-32, 0::unsigned-8>>
+      bin = ExDataSketch.Codec.encode(6, 1, params_bin, bad_state)
+
+      assert {:error, %ExDataSketch.Errors.DeserializationError{message: msg}} =
+               FrequentItems.deserialize(bin)
+
+      assert msg =~ "bad magic or version"
+    end
+
+    test "rejects state that is too short" do
+      params_bin = <<5::unsigned-little-32, 0::unsigned-8>>
+      bin = ExDataSketch.Codec.encode(6, 1, params_bin, <<0, 1, 2>>)
+
+      assert {:error, %ExDataSketch.Errors.DeserializationError{message: msg}} =
+               FrequentItems.deserialize(bin)
+
+      assert msg =~ "FI1 state too short"
+    end
   end
 
   describe "integer keys" do
