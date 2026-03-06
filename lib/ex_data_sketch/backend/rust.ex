@@ -364,6 +364,26 @@ defmodule ExDataSketch.Backend.Rust do
   @impl true
   def bloom_count(state_bin, opts), do: Pure.bloom_count(state_bin, opts)
 
+  # -- Cuckoo callbacks --
+
+  @impl true
+  def cuckoo_new(opts), do: Pure.cuckoo_new(opts)
+
+  @impl true
+  def cuckoo_put(state_bin, hash64, opts), do: Pure.cuckoo_put(state_bin, hash64, opts)
+
+  @impl true
+  def cuckoo_put_many(state_bin, hashes, opts), do: Pure.cuckoo_put_many(state_bin, hashes, opts)
+
+  @impl true
+  def cuckoo_member?(state_bin, hash64, opts), do: Pure.cuckoo_member?(state_bin, hash64, opts)
+
+  @impl true
+  def cuckoo_delete(state_bin, hash64, opts), do: Pure.cuckoo_delete(state_bin, hash64, opts)
+
+  @impl true
+  def cuckoo_count(state_bin, opts), do: Pure.cuckoo_count(state_bin, opts)
+
   # -- FrequentItems callbacks --
 
   @impl true

@@ -193,6 +193,28 @@ defmodule ExDataSketch.Backend do
   @doc "Return the number of distinct tracked entries from FrequentItems state."
   @callback fi_entry_count(state_bin(), opts()) :: non_neg_integer()
 
+  # -- Cuckoo callbacks --
+
+  @doc "Create a new Cuckoo filter state binary with the given options."
+  @callback cuckoo_new(opts()) :: state_bin()
+
+  @doc "Insert a single hash64 into Cuckoo state. Returns {:ok, state} or {:error, :full}."
+  @callback cuckoo_put(state_bin(), hash64(), opts()) :: {:ok, state_bin()} | {:error, :full}
+
+  @doc "Insert a list of hash64 values into Cuckoo state. Returns {:ok, state} or {:error, :full, state}."
+  @callback cuckoo_put_many(state_bin(), [hash64()], opts()) ::
+              {:ok, state_bin()} | {:error, :full, state_bin()}
+
+  @doc "Test membership of a single hash64 value in Cuckoo state."
+  @callback cuckoo_member?(state_bin(), hash64(), opts()) :: boolean()
+
+  @doc "Delete a single hash64 from Cuckoo state. Returns {:ok, state} or {:error, :not_found}."
+  @callback cuckoo_delete(state_bin(), hash64(), opts()) ::
+              {:ok, state_bin()} | {:error, :not_found}
+
+  @doc "Return the number of stored items from Cuckoo state."
+  @callback cuckoo_count(state_bin(), opts()) :: non_neg_integer()
+
   @doc """
   Returns the default backend module.
 

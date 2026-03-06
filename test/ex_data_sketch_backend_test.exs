@@ -42,6 +42,12 @@ defmodule ExDataSketch.BackendTest.StubBackend do
   def bloom_member?(_s, _h, _o), do: false
   def bloom_merge(s, _b, _o), do: s
   def bloom_count(_s, _o), do: 0
+  def cuckoo_new(_opts), do: <<>>
+  def cuckoo_put(s, _h, _o), do: {:ok, s}
+  def cuckoo_put_many(s, _h, _o), do: {:ok, s}
+  def cuckoo_member?(_s, _h, _o), do: false
+  def cuckoo_delete(_s, _h, _o), do: {:error, :not_found}
+  def cuckoo_count(_s, _o), do: 0
   def fi_new(_opts), do: <<>>
   def fi_update(s, _ib, _o), do: s
   def fi_update_many(s, _items, _o), do: s

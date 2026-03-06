@@ -32,6 +32,7 @@ defmodule ExDataSketch.Codec do
   - 5: DDSketch (Quantiles)
   - 6: FrequentItems (SpaceSaving)
   - 7: Bloom
+  - 8: Cuckoo
 
   ## Versioning
 
@@ -51,8 +52,9 @@ defmodule ExDataSketch.Codec do
   @sketch_id_ddsketch 5
   @sketch_id_fi 6
   @sketch_id_bloom 7
+  @sketch_id_cuckoo 8
 
-  @type sketch_id :: 1 | 2 | 3 | 4 | 5 | 6 | 7
+  @type sketch_id :: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8
   @type decoded :: %{
           version: pos_integer(),
           sketch_id: sketch_id(),
@@ -169,11 +171,23 @@ defmodule ExDataSketch.Codec do
   def sketch_id_bloom, do: @sketch_id_bloom
 
   @doc """
+  Returns the sketch ID constant for Cuckoo.
+
+  ## Examples
+
+      iex> ExDataSketch.Codec.sketch_id_cuckoo()
+      8
+
+  """
+  @spec sketch_id_cuckoo() :: sketch_id()
+  def sketch_id_cuckoo, do: @sketch_id_cuckoo
+
+  @doc """
   Encodes sketch data into the EXSK binary format.
 
   ## Parameters
 
-  - `sketch_id` - sketch type identifier (1=HLL, 2=CMS, 3=Theta, 4=KLL, 5=DDSketch, 6=FrequentItems, 7=Bloom)
+  - `sketch_id` - sketch type identifier (1=HLL, 2=CMS, 3=Theta, 4=KLL, 5=DDSketch, 6=FrequentItems, 7=Bloom, 8=Cuckoo)
   - `version` - format version (use `Codec.version/0` for current)
   - `params_bin` - binary-encoded sketch parameters
   - `state_bin` - raw sketch state binary

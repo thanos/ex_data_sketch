@@ -1626,6 +1626,304 @@ defmodule ExDataSketch.Backend.Pure do
   end
 
   # ============================================================
+  # Cuckoo Filter Implementation
+  # ============================================================
+  #
+  # Binary layout (CKO1):
+  #   HEADER (32 bytes, all little-endian):
+  #     0:4   magic              "CKO1"
+  #     4:1   version            u8 = 1
+  #     5:1   fingerprint_bits   u8 (f)
+  #     6:1   bucket_size        u8 (b)
+  #     7:1   flags              u8 = 0
+  #     8:4   bucket_count       u32 (m, power of 2)
+  #     12:4  item_count         u32
+  #     16:4  seed               u32
+  #     20:4  max_kicks           u32
+  #     24:8  reserved           must be 0
+  #
+  #   BODY (bucket_count * bucket_size * fp_bytes bytes):
+  #     Flat array of fingerprint entries, each ceil(f/8) bytes LE.
+  #     Empty slot = fingerprint value 0.
+
+  defmodule CkoCtx do
+    @moduledoc false
+    defstruct [
+      :fp_bits,
+      :bucket_size,
+      :bucket_count,
+      :item_count,
+      :seed,
+      :max_kicks,
+      :fp_bytes,
+      :body
+    ]
+  end
+
+  @cko_magic "CKO1"
+  @cko_version 1
+
+  @impl true
+  @spec cuckoo_new(keyword()) :: binary()
+  def cuckoo_new(opts) do
+    fp_bits = Keyword.fetch!(opts, :fingerprint_size)
+    bucket_size = Keyword.fetch!(opts, :bucket_size)
+    bucket_count = Keyword.fetch!(opts, :bucket_count)
+    seed = Keyword.get(opts, :seed, 0)
+    max_kicks = Keyword.get(opts, :max_kicks, 500)
+
+    fp_bytes = div(fp_bits + 7, 8)
+    body_size = bucket_count * bucket_size * fp_bytes
+    body = :binary.copy(<<0>>, body_size)
+
+    <<
+      @cko_magic::binary,
+      @cko_version::unsigned-8,
+      fp_bits::unsigned-8,
+      bucket_size::unsigned-8,
+      0::unsigned-8,
+      bucket_count::unsigned-little-32,
+      0::unsigned-little-32,
+      seed::unsigned-little-32,
+      max_kicks::unsigned-little-32,
+      0::unsigned-little-64,
+      body::binary
+    >>
+  end
+
+  @impl true
+  @spec cuckoo_put(binary(), non_neg_integer(), keyword()) ::
+          {:ok, binary()} | {:error, :full}
+  def cuckoo_put(state_bin, hash64, _opts) do
+    ctx = cko_decode_header(state_bin)
+    {i1, fp, i2} = cko_derive_indices(ctx, hash64)
+
+    case cko_find_empty_slot(ctx, i1) do
+      {:ok, slot} ->
+        ctx = cko_write_slot(ctx, i1, slot, fp)
+        {:ok, cko_encode(%{ctx | item_count: ctx.item_count + 1})}
+
+      :full ->
+        case cko_find_empty_slot(ctx, i2) do
+          {:ok, slot} ->
+            ctx = cko_write_slot(ctx, i2, slot, fp)
+            {:ok, cko_encode(%{ctx | item_count: ctx.item_count + 1})}
+
+          :full ->
+            cko_kick_insert(ctx, i1, i2, fp)
+        end
+    end
+  end
+
+  @impl true
+  @spec cuckoo_put_many(binary(), [non_neg_integer()], keyword()) ::
+          {:ok, binary()} | {:error, :full, binary()}
+  def cuckoo_put_many(state_bin, [], _opts), do: {:ok, state_bin}
+
+  def cuckoo_put_many(state_bin, hashes, opts) do
+    Enum.reduce_while(hashes, {:ok, state_bin}, fn hash, {:ok, state} ->
+      case cuckoo_put(state, hash, opts) do
+        {:ok, new_state} -> {:cont, {:ok, new_state}}
+        {:error, :full} -> {:halt, {:error, :full, state}}
+      end
+    end)
+  end
+
+  @impl true
+  @spec cuckoo_member?(binary(), non_neg_integer(), keyword()) :: boolean()
+  def cuckoo_member?(state_bin, hash64, _opts) do
+    ctx = cko_decode_header(state_bin)
+    {i1, fp, i2} = cko_derive_indices(ctx, hash64)
+
+    cko_bucket_contains?(ctx, i1, fp) or cko_bucket_contains?(ctx, i2, fp)
+  end
+
+  @impl true
+  @spec cuckoo_delete(binary(), non_neg_integer(), keyword()) ::
+          {:ok, binary()} | {:error, :not_found}
+  def cuckoo_delete(state_bin, hash64, _opts) do
+    ctx = cko_decode_header(state_bin)
+    {i1, fp, i2} = cko_derive_indices(ctx, hash64)
+
+    cond do
+      (slot = cko_find_fp_slot(ctx, i1, fp)) != nil ->
+        ctx = cko_write_slot(ctx, i1, slot, 0)
+        {:ok, cko_encode(%{ctx | item_count: ctx.item_count - 1})}
+
+      (slot = cko_find_fp_slot(ctx, i2, fp)) != nil ->
+        ctx = cko_write_slot(ctx, i2, slot, 0)
+        {:ok, cko_encode(%{ctx | item_count: ctx.item_count - 1})}
+
+      true ->
+        {:error, :not_found}
+    end
+  end
+
+  @impl true
+  @spec cuckoo_count(binary(), keyword()) :: non_neg_integer()
+  def cuckoo_count(state_bin, _opts) do
+    <<_magic::binary-size(4), _version::8, _fp::8, _bs::8, _flags::8, _bc::unsigned-little-32,
+      item_count::unsigned-little-32, _rest::binary>> = state_bin
+
+    item_count
+  end
+
+  # -- Cuckoo private helpers --
+
+  defp cko_decode_header(state_bin) do
+    <<
+      @cko_magic::binary,
+      @cko_version::unsigned-8,
+      fp_bits::unsigned-8,
+      bucket_size::unsigned-8,
+      _flags::unsigned-8,
+      bucket_count::unsigned-little-32,
+      item_count::unsigned-little-32,
+      seed::unsigned-little-32,
+      max_kicks::unsigned-little-32,
+      _reserved::binary-size(8),
+      body::binary
+    >> = state_bin
+
+    %CkoCtx{
+      fp_bits: fp_bits,
+      bucket_size: bucket_size,
+      bucket_count: bucket_count,
+      item_count: item_count,
+      seed: seed,
+      max_kicks: max_kicks,
+      fp_bytes: div(fp_bits + 7, 8),
+      body: body
+    }
+  end
+
+  defp cko_encode(%CkoCtx{} = ctx) do
+    <<
+      @cko_magic::binary,
+      @cko_version::unsigned-8,
+      ctx.fp_bits::unsigned-8,
+      ctx.bucket_size::unsigned-8,
+      0::unsigned-8,
+      ctx.bucket_count::unsigned-little-32,
+      ctx.item_count::unsigned-little-32,
+      ctx.seed::unsigned-little-32,
+      ctx.max_kicks::unsigned-little-32,
+      0::unsigned-little-64,
+      ctx.body::binary
+    >>
+  end
+
+  defp cko_derive_indices(%CkoCtx{} = ctx, hash64) do
+    fp_mask = (1 <<< ctx.fp_bits) - 1
+    i1 = hash64 &&& ctx.bucket_count - 1
+    fp = cko_ensure_nonzero(hash64 >>> 32 &&& fp_mask)
+    i2 = cko_alt_index(i1, fp, ctx.bucket_count)
+    {i1, fp, i2}
+  end
+
+  defp cko_ensure_nonzero(0), do: 1
+  defp cko_ensure_nonzero(fp), do: fp
+
+  defp cko_alt_index(index, fingerprint, bucket_count) do
+    bxor(index, cko_fp_hash(fingerprint)) &&& bucket_count - 1
+  end
+
+  defp cko_fp_hash(fingerprint) do
+    h = fingerprint * 0x5BD1E995 &&& 0xFFFFFFFF
+    h = bxor(h, h >>> 13) &&& 0xFFFFFFFF
+    h * 0x5BD1E995 &&& 0xFFFFFFFF
+  end
+
+  defp cko_slot_offset(%CkoCtx{} = ctx, bucket_idx, slot_idx) do
+    bucket_idx * ctx.bucket_size * ctx.fp_bytes + slot_idx * ctx.fp_bytes
+  end
+
+  defp cko_read_slot(%CkoCtx{} = ctx, bucket_idx, slot_idx) do
+    offset = cko_slot_offset(ctx, bucket_idx, slot_idx)
+
+    case ctx.fp_bytes do
+      1 ->
+        <<_::binary-size(^offset), val::unsigned-8, _::binary>> = ctx.body
+        val
+
+      2 ->
+        <<_::binary-size(^offset), val::unsigned-little-16, _::binary>> = ctx.body
+        val
+    end
+  end
+
+  defp cko_write_slot(%CkoCtx{} = ctx, bucket_idx, slot_idx, value) do
+    offset = cko_slot_offset(ctx, bucket_idx, slot_idx)
+
+    new_body =
+      case ctx.fp_bytes do
+        1 ->
+          <<before::binary-size(^offset), _::unsigned-8, rest::binary>> = ctx.body
+          <<before::binary, value::unsigned-8, rest::binary>>
+
+        2 ->
+          <<before::binary-size(^offset), _::unsigned-little-16, rest::binary>> = ctx.body
+          <<before::binary, value::unsigned-little-16, rest::binary>>
+      end
+
+    %{ctx | body: new_body}
+  end
+
+  defp cko_find_empty_slot(%CkoCtx{} = ctx, bucket_idx) do
+    Enum.reduce_while(0..(ctx.bucket_size - 1), :full, fn slot, _acc ->
+      if cko_read_slot(ctx, bucket_idx, slot) == 0 do
+        {:halt, {:ok, slot}}
+      else
+        {:cont, :full}
+      end
+    end)
+  end
+
+  defp cko_bucket_contains?(%CkoCtx{} = ctx, bucket_idx, fingerprint) do
+    Enum.any?(0..(ctx.bucket_size - 1), fn slot ->
+      cko_read_slot(ctx, bucket_idx, slot) == fingerprint
+    end)
+  end
+
+  defp cko_find_fp_slot(%CkoCtx{} = ctx, bucket_idx, fingerprint) do
+    Enum.reduce_while(0..(ctx.bucket_size - 1), nil, fn slot, _acc ->
+      if cko_read_slot(ctx, bucket_idx, slot) == fingerprint do
+        {:halt, slot}
+      else
+        {:cont, nil}
+      end
+    end)
+  end
+
+  defp cko_kick_insert(%CkoCtx{} = ctx, i1, i2, fp) do
+    evict_bucket = if rem(fp, 2) == 0, do: i1, else: i2
+    cko_kick_loop(ctx, evict_bucket, fp, 0)
+  end
+
+  defp cko_kick_loop(%CkoCtx{max_kicks: max_kicks}, _bucket, _fp, kick_count)
+       when kick_count >= max_kicks do
+    {:error, :full}
+  end
+
+  defp cko_kick_loop(%CkoCtx{} = ctx, bucket, fp, kick_count) do
+    evict_slot = rem(fp + kick_count, ctx.bucket_size)
+
+    old_fp = cko_read_slot(ctx, bucket, evict_slot)
+    ctx = cko_write_slot(ctx, bucket, evict_slot, fp)
+
+    alt_bucket = cko_alt_index(bucket, old_fp, ctx.bucket_count)
+
+    case cko_find_empty_slot(ctx, alt_bucket) do
+      {:ok, slot} ->
+        ctx = cko_write_slot(ctx, alt_bucket, slot, old_fp)
+        {:ok, cko_encode(%{ctx | item_count: ctx.item_count + 1})}
+
+      :full ->
+        cko_kick_loop(ctx, alt_bucket, old_fp, kick_count + 1)
+    end
+  end
+
+  # ============================================================
   # FrequentItems Implementation (SpaceSaving)
   # ============================================================
   #
