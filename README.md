@@ -3,9 +3,10 @@
 Production-grade streaming data sketching algorithms for Elixir.
 
 ExDataSketch provides probabilistic data structures for approximate counting,
-frequency estimation, and quantile computation on streaming data. All sketch
-state is stored as Elixir-owned binaries, enabling straightforward
-serialization, distribution, and persistence.
+frequency estimation, quantile computation, heavy-hitter detection, and
+membership testing on streaming data. All sketch state is stored as
+Elixir-owned binaries, enabling straightforward serialization, distribution,
+and persistence.
 
 [![CI](https://github.com/thanos/ex_data_sketch/actions/workflows/ci.yml/badge.svg)](https://github.com/thanos/ex_data_sketch/actions/workflows/ci.yml)
 [![Hex version](https://img.shields.io/hexpm/v/ex_data_sketch.svg)](https://hex.pm/packages/ex_data_sketch)
@@ -22,6 +23,8 @@ serialization, distribution, and persistence.
 | Theta Sketch | Set operations on cardinalities | Implemented (Pure + Rust) |
 | KLL Quantiles | Rank and quantile estimation | Implemented (Pure + Rust) |
 | DDSketch | Relative-error quantile estimation | Implemented (Pure + Rust) |
+| FrequentItems (SpaceSaving) | Heavy-hitter / top-k detection | Implemented (Pure + Rust) |
+| Bloom Filter | Probabilistic membership testing | Implemented (Pure) |
 
 ## Installation
 
@@ -30,7 +33,7 @@ Add `ex_data_sketch` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:ex_data_sketch, "~> 0.2.1"}
+    {:ex_data_sketch, "~> 0.4.0"}
   ]
 end
 ```
@@ -46,6 +49,12 @@ ExDataSketch.HLL.estimate(hll)  # ~100_000
 kll = ExDataSketch.KLL.new() |> ExDataSketch.KLL.update_many(1..100_000)
 ExDataSketch.KLL.quantile(kll, 0.5)   # approximate median (~50_000)
 ExDataSketch.KLL.quantile(kll, 0.99)  # 99th percentile (~99_000)
+
+# Bloom: membership testing
+bloom = ExDataSketch.Bloom.new(capacity: 100_000)
+bloom = ExDataSketch.Bloom.put_many(bloom, 1..50_000)
+ExDataSketch.Bloom.member?(bloom, 42)      # true
+ExDataSketch.Bloom.member?(bloom, 99_999)  # false (probably)
 ```
 
 See the [Quick Start Guide](guides/quick_start.md) for more examples.
@@ -94,6 +103,17 @@ mix bench
 # Generate docs
 mix docs
 ```
+
+## Roadmap
+
+| Version | Focus | Status |
+|---------|-------|--------|
+| v0.1.0 | Core sketches (HLL, CMS, Theta) + Rust NIFs | Released |
+| v0.2.0 | KLL quantiles | Released |
+| v0.2.1 | DDSketch relative-error quantiles | Released |
+| v0.3.0 | FrequentItems (SpaceSaving) | Released |
+| v0.4.0 | Bloom filter (membership testing) | Released |
+| v0.5.0 | Cuckoo filter (membership with deletion) | Planned |
 
 ## License
 

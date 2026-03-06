@@ -84,6 +84,25 @@ Frequency estimates are always upper bounds -- the true frequency may be
 lower, but never higher. The `lower` field gives a guaranteed lower bound:
 `max(estimate - error, 0)`.
 
+### Bloom Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `:capacity` | pos_integer | 10,000 | Expected number of items to insert. Used to derive optimal bit_count and hash_count. |
+| `:false_positive_rate` | float | 0.01 | Target false positive probability. Must be in (0.0, 1.0). |
+| `:seed` | non_neg_integer | 0 | Hash seed. Filters with different seeds cannot be merged. |
+| `:backend` | module | `ExDataSketch.Backend.Pure` | Backend module for computation. |
+
+Bloom filters provide probabilistic membership testing: `member?/2` returns
+`true` if an item was probably inserted, or `false` if it was definitely not.
+False positives are possible; false negatives are not.
+
+Parameters are derived automatically:
+- `bit_count = ceil(-capacity * ln(fpr) / ln(2)^2)`
+- `hash_count = max(1, round(bit_count / capacity * ln(2)))`, clamped to 1..30
+
+For capacity=100,000 and fpr=0.01: bit_count=958,506, hash_count=7, ~117 KB.
+
 ### KLL vs DDSketch
 
 Both are quantile sketches available through `ExDataSketch.Quantiles`, but they
@@ -241,7 +260,7 @@ The EXSK format structure:
 |-------|------|-------------|
 | Magic | 4 bytes | `"EXSK"` |
 | Version | 1 byte | Format version (currently 1) |
-| Sketch ID | 1 byte | Identifies sketch type (HLL=1, CMS=2, Theta=3, KLL=4, DDSketch=5, FrequentItems=6) |
+| Sketch ID | 1 byte | Identifies sketch type (HLL=1, CMS=2, Theta=3, KLL=4, DDSketch=5, FrequentItems=6, Bloom=7) |
 | Params length | 4 bytes | Little-endian u32, byte length of params |
 | Params | variable | Sketch-specific parameters |
 | State length | 4 bytes | Little-endian u32, byte length of state |
