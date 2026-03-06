@@ -459,6 +459,31 @@ defmodule ExDataSketch.Backend.Rust do
   @impl true
   def fi_entry_count(state_bin, opts), do: Pure.fi_entry_count(state_bin, opts)
 
+  # -- Quotient callbacks --
+
+  @impl true
+  def quotient_new(opts), do: Pure.quotient_new(opts)
+
+  @impl true
+  def quotient_put(state_bin, hash64, opts), do: Pure.quotient_put(state_bin, hash64, opts)
+
+  @impl true
+  def quotient_put_many(state_bin, hashes, opts),
+    do: Pure.quotient_put_many(state_bin, hashes, opts)
+
+  @impl true
+  def quotient_member?(state_bin, hash64, opts),
+    do: Pure.quotient_member?(state_bin, hash64, opts)
+
+  @impl true
+  def quotient_delete(state_bin, hash64, opts), do: Pure.quotient_delete(state_bin, hash64, opts)
+
+  @impl true
+  def quotient_merge(state_a, state_b, opts), do: Pure.quotient_merge(state_a, state_b, opts)
+
+  @impl true
+  def quotient_count(state_bin, opts), do: Pure.quotient_count(state_bin, opts)
+
   # -- Private helpers --
 
   defp encode_f64s(values) do

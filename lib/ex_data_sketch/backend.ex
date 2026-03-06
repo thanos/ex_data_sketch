@@ -215,6 +215,29 @@ defmodule ExDataSketch.Backend do
   @doc "Return the number of stored items from Cuckoo state."
   @callback cuckoo_count(state_bin(), opts()) :: non_neg_integer()
 
+  # -- Quotient callbacks --
+
+  @doc "Create a new Quotient filter state binary with the given options."
+  @callback quotient_new(opts()) :: state_bin()
+
+  @doc "Insert a single hash64 into Quotient state."
+  @callback quotient_put(state_bin(), hash64(), opts()) :: state_bin()
+
+  @doc "Insert a list of hash64 values into Quotient state."
+  @callback quotient_put_many(state_bin(), [hash64()], opts()) :: state_bin()
+
+  @doc "Test membership of a single hash64 value in Quotient state."
+  @callback quotient_member?(state_bin(), hash64(), opts()) :: boolean()
+
+  @doc "Delete a single hash64 from Quotient state."
+  @callback quotient_delete(state_bin(), hash64(), opts()) :: state_bin()
+
+  @doc "Merge two Quotient state binaries."
+  @callback quotient_merge(state_bin(), state_bin(), opts()) :: state_bin()
+
+  @doc "Return the number of stored items from Quotient state."
+  @callback quotient_count(state_bin(), opts()) :: non_neg_integer()
+
   @doc """
   Returns the default backend module.
 

@@ -2129,4 +2129,601 @@ defmodule ExDataSketch.Backend.Pure do
     end)
     |> IO.iodata_to_binary()
   end
+
+  # ============================================================
+  # Quotient Filter Implementation
+  # ============================================================
+  #
+  # Binary layout (QOT1):
+  #   HEADER (32 bytes, all little-endian):
+  #     0:4   magic         "QOT1"
+  #     4:1   version       u8 = 1
+  #     5:1   q             u8 (quotient bits)
+  #     6:1   r             u8 (remainder bits)
+  #     7:1   flags         u8 = 0 (reserved)
+  #     8:4   slot_count    u32 (= 2^q)
+  #     12:4  item_count    u32
+  #     16:4  seed          u32
+  #     20:12 reserved      must be 0
+  #
+  #   BODY (slot_count slots, each (3 + r) bits, byte-aligned):
+  #     Per slot: meta(3 bits) | remainder(r bits), packed into ceil((3+r)/8) bytes.
+  #     meta bit0 = is_occupied, bit1 = is_continuation, bit2 = is_shifted.
+
+  defmodule QotCtx do
+    @moduledoc false
+    defstruct [:q, :r, :slot_count, :item_count, :seed, :slot_bytes, :slots]
+  end
+
+  @qot_magic "QOT1"
+  @qot_version 1
+
+  @qot_occ 1
+  @qot_con 2
+  @qot_shi 4
+
+  @impl true
+  @spec quotient_new(keyword()) :: binary()
+  def quotient_new(opts) do
+    q = Keyword.fetch!(opts, :q)
+    r = Keyword.fetch!(opts, :r)
+    slot_count = Keyword.fetch!(opts, :slot_count)
+    seed = Keyword.get(opts, :seed, 0)
+
+    slot_bytes = div(3 + r + 7, 8)
+    body_size = slot_count * slot_bytes
+    body = :binary.copy(<<0>>, body_size)
+
+    <<
+      @qot_magic::binary,
+      @qot_version::unsigned-8,
+      q::unsigned-8,
+      r::unsigned-8,
+      0::unsigned-8,
+      slot_count::unsigned-little-32,
+      0::unsigned-little-32,
+      seed::unsigned-little-32,
+      0::unsigned-little-64,
+      0::unsigned-little-32,
+      body::binary
+    >>
+  end
+
+  @impl true
+  @spec quotient_put(binary(), non_neg_integer(), keyword()) :: binary()
+  def quotient_put(state_bin, hash64, _opts) do
+    ctx = qot_decode(state_bin)
+    {q, r} = qot_split_hash(ctx, hash64)
+
+    if qot_lookup?(ctx, q, r) do
+      qot_encode(ctx)
+    else
+      ctx = qot_do_insert(ctx, q, r)
+      qot_encode(%{ctx | item_count: ctx.item_count + 1})
+    end
+  end
+
+  @impl true
+  @spec quotient_put_many(binary(), [non_neg_integer()], keyword()) :: binary()
+  def quotient_put_many(state_bin, [], _opts), do: state_bin
+
+  def quotient_put_many(state_bin, hashes, _opts) do
+    ctx = qot_decode(state_bin)
+
+    ctx =
+      Enum.reduce(hashes, ctx, fn hash64, acc ->
+        {q, r} = qot_split_hash(acc, hash64)
+
+        if qot_lookup?(acc, q, r) do
+          acc
+        else
+          new_acc = qot_do_insert(acc, q, r)
+          %{new_acc | item_count: new_acc.item_count + 1}
+        end
+      end)
+
+    qot_encode(ctx)
+  end
+
+  @impl true
+  @spec quotient_member?(binary(), non_neg_integer(), keyword()) :: boolean()
+  def quotient_member?(state_bin, hash64, _opts) do
+    ctx = qot_decode(state_bin)
+    {q, r} = qot_split_hash(ctx, hash64)
+    qot_lookup?(ctx, q, r)
+  end
+
+  @impl true
+  @spec quotient_delete(binary(), non_neg_integer(), keyword()) :: binary()
+  def quotient_delete(state_bin, hash64, _opts) do
+    ctx = qot_decode(state_bin)
+    {q, r} = qot_split_hash(ctx, hash64)
+
+    case qot_find_slot(ctx, q, r) do
+      nil ->
+        qot_encode(ctx)
+
+      slot_idx ->
+        ctx = qot_do_delete(ctx, q, slot_idx)
+        qot_encode(%{ctx | item_count: max(ctx.item_count - 1, 0)})
+    end
+  end
+
+  @impl true
+  @spec quotient_merge(binary(), binary(), keyword()) :: binary()
+  def quotient_merge(state_a, state_b, _opts) do
+    ctx_a = qot_decode(state_a)
+    ctx_b = qot_decode(state_b)
+
+    fps_a = qot_extract_all(ctx_a)
+    fps_b = qot_extract_all(ctx_b)
+
+    all = merge_sorted_unique(fps_a, fps_b)
+
+    fresh =
+      qot_decode(
+        quotient_new(
+          q: ctx_a.q,
+          r: ctx_a.r,
+          slot_count: ctx_a.slot_count,
+          seed: ctx_a.seed
+        )
+      )
+
+    merged =
+      Enum.reduce(all, fresh, fn {fq, fr}, acc ->
+        acc = qot_do_insert(acc, fq, fr)
+        %{acc | item_count: acc.item_count + 1}
+      end)
+
+    qot_encode(merged)
+  end
+
+  @impl true
+  @spec quotient_count(binary(), keyword()) :: non_neg_integer()
+  def quotient_count(state_bin, _opts) do
+    <<_magic::binary-size(4), _version::8, _q::8, _r::8, _flags::8,
+      _slot_count::unsigned-little-32, item_count::unsigned-little-32, _rest::binary>> = state_bin
+
+    item_count
+  end
+
+  # -- Quotient: decode/encode --
+
+  defp qot_decode(state_bin) do
+    <<
+      @qot_magic::binary,
+      @qot_version::unsigned-8,
+      q::unsigned-8,
+      r::unsigned-8,
+      _flags::unsigned-8,
+      slot_count::unsigned-little-32,
+      item_count::unsigned-little-32,
+      seed::unsigned-little-32,
+      _reserved::binary-size(12),
+      body::binary
+    >> = state_bin
+
+    sb = div(3 + r + 7, 8)
+    slots = qot_body_to_tuple(body, sb, slot_count)
+
+    %QotCtx{
+      q: q,
+      r: r,
+      slot_count: slot_count,
+      item_count: item_count,
+      seed: seed,
+      slot_bytes: sb,
+      slots: slots
+    }
+  end
+
+  defp qot_body_to_tuple(body, sb, slot_count) do
+    qot_body_to_list(body, sb, slot_count, [])
+    |> :erlang.list_to_tuple()
+  end
+
+  defp qot_body_to_list(_body, _sb, 0, acc), do: Enum.reverse(acc)
+
+  defp qot_body_to_list(body, sb, remaining, acc) do
+    <<chunk::binary-size(sb), rest::binary>> = body
+
+    raw =
+      chunk
+      |> :binary.bin_to_list()
+      |> Enum.with_index()
+      |> Enum.reduce(0, fn {byte, i}, a -> a ||| byte <<< (i * 8) end)
+
+    meta = raw &&& 0x7
+    remainder = raw >>> 3
+    qot_body_to_list(rest, sb, remaining - 1, [{meta, remainder} | acc])
+  end
+
+  defp qot_encode(%QotCtx{} = ctx) do
+    body = qot_tuple_to_body(ctx.slots, ctx.slot_bytes, ctx.slot_count)
+
+    <<
+      @qot_magic::binary,
+      @qot_version::unsigned-8,
+      ctx.q::unsigned-8,
+      ctx.r::unsigned-8,
+      0::unsigned-8,
+      ctx.slot_count::unsigned-little-32,
+      ctx.item_count::unsigned-little-32,
+      ctx.seed::unsigned-little-32,
+      0::unsigned-little-64,
+      0::unsigned-little-32,
+      body::binary
+    >>
+  end
+
+  defp qot_tuple_to_body(slots, sb, count) do
+    for i <- 0..(count - 1), into: <<>> do
+      {meta, remainder} = :erlang.element(i + 1, slots)
+      raw = (meta &&& 0x7) ||| remainder <<< 3
+
+      for j <- 0..(sb - 1), into: <<>> do
+        <<raw >>> (j * 8) &&& 0xFF::8>>
+      end
+    end
+  end
+
+  defp qot_split_hash(%QotCtx{q: q, r: r}, hash64) do
+    quotient = hash64 >>> (64 - q) &&& (1 <<< q) - 1
+    remainder = hash64 >>> (64 - q - r) &&& (1 <<< r) - 1
+    {quotient, remainder}
+  end
+
+  # -- Quotient: slot access via tuple (O(1)) --
+
+  defp qot_get(ctx, i), do: :erlang.element(i + 1, ctx.slots)
+
+  defp qot_set(ctx, i, val) do
+    %{ctx | slots: :erlang.setelement(i + 1, ctx.slots, val)}
+  end
+
+  defp qot_meta(ctx, i) do
+    {m, _} = qot_get(ctx, i)
+    m
+  end
+
+  defp qot_rem(ctx, i) do
+    {_, r} = qot_get(ctx, i)
+    r
+  end
+
+  defp qot_occ?(ctx, i), do: (qot_meta(ctx, i) &&& @qot_occ) != 0
+  defp qot_con?(ctx, i), do: (qot_meta(ctx, i) &&& @qot_con) != 0
+  defp qot_shi?(ctx, i), do: (qot_meta(ctx, i) &&& @qot_shi) != 0
+
+  defp qot_nxt(ctx, i), do: rem(i + 1, ctx.slot_count)
+  defp qot_prv(ctx, i), do: rem(i - 1 + ctx.slot_count, ctx.slot_count)
+
+  defp qot_set_meta_bit(ctx, i, bit) do
+    {m, r} = qot_get(ctx, i)
+    qot_set(ctx, i, {m ||| bit, r})
+  end
+
+  defp qot_clr_meta_bit(ctx, i, bit) do
+    {m, r} = qot_get(ctx, i)
+    qot_set(ctx, i, {m &&& bnot(bit), r})
+  end
+
+  # -- Quotient: find run start --
+  # Given a quotient fq whose is_occupied bit is set, find the physical
+  # slot where fq's run begins.
+  #
+  # Algorithm:
+  #   1. Walk backward from fq to find the cluster start (first non-shifted slot).
+  #   2. Count occupied canonical slots in [cluster_start, fq) -- these are the
+  #      runs that precede fq's run in the cluster.
+  #   3. Walk forward from cluster_start, skipping that many runs.
+
+  defp qot_find_run_start(ctx, fq) do
+    if qot_shi?(ctx, fq) do
+      cs = qot_walk_back(ctx, fq)
+      n = qot_count_occupied_range(ctx, cs, fq)
+      qot_skip_runs_fwd(ctx, cs, n)
+    else
+      fq
+    end
+  end
+
+  defp qot_walk_back(ctx, i) do
+    p = qot_prv(ctx, i)
+    if qot_shi?(ctx, p), do: qot_walk_back(ctx, p), else: p
+  end
+
+  # Count occupied canonical slots in [from, to) with wraparound.
+  defp qot_count_occupied_range(_ctx, from, to) when from == to, do: 0
+
+  defp qot_count_occupied_range(ctx, from, to) do
+    add = if qot_occ?(ctx, from), do: 1, else: 0
+    add + qot_count_occupied_range(ctx, qot_nxt(ctx, from), to)
+  end
+
+  # Skip n runs forward from pos. Each run ends when the next entry
+  # does not have is_continuation set.
+  defp qot_skip_runs_fwd(_ctx, pos, 0), do: pos
+
+  defp qot_skip_runs_fwd(ctx, pos, n) do
+    nxt = qot_nxt(ctx, pos)
+    nxt = qot_skip_continuations(ctx, nxt)
+    qot_skip_runs_fwd(ctx, nxt, n - 1)
+  end
+
+  defp qot_skip_continuations(ctx, pos) do
+    if qot_con?(ctx, pos), do: qot_skip_continuations(ctx, qot_nxt(ctx, pos)), else: pos
+  end
+
+  # -- Quotient: lookup --
+
+  defp qot_lookup?(ctx, fq, fr) do
+    if qot_occ?(ctx, fq) do
+      rs = qot_find_run_start(ctx, fq)
+      qot_scan_run(ctx, rs, fr)
+    else
+      false
+    end
+  end
+
+  defp qot_scan_run(ctx, pos, fr) do
+    r = qot_rem(ctx, pos)
+
+    cond do
+      r == fr ->
+        true
+
+      r > fr ->
+        false
+
+      true ->
+        nxt = qot_nxt(ctx, pos)
+        if qot_con?(ctx, nxt), do: qot_scan_run(ctx, nxt, fr), else: false
+    end
+  end
+
+  # Find the slot index of fr in fq's run, or nil.
+  defp qot_find_slot(ctx, fq, fr) do
+    if qot_occ?(ctx, fq) do
+      rs = qot_find_run_start(ctx, fq)
+      qot_scan_run_idx(ctx, rs, fr)
+    else
+      nil
+    end
+  end
+
+  defp qot_scan_run_idx(ctx, pos, fr) do
+    r = qot_rem(ctx, pos)
+
+    cond do
+      r == fr ->
+        pos
+
+      r > fr ->
+        nil
+
+      true ->
+        nxt = qot_nxt(ctx, pos)
+        if qot_con?(ctx, nxt), do: qot_scan_run_idx(ctx, nxt, fr), else: nil
+    end
+  end
+
+  # -- Quotient: insert --
+  # Key invariant: is_occupied belongs to the POSITION, not the entry.
+  # During shift-right, is_occupied stays at each position while the
+  # entry (is_continuation, is_shifted, remainder) moves.
+
+  defp qot_do_insert(ctx, fq, fr) do
+    was_occ = qot_occ?(ctx, fq)
+    had_entry = qot_meta(ctx, fq) != 0
+
+    # Mark canonical slot as occupied
+    ctx = qot_set_meta_bit(ctx, fq, @qot_occ)
+
+    cond do
+      not was_occ and not had_entry ->
+        # Fast path: canonical slot was completely empty
+        qot_set(ctx, fq, {@qot_occ, fr})
+
+      was_occ ->
+        run_start = qot_find_run_start(ctx, fq)
+        qot_insert_into_run(ctx, fq, run_start, fr)
+
+      true ->
+        # New run: insert first entry at run_start
+        run_start = qot_find_run_start(ctx, fq)
+        meta = if run_start == fq, do: 0, else: @qot_shi
+        qot_shift_right(ctx, run_start, meta, fr)
+    end
+  end
+
+  defp qot_insert_into_run(ctx, fq, run_start, fr) do
+    {pos, at_start} = qot_sorted_pos(ctx, run_start, fr)
+
+    if at_start do
+      # Inserting before the current first element of the run.
+      # The old first element becomes a continuation.
+      ctx = qot_set_meta_bit(ctx, run_start, @qot_con)
+      meta = if pos == fq, do: 0, else: @qot_shi
+      qot_shift_right(ctx, pos, meta, fr)
+    else
+      # Inserting in the middle or after the end of the run.
+      meta = @qot_con ||| if(pos == fq, do: 0, else: @qot_shi)
+      qot_shift_right(ctx, pos, meta, fr)
+    end
+  end
+
+  # Find where to insert fr in a run. Returns {position, at_start?}.
+  defp qot_sorted_pos(ctx, run_start, fr) do
+    if fr < qot_rem(ctx, run_start) do
+      {run_start, true}
+    else
+      qot_sorted_pos_cont(ctx, run_start, fr)
+    end
+  end
+
+  defp qot_sorted_pos_cont(ctx, pos, fr) do
+    nxt = qot_nxt(ctx, pos)
+
+    if qot_con?(ctx, nxt) do
+      if fr < qot_rem(ctx, nxt),
+        do: {nxt, false},
+        else: qot_sorted_pos_cont(ctx, nxt, fr)
+    else
+      {nxt, false}
+    end
+  end
+
+  # Shift right: insert {new_meta, new_rem} at pos, pushing existing
+  # entries rightward. is_occupied at each position is preserved.
+  defp qot_shift_right(ctx, pos, new_meta, new_rem) do
+    {old_meta, old_rem} = qot_get(ctx, pos)
+    occ_here = old_meta &&& @qot_occ
+    ctx = qot_set(ctx, pos, {new_meta ||| occ_here, new_rem})
+
+    if old_meta == 0 do
+      ctx
+    else
+      # Strip is_occupied (stays at position), set is_shifted
+      entry_meta = (old_meta &&& bnot(@qot_occ)) ||| @qot_shi
+      qot_shift_chain(ctx, qot_nxt(ctx, pos), entry_meta, old_rem)
+    end
+  end
+
+  defp qot_shift_chain(ctx, pos, meta, remainder) do
+    {old_meta, old_rem} = qot_get(ctx, pos)
+    occ_here = old_meta &&& @qot_occ
+    ctx = qot_set(ctx, pos, {meta ||| occ_here, remainder})
+
+    if old_meta == 0 do
+      ctx
+    else
+      entry_meta = (old_meta &&& bnot(@qot_occ)) ||| @qot_shi
+      qot_shift_chain(ctx, qot_nxt(ctx, pos), entry_meta, old_rem)
+    end
+  end
+
+  # -- Quotient: delete --
+
+  defp qot_do_delete(ctx, fq, slot_idx) do
+    run_start = qot_find_run_start(ctx, fq)
+    nxt = qot_nxt(ctx, slot_idx)
+    is_first = slot_idx == run_start
+    nxt_is_con = qot_con?(ctx, nxt)
+    is_only = is_first and not nxt_is_con
+
+    # If removing the only entry in the run, clear is_occupied
+    ctx = if is_only, do: qot_clr_meta_bit(ctx, fq, @qot_occ), else: ctx
+
+    # If removing the first entry but not the only, next becomes first (clear continuation)
+    ctx = if is_first and nxt_is_con, do: qot_clr_meta_bit(ctx, nxt, @qot_con), else: ctx
+
+    # Shift left to fill the gap
+    qot_shift_left(ctx, slot_idx)
+  end
+
+  # Shift left from pos: move shifted entries leftward to fill gap.
+  # is_occupied at each position is preserved.
+  defp qot_shift_left(ctx, pos) do
+    nxt = qot_nxt(ctx, pos)
+    nxt_meta = qot_meta(ctx, nxt)
+    occ_here = qot_meta(ctx, pos) &&& @qot_occ
+
+    cond do
+      nxt_meta == 0 ->
+        # Next slot is empty. Clear this slot (preserve is_occupied).
+        qot_set(ctx, pos, {occ_here, 0})
+
+      (nxt_meta &&& @qot_shi) == 0 ->
+        # Next entry is not shifted (at its canonical position). Stop.
+        qot_set(ctx, pos, {occ_here, 0})
+
+      true ->
+        # Move next entry here, preserving is_occupied at pos
+        entry_meta = nxt_meta &&& bnot(@qot_occ)
+        nxt_rem = qot_rem(ctx, nxt)
+        ctx = qot_set(ctx, pos, {occ_here ||| entry_meta, nxt_rem})
+        qot_shift_left(ctx, nxt)
+    end
+  end
+
+  # -- Quotient: extract all fingerprints (for merge) --
+
+  defp qot_extract_all(ctx) do
+    {fps, _} =
+      Enum.reduce(0..(ctx.slot_count - 1), {[], nil}, fn i, {acc, cur_q} ->
+        qot_extract_slot(ctx, i, acc, cur_q)
+      end)
+
+    fps |> Enum.reverse() |> Enum.sort() |> Enum.uniq()
+  end
+
+  defp qot_extract_slot(ctx, i, acc, cur_q) do
+    m = qot_meta(ctx, i)
+
+    if m == 0 do
+      {acc, nil}
+    else
+      q = qot_resolve_quotient(ctx, i, m, cur_q)
+      {[{q, qot_rem(ctx, i)} | acc], q}
+    end
+  end
+
+  defp qot_resolve_quotient(ctx, i, m, cur_q) do
+    is_con = (m &&& @qot_con) != 0
+    is_shi = (m &&& @qot_shi) != 0
+
+    cond do
+      is_con -> cur_q
+      not is_shi -> i
+      true -> qot_trace_quotient_for(ctx, i)
+    end
+  end
+
+  # Determine which quotient the entry at slot_idx belongs to.
+  # The entry is the first of its run (not continuation) but is shifted.
+  defp qot_trace_quotient_for(ctx, slot_idx) do
+    cs = qot_walk_back_to_start(ctx, slot_idx)
+    qot_trace_walk(ctx, cs, cs, slot_idx)
+  end
+
+  defp qot_walk_back_to_start(ctx, i) do
+    if qot_shi?(ctx, i), do: qot_walk_back_to_start(ctx, qot_prv(ctx, i)), else: i
+  end
+
+  defp qot_trace_walk(_ctx, pos, cur_q, target) when pos == target, do: cur_q
+
+  defp qot_trace_walk(ctx, pos, cur_q, target) do
+    nxt = qot_nxt(ctx, pos)
+
+    new_q =
+      if qot_con?(ctx, nxt),
+        do: cur_q,
+        else: qot_next_occ_canonical(ctx, cur_q)
+
+    qot_trace_walk(ctx, nxt, new_q, target)
+  end
+
+  defp qot_next_occ_canonical(ctx, cur_q) do
+    qot_find_occ(ctx, qot_nxt(ctx, cur_q), ctx.slot_count)
+  end
+
+  defp qot_find_occ(_ctx, _pos, 0), do: 0
+
+  defp qot_find_occ(ctx, pos, remaining) do
+    if qot_occ?(ctx, pos), do: pos, else: qot_find_occ(ctx, qot_nxt(ctx, pos), remaining - 1)
+  end
+
+  # Merge two sorted lists of {quotient, remainder} tuples, removing duplicates
+  defp merge_sorted_unique([], b), do: b
+  defp merge_sorted_unique(a, []), do: a
+
+  defp merge_sorted_unique([ha | ta], [hb | tb]) do
+    cond do
+      ha < hb -> [ha | merge_sorted_unique(ta, [hb | tb])]
+      ha > hb -> [hb | merge_sorted_unique([ha | ta], tb)]
+      true -> [ha | merge_sorted_unique(ta, tb)]
+    end
+  end
 end
