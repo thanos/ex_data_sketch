@@ -9,7 +9,8 @@ defmodule ExDataSketch.TestVectors do
   Returns a list of `{filename, map}` tuples.
   """
   @spec load_vectors(String.t()) :: [{String.t(), map()}]
-  def load_vectors(algorithm) when algorithm in ["hll", "cms", "theta", "kll", "ddsketch"] do
+  def load_vectors(algorithm)
+      when algorithm in ["hll", "cms", "theta", "kll", "ddsketch", "frequent_items"] do
     dir = Path.join(@vectors_dir, algorithm)
 
     dir
@@ -94,6 +95,7 @@ defmodule ExDataSketch.TestVectors do
   def normalize_opts("theta", %{"k" => k}), do: [k: k]
   def normalize_opts("kll", %{"k" => k}), do: [k: k]
   def normalize_opts("ddsketch", %{"alpha" => alpha}), do: [alpha: alpha]
+  def normalize_opts("frequent_items", %{"k" => k}), do: [k: k]
 
   # -- Private --
 
@@ -102,8 +104,14 @@ defmodule ExDataSketch.TestVectors do
   defp sketch_module("theta"), do: ExDataSketch.Theta
   defp sketch_module("kll"), do: ExDataSketch.KLL
   defp sketch_module("ddsketch"), do: ExDataSketch.DDSketch
+  defp sketch_module("frequent_items"), do: ExDataSketch.FrequentItems
 
   defp build_sketch(mod, opts, []), do: mod.new(opts)
+
+  defp build_sketch(ExDataSketch.FrequentItems, opts, items) do
+    # FrequentItems takes string items directly (no hashing)
+    ExDataSketch.FrequentItems.from_enumerable(items, opts)
+  end
 
   defp build_sketch(ExDataSketch.KLL, opts, items) do
     # KLL takes numeric values directly (no hashing)
@@ -242,6 +250,55 @@ defmodule ExDataSketch.TestVectors do
         # For empty/single CMS vectors, check a known item
         if is_number(estimate) do
           :ok
+        end
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp assert_estimate(ExDataSketch.FrequentItems, sketch, expected, _vector, context) do
+    if expected["count"] do
+      actual_count = ExDataSketch.FrequentItems.count(sketch)
+
+      ExUnit.Assertions.assert(
+        actual_count == expected["count"],
+        "FrequentItems count mismatch for #{context}: expected #{expected["count"]}, got #{actual_count}"
+      )
+    end
+
+    if expected["entry_count"] do
+      actual_ec = ExDataSketch.FrequentItems.entry_count(sketch)
+
+      ExUnit.Assertions.assert(
+        actual_ec == expected["entry_count"],
+        "FrequentItems entry_count mismatch for #{context}: expected #{expected["entry_count"]}, got #{actual_ec}"
+      )
+    end
+
+    case expected["top_k"] do
+      [_ | _] = expected_top ->
+        actual_top = ExDataSketch.FrequentItems.top_k(sketch)
+
+        for {expected_entry, i} <- Enum.with_index(expected_top) do
+          actual_entry = Enum.at(actual_top, i)
+
+          ExUnit.Assertions.assert(
+            actual_entry != nil,
+            "FrequentItems top_k[#{i}] missing for #{context}"
+          )
+
+          ExUnit.Assertions.assert(
+            actual_entry.item == expected_entry["item"],
+            "FrequentItems top_k[#{i}].item mismatch for #{context}: " <>
+              "expected #{inspect(expected_entry["item"])}, got #{inspect(actual_entry.item)}"
+          )
+
+          ExUnit.Assertions.assert(
+            actual_entry.estimate == expected_entry["estimate"],
+            "FrequentItems top_k[#{i}].estimate mismatch for #{context}: " <>
+              "expected #{expected_entry["estimate"]}, got #{actual_entry.estimate}"
+          )
         end
 
       _ ->
