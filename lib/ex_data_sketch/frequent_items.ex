@@ -41,11 +41,16 @@ defmodule ExDataSketch.FrequentItems do
 
   ## Merge Properties
 
-  FrequentItems merge is **commutative** and **associative**. Both sketches
-  must have the same `k` parameter. Merge combines counts additively across
-  the union of keys, then performs canonical replay (weighted updates in
-  sorted key order into an empty k-capacity sketch) to enforce the capacity
-  invariant. See `docs/frequent_items_format.md` for the formal argument.
+  FrequentItems merge is **commutative**. Both sketches must have the same
+  `k` and `key_encoding` parameters. Merge combines counts and errors
+  additively across the union of keys, then retains the top-k entries by
+  count (ties broken by lexicographically smallest key) to enforce the
+  capacity invariant. Count (`n`) is always exactly additive regardless of
+  whether entries are dropped.
+
+  Associativity holds for count totals but not necessarily for the retained
+  entry set, since intermediate merges may drop entries that a different
+  grouping would retain. See `docs/frequent_items_format.md` for details.
 
   ## Binary State Format (FI1)
 
@@ -147,11 +152,13 @@ defmodule ExDataSketch.FrequentItems do
   @doc """
   Merges two FrequentItems sketches.
 
-  Both sketches must have the same `k` parameter. The merge combines counts
-  additively and performs canonical replay to enforce the capacity invariant.
+  Both sketches must have the same `k` and `key_encoding` parameters. The
+  merge combines counts and errors additively across the union of tracked
+  items, then retains the top-k entries by count to enforce the capacity
+  invariant.
 
   Raises `ExDataSketch.Errors.IncompatibleSketchesError` if the sketches
-  have different `k` values.
+  have different `k` or `key_encoding` values.
 
   ## Examples
 
@@ -170,6 +177,12 @@ defmodule ExDataSketch.FrequentItems do
     if opts_a[:k] != opts_b[:k] do
       raise Errors.IncompatibleSketchesError,
         reason: "FrequentItems k mismatch: #{opts_a[:k]} vs #{opts_b[:k]}"
+    end
+
+    if opts_a[:key_encoding] != opts_b[:key_encoding] do
+      raise Errors.IncompatibleSketchesError,
+        reason:
+          "FrequentItems key_encoding mismatch: #{inspect(opts_a[:key_encoding])} vs #{inspect(opts_b[:key_encoding])}"
     end
 
     new_state = backend.fi_merge(state_a, state_b, opts_a)
@@ -450,7 +463,7 @@ defmodule ExDataSketch.FrequentItems do
   defp decode_key(<<value::signed-little-64>>, :int), do: value
 
   defp decode_key(item_bytes, {:term, :external}) do
-    :erlang.binary_to_term(item_bytes)
+    :erlang.binary_to_term(item_bytes, [:safe])
   end
 
   defp validate_sketch_id(6), do: :ok

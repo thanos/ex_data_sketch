@@ -212,6 +212,15 @@ defmodule ExDataSketch.FrequentItemsTest do
       assert FrequentItems.entry_count(merged) == 4
     end
 
+    test "key_encoding mismatch raises IncompatibleSketchesError" do
+      a = FrequentItems.new(k: 5, key_encoding: :binary)
+      b = FrequentItems.new(k: 5, key_encoding: :int)
+
+      assert_raise ExDataSketch.Errors.IncompatibleSketchesError, ~r/key_encoding mismatch/, fn ->
+        FrequentItems.merge(a, b)
+      end
+    end
+
     test "k mismatch raises IncompatibleSketchesError" do
       a = FrequentItems.new(k: 5)
       b = FrequentItems.new(k: 10)

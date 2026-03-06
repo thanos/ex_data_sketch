@@ -81,41 +81,42 @@ When serialized through the EXSK envelope format, FrequentItems uses:
 
 ### Merge Operation
 
-Given sketches A and B with the same capacity k:
+Given sketches A and B with the same capacity k and key_encoding:
 
 1. Compute the union of keys from both entry maps.
 2. For each key, sum counts and errors additively:
    - `count_merged[key] = count_a[key] + count_b[key]`
    - `error_merged[key] = error_a[key] + error_b[key]`
    (Missing keys contribute 0 for both count and error.)
-3. If the union has more than k entries, perform canonical replay:
-   insert all weighted entries into a fresh k-capacity sketch in sorted
-   key order using weighted SpaceSaving updates.
-4. Set `n_merged = n_a + n_b`.
+3. If the union has more than k entries, retain only the k entries with
+   the highest counts. Ties are broken by keeping the entry with the
+   lexicographically smallest `item_bytes`. Dropped entries are discarded.
+4. Sort retained entries by `item_bytes` ascending for canonical encoding.
+5. Set `n_merged = n_a + n_b`.
 
 ### Commutativity
 
 `merge(A, B) == merge(B, A)` because:
 - Additive count/error combination is commutative (addition is commutative).
-- Canonical replay processes keys in sorted order regardless of input order.
-- Deterministic tie-breaking (lexicographic smallest) is order-independent.
+- The top-k selection sorts by `{-count, item_bytes}`, which is a
+  deterministic total order independent of input order.
+- Canonical encoding sorts by `item_bytes` ascending.
 
 ### Associativity
 
-`merge(merge(A, B), C) == merge(A, merge(B, C))` because:
-- The canonical replay produces a deterministic result for any given
-  combined entry set.
-- Sorted key order and deterministic eviction ensure the same final state
-  regardless of grouping.
+Merge is **not** exactly associative at the binary level. When an
+intermediate merge drops entries to enforce the k-capacity limit, those
+entries' counts are lost. A different grouping may drop different entries,
+leading to different retained sets.
 
-**Caveat**: Associativity holds exactly for the binary representation.
-The estimates returned by merged sketches are approximate -- the error
-bounds may differ from a sketch built from the original stream, but the
-merge result is a valid SpaceSaving state with correct error accounting.
+However, the following properties hold regardless of grouping:
+- `count(merge(merge(A, B), C)) == count(merge(A, merge(B, C)))` --
+  the total count `n` is always exactly additive.
+- `entry_count(result) <= k` -- the capacity invariant is preserved.
 
 ### Identity
 
 `merge(empty, S) == S` because:
 - An empty sketch contributes no entries and n=0.
 - The additive combination with zero is identity.
-- No eviction is triggered since entry_count <= k.
+- No entries are dropped since entry_count <= k.
