@@ -1428,4 +1428,211 @@ defmodule ExDataSketch.Backend.Pure do
   defp dds_bucket_midpoint(gamma, index) do
     2.0 * :math.pow(gamma, index + 1) / (gamma + 1.0)
   end
+
+  # ============================================================
+  # FrequentItems Implementation (SpaceSaving)
+  # ============================================================
+  #
+  # Binary layout (FI1):
+  #   HEADER (32 bytes, all little-endian):
+  #     0:4   magic         "FI1\0"
+  #     4:1   version       u8 = 1
+  #     5:1   flags         u8 (key encoding)
+  #     6:2   reserved      u16 = 0
+  #     8:4   k             u32
+  #     12:8  n             u64 (total observed items)
+  #     20:4  entry_count   u32
+  #     24:4  reserved2     u32 = 0
+  #     28:4  reserved3     u32 = 0
+  #
+  #   BODY (entry_count entries, sorted by item_bytes ascending):
+  #     item_len:4    u32
+  #     item_bytes    item_len bytes
+  #     count:8       u64
+  #     error:8       u64
+
+  @fi_magic "FI1\0"
+  @fi_version 1
+
+  @impl true
+  @spec fi_new(keyword()) :: binary()
+  def fi_new(opts) do
+    k = Keyword.fetch!(opts, :k)
+    flags = Keyword.get(opts, :flags, 0)
+    fi_encode_state(k, flags, 0, [])
+  end
+
+  @impl true
+  def fi_update(state_bin, item_bytes, opts) do
+    fi_update_many(state_bin, [item_bytes], opts)
+  end
+
+  @impl true
+  def fi_update_many(state_bin, items, _opts) do
+    {k, flags, n, entries} = fi_decode_state(state_bin)
+
+    # Pre-aggregate: count occurrences of each unique item_bytes
+    freq = Enum.frequencies(items)
+    batch_n = length(items)
+
+    # Apply weighted updates in sorted key order for determinism
+    updated_entries =
+      freq
+      |> Enum.sort_by(fn {ib, _w} -> ib end)
+      |> Enum.reduce(entries, fn {item_bytes, weight}, acc ->
+        fi_apply_weighted_update(acc, k, item_bytes, weight)
+      end)
+
+    fi_encode_state(k, flags, n + batch_n, updated_entries)
+  end
+
+  @impl true
+  def fi_merge(state_a, state_b, _opts) do
+    {k_a, flags, n_a, entries_a} = fi_decode_state(state_a)
+    {_k_b, _flags_b, n_b, entries_b} = fi_decode_state(state_b)
+
+    # Combine counts additively across union of keys
+    map_a = Map.new(entries_a)
+    map_b = Map.new(entries_b)
+
+    combined =
+      Map.merge(map_a, map_b, fn _key, {count_a, error_a}, {count_b, error_b} ->
+        {count_a + count_b, error_a + error_b}
+      end)
+
+    # Keep top-k by count (ties: smallest key), sort by key for canonical encoding
+    merged_entries =
+      if map_size(combined) <= k_a do
+        combined |> Enum.sort_by(fn {ib, _} -> ib end)
+      else
+        combined
+        |> Enum.sort_by(fn {ib, {count, _err}} -> {-count, ib} end)
+        |> Enum.take(k_a)
+        |> Enum.sort_by(fn {ib, _} -> ib end)
+      end
+
+    fi_encode_state(k_a, flags, n_a + n_b, merged_entries)
+  end
+
+  @impl true
+  def fi_estimate(state_bin, item_bytes, _opts) do
+    {_k, _flags, _n, entries} = fi_decode_state(state_bin)
+
+    case List.keyfind(entries, item_bytes, 0) do
+      {^item_bytes, {count, error}} ->
+        {:ok,
+         %{
+           estimate: count,
+           error: error,
+           lower: max(count - error, 0),
+           upper: count
+         }}
+
+      nil ->
+        {:error, :not_tracked}
+    end
+  end
+
+  @impl true
+  def fi_top_k(state_bin, limit, _opts) do
+    {_k, _flags, _n, entries} = fi_decode_state(state_bin)
+
+    entries
+    |> Enum.sort_by(fn {ib, {count, _error}} -> {-count, ib} end)
+    |> Enum.take(limit)
+    |> Enum.map(fn {item_bytes, {count, error}} ->
+      %{
+        item: item_bytes,
+        estimate: count,
+        error: error,
+        lower: max(count - error, 0),
+        upper: count
+      }
+    end)
+  end
+
+  @impl true
+  def fi_count(
+        <<@fi_magic, @fi_version, _flags::8, _reserved::16, _k::unsigned-little-32,
+          n::unsigned-little-64, _rest::binary>>,
+        _opts
+      ) do
+    n
+  end
+
+  @impl true
+  def fi_entry_count(
+        <<@fi_magic, @fi_version, _flags::8, _reserved::16, _k::unsigned-little-32,
+          _n::unsigned-little-64, entry_count::unsigned-little-32, _rest::binary>>,
+        _opts
+      ) do
+    entry_count
+  end
+
+  # -- FrequentItems private helpers --
+
+  defp fi_apply_weighted_update(entries, k, item_bytes, weight) do
+    case List.keyfind(entries, item_bytes, 0) do
+      {^item_bytes, {count, error}} ->
+        List.keyreplace(entries, item_bytes, 0, {item_bytes, {count + weight, error}})
+
+      nil when length(entries) < k ->
+        [{item_bytes, {weight, 0}} | entries]
+        |> Enum.sort_by(fn {ib, _} -> ib end)
+
+      nil ->
+        fi_evict_and_insert(entries, item_bytes, weight)
+    end
+  end
+
+  defp fi_evict_and_insert(entries, item_bytes, weight) do
+    {evicted_ib, {min_count, _min_error}} =
+      Enum.min_by(entries, fn {ib, {count, _err}} -> {count, ib} end)
+
+    remaining = List.keydelete(entries, evicted_ib, 0)
+
+    [{item_bytes, {min_count + weight, min_count}} | remaining]
+    |> Enum.sort_by(fn {ib, _} -> ib end)
+  end
+
+  defp fi_decode_state(
+         <<@fi_magic, @fi_version, flags::unsigned-8, _reserved::unsigned-little-16,
+           k::unsigned-little-32, n::unsigned-little-64, entry_count::unsigned-little-32,
+           _reserved2::unsigned-little-32, _reserved3::unsigned-little-32, body::binary>>
+       ) do
+    entries = fi_decode_entries(body, entry_count, [])
+    {k, flags, n, entries}
+  end
+
+  defp fi_decode_entries(_body, 0, acc), do: Enum.reverse(acc)
+
+  defp fi_decode_entries(
+         <<item_len::unsigned-little-32, item_bytes::binary-size(item_len),
+           count::unsigned-little-64, error::unsigned-little-64, rest::binary>>,
+         remaining,
+         acc
+       ) do
+    fi_decode_entries(rest, remaining - 1, [{item_bytes, {count, error}} | acc])
+  end
+
+  defp fi_encode_state(k, flags, n, entries) do
+    sorted = Enum.sort_by(entries, fn {ib, _} -> ib end)
+    entry_count = length(sorted)
+    body = fi_encode_entries(sorted)
+
+    <<@fi_magic::binary, @fi_version::unsigned-8, flags::unsigned-8, 0::unsigned-little-16,
+      k::unsigned-little-32, n::unsigned-little-64, entry_count::unsigned-little-32,
+      0::unsigned-little-32, 0::unsigned-little-32, body::binary>>
+  end
+
+  defp fi_encode_entries(entries) do
+    entries
+    |> Enum.map(fn {item_bytes, {count, error}} ->
+      item_len = byte_size(item_bytes)
+
+      <<item_len::unsigned-little-32, item_bytes::binary, count::unsigned-little-64,
+        error::unsigned-little-64>>
+    end)
+    |> IO.iodata_to_binary()
+  end
 end

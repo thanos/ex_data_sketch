@@ -17,7 +17,8 @@ scripts = [
   "bench/cms_bench.exs",
   "bench/theta_bench.exs",
   "bench/kll_bench.exs",
-  "bench/ddsketch_bench.exs"
+  "bench/ddsketch_bench.exs",
+  "bench/frequent_items_bench.exs"
 ]
 
 for script <- scripts do

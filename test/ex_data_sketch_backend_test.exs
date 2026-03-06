@@ -36,6 +36,14 @@ defmodule ExDataSketch.BackendTest.StubBackend do
   def ddsketch_count(_s, _o), do: 0
   def ddsketch_min(_s, _o), do: nil
   def ddsketch_max(_s, _o), do: nil
+  def fi_new(_opts), do: <<>>
+  def fi_update(s, _ib, _o), do: s
+  def fi_update_many(s, _items, _o), do: s
+  def fi_merge(s, _b, _o), do: s
+  def fi_estimate(_s, _ib, _o), do: {:error, :not_tracked}
+  def fi_top_k(_s, _l, _o), do: []
+  def fi_count(_s, _o), do: 0
+  def fi_entry_count(_s, _o), do: 0
 end
 
 defmodule ExDataSketch.BackendTest do
@@ -202,6 +210,45 @@ defmodule ExDataSketch.BackendTest do
 
       assert_raise ErlangError, fn ->
         ExDataSketch.Nif.ddsketch_merge_dirty_nif(<<>>, <<>>)
+      end
+    end
+
+    @tag :no_rust_nif
+    test "frequent_items stubs raise when NIF is not loaded" do
+      assert_raise ErlangError, fn ->
+        ExDataSketch.Nif.fi_new_nif(10, 0)
+      end
+
+      assert_raise ErlangError, fn ->
+        ExDataSketch.Nif.fi_update_many_nif(<<>>, <<>>)
+      end
+
+      assert_raise ErlangError, fn ->
+        ExDataSketch.Nif.fi_update_many_dirty_nif(<<>>, <<>>)
+      end
+
+      assert_raise ErlangError, fn ->
+        ExDataSketch.Nif.fi_merge_nif(<<>>, <<>>)
+      end
+
+      assert_raise ErlangError, fn ->
+        ExDataSketch.Nif.fi_merge_dirty_nif(<<>>, <<>>)
+      end
+
+      assert_raise ErlangError, fn ->
+        ExDataSketch.Nif.fi_estimate_nif(<<>>, <<>>)
+      end
+
+      assert_raise ErlangError, fn ->
+        ExDataSketch.Nif.fi_top_k_nif(<<>>, 10)
+      end
+
+      assert_raise ErlangError, fn ->
+        ExDataSketch.Nif.fi_count_nif(<<>>)
+      end
+
+      assert_raise ErlangError, fn ->
+        ExDataSketch.Nif.fi_entry_count_nif(<<>>)
       end
     end
   end

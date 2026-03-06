@@ -25,6 +25,9 @@ defmodule ExDataSketch.Backend.Rust do
   - `kll_merge`: 50,000 combined items
   - `ddsketch_update_many`: 10,000 values
   - `ddsketch_merge`: 50,000 combined count
+  - `fi_update_many`: 10,000 items
+  - `fi_merge`: 50,000 combined entries
+  - `fi_nif_query`: 256 (k threshold for `fi_top_k`/`fi_estimate`; below this, Pure is used)
 
   Override globally via application config:
 
@@ -49,7 +52,10 @@ defmodule ExDataSketch.Backend.Rust do
     kll_update_many: 10_000,
     kll_merge: 50_000,
     ddsketch_update_many: 10_000,
-    ddsketch_merge: 50_000
+    ddsketch_merge: 50_000,
+    fi_update_many: 10_000,
+    fi_merge: 50_000,
+    fi_nif_query: 256
   }
 
   @doc """
@@ -323,6 +329,81 @@ defmodule ExDataSketch.Backend.Rust do
   @impl true
   def ddsketch_max(state_bin, opts), do: Pure.ddsketch_max(state_bin, opts)
 
+  # -- FrequentItems callbacks --
+
+  @impl true
+  def fi_new(opts) do
+    k = Keyword.fetch!(opts, :k)
+    flags = Keyword.get(opts, :flags, 0)
+    unwrap_ok!(ExDataSketch.Nif.fi_new_nif(k, flags))
+  end
+
+  @impl true
+  def fi_update(state_bin, item_bytes, opts) do
+    fi_update_many(state_bin, [item_bytes], opts)
+  end
+
+  @impl true
+  def fi_update_many(state_bin, items, opts) do
+    packed_items_bin = encode_packed_items(items)
+    threshold = dirty_threshold(:fi_update_many, opts)
+
+    result =
+      if length(items) > threshold do
+        ExDataSketch.Nif.fi_update_many_dirty_nif(state_bin, packed_items_bin)
+      else
+        ExDataSketch.Nif.fi_update_many_nif(state_bin, packed_items_bin)
+      end
+
+    unwrap_ok!(result)
+  end
+
+  @impl true
+  def fi_merge(state_a, state_b, opts) do
+    threshold = dirty_threshold(:fi_merge, opts)
+
+    a_ec = fi_entry_count(state_a, opts)
+    b_ec = fi_entry_count(state_b, opts)
+
+    result =
+      if a_ec + b_ec > threshold do
+        ExDataSketch.Nif.fi_merge_dirty_nif(state_a, state_b)
+      else
+        ExDataSketch.Nif.fi_merge_nif(state_a, state_b)
+      end
+
+    unwrap_ok!(result)
+  end
+
+  @impl true
+  def fi_estimate(state_bin, item_bytes, opts) do
+    k = Keyword.fetch!(opts, :k)
+
+    if k >= dirty_threshold(:fi_nif_query, opts) do
+      ExDataSketch.Nif.fi_estimate_nif(state_bin, item_bytes)
+    else
+      Pure.fi_estimate(state_bin, item_bytes, opts)
+    end
+  end
+
+  @impl true
+  def fi_top_k(state_bin, limit, opts) do
+    k = Keyword.fetch!(opts, :k)
+
+    if k >= dirty_threshold(:fi_nif_query, opts) do
+      unwrap_ok!(ExDataSketch.Nif.fi_top_k_nif(state_bin, limit))
+    else
+      Pure.fi_top_k(state_bin, limit, opts)
+    end
+  end
+
+  # O(1) header reads — Pure always wins over NIF boundary crossing
+  @impl true
+  def fi_count(state_bin, opts), do: Pure.fi_count(state_bin, opts)
+
+  @impl true
+  def fi_entry_count(state_bin, opts), do: Pure.fi_entry_count(state_bin, opts)
+
   # -- Private helpers --
 
   defp encode_f64s(values) do
@@ -334,6 +415,14 @@ defmodule ExDataSketch.Backend.Rust do
   defp encode_hashes(hashes) do
     hashes
     |> Enum.map(fn h -> <<h::unsigned-little-64>> end)
+    |> IO.iodata_to_binary()
+  end
+
+  defp encode_packed_items(items) do
+    items
+    |> Enum.map(fn item ->
+      <<byte_size(item)::unsigned-little-32, item::binary>>
+    end)
     |> IO.iodata_to_binary()
   end
 

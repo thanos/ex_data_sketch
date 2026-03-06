@@ -64,7 +64,8 @@ defmodule ExDataSketch.MixProject do
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: :dev, runtime: false},
       {:jason, "~> 1.4"},
-      {:excoveralls, "~> 0.18", only: :test, runtime: false}
+      {:excoveralls, "~> 0.18", only: :test, runtime: false},
+      {:mox, "~> 1.0", only: :test}
     ]
   end
 
@@ -101,6 +102,7 @@ defmodule ExDataSketch.MixProject do
         "guides/quick_start.md",
         "guides/usage_guide.md",
         "guides/integrations.md",
+        "docs/frequent_items_format.md",
         "CHANGELOG.md"
       ],
       groups_for_extras: [
@@ -113,6 +115,7 @@ defmodule ExDataSketch.MixProject do
           ExDataSketch.Theta,
           ExDataSketch.KLL,
           ExDataSketch.DDSketch,
+          ExDataSketch.FrequentItems,
           ExDataSketch.Quantiles
         ],
         Infrastructure: [

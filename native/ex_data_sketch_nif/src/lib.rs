@@ -1,6 +1,7 @@
 mod cms;
 mod ddsketch;
 mod error;
+mod fi;
 mod hll;
 mod kll;
 mod theta;

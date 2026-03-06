@@ -57,4 +57,15 @@ defmodule ExDataSketch.Nif do
   def ddsketch_update_many_dirty_nif(_state_bin, _values_bin), do: :erlang.nif_error(:not_loaded)
   def ddsketch_merge_nif(_a_bin, _b_bin), do: :erlang.nif_error(:not_loaded)
   def ddsketch_merge_dirty_nif(_a_bin, _b_bin), do: :erlang.nif_error(:not_loaded)
+
+  # FrequentItems
+  def fi_new_nif(_k, _flags), do: :erlang.nif_error(:not_loaded)
+  def fi_update_many_nif(_state_bin, _packed_items_bin), do: :erlang.nif_error(:not_loaded)
+  def fi_update_many_dirty_nif(_state_bin, _packed_items_bin), do: :erlang.nif_error(:not_loaded)
+  def fi_merge_nif(_a_bin, _b_bin), do: :erlang.nif_error(:not_loaded)
+  def fi_merge_dirty_nif(_a_bin, _b_bin), do: :erlang.nif_error(:not_loaded)
+  def fi_estimate_nif(_state_bin, _item_bytes), do: :erlang.nif_error(:not_loaded)
+  def fi_top_k_nif(_state_bin, _limit), do: :erlang.nif_error(:not_loaded)
+  def fi_count_nif(_state_bin), do: :erlang.nif_error(:not_loaded)
+  def fi_entry_count_nif(_state_bin), do: :erlang.nif_error(:not_loaded)
 end

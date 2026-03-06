@@ -8,7 +8,7 @@ defmodule ExDataSketch.ParityTest do
   use ExUnit.Case, async: true
 
   alias ExDataSketch.Backend.{Pure, Rust}
-  alias ExDataSketch.{CMS, DDSketch, HLL, KLL, Theta}
+  alias ExDataSketch.{CMS, DDSketch, FrequentItems, HLL, KLL, Theta}
 
   # Deterministic input strings
   @items_1000 Enum.map(0..999, &"parity_item_#{&1}")
@@ -166,6 +166,57 @@ defmodule ExDataSketch.ParityTest do
       assert_in_delta DDSketch.quantile(pure_merged, 0.5),
                       DDSketch.quantile(rust_merged, 0.5),
                       1.0e-9
+    end
+  end
+
+  describe "FrequentItems parity" do
+    @describetag :rust_nif
+
+    @fi_items List.duplicate("a", 100) ++
+                List.duplicate("b", 60) ++
+                List.duplicate("c", 30) ++
+                List.duplicate("d", 10) ++
+                Enum.map(1..50, fn i -> "u#{i}" end)
+    @fi_a List.duplicate("a", 50) ++ List.duplicate("b", 30) ++ Enum.map(1..20, &"x#{&1}")
+    @fi_b List.duplicate("a", 50) ++ List.duplicate("b", 30) ++ Enum.map(21..40, &"x#{&1}")
+
+    test "update_many produces identical serialization and estimates" do
+      pure = FrequentItems.new(k: 10, backend: Pure) |> FrequentItems.update_many(@fi_items)
+      rust = FrequentItems.new(k: 10, backend: Rust) |> FrequentItems.update_many(@fi_items)
+
+      assert FrequentItems.serialize(pure) == FrequentItems.serialize(rust)
+      assert FrequentItems.count(pure) == FrequentItems.count(rust)
+      assert FrequentItems.entry_count(pure) == FrequentItems.entry_count(rust)
+      assert FrequentItems.top_k(pure) == FrequentItems.top_k(rust)
+    end
+
+    test "successive update_many calls produce identical serialization" do
+      pure =
+        FrequentItems.new(k: 10, backend: Pure)
+        |> FrequentItems.update_many(@fi_a)
+        |> FrequentItems.update_many(@fi_b)
+
+      rust =
+        FrequentItems.new(k: 10, backend: Rust)
+        |> FrequentItems.update_many(@fi_a)
+        |> FrequentItems.update_many(@fi_b)
+
+      assert FrequentItems.serialize(pure) == FrequentItems.serialize(rust)
+      assert FrequentItems.count(pure) == FrequentItems.count(rust)
+    end
+
+    test "merge produces identical serialization and estimates" do
+      pure_a = FrequentItems.new(k: 10, backend: Pure) |> FrequentItems.update_many(@fi_a)
+      pure_b = FrequentItems.new(k: 10, backend: Pure) |> FrequentItems.update_many(@fi_b)
+      pure_merged = FrequentItems.merge(pure_a, pure_b)
+
+      rust_a = FrequentItems.new(k: 10, backend: Rust) |> FrequentItems.update_many(@fi_a)
+      rust_b = FrequentItems.new(k: 10, backend: Rust) |> FrequentItems.update_many(@fi_b)
+      rust_merged = FrequentItems.merge(rust_a, rust_b)
+
+      assert FrequentItems.serialize(pure_merged) == FrequentItems.serialize(rust_merged)
+      assert FrequentItems.count(pure_merged) == FrequentItems.count(rust_merged)
+      assert FrequentItems.top_k(pure_merged) == FrequentItems.top_k(rust_merged)
     end
   end
 
