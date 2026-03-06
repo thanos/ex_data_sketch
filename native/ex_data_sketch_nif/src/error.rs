@@ -10,6 +10,10 @@ pub fn ok_binary<'a>(env: Env<'a>, data: &[u8]) -> Term<'a> {
     (rustler::types::atom::ok(), binary.release(env)).encode(env)
 }
 
+pub fn ok_u64<'a>(env: Env<'a>, val: u64) -> Term<'a> {
+    (rustler::types::atom::ok(), val).encode(env)
+}
+
 pub fn ok_float<'a>(env: Env<'a>, val: f64) -> Term<'a> {
     (rustler::types::atom::ok(), val).encode(env)
 }
