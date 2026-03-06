@@ -244,6 +244,14 @@ defmodule ExDataSketch.ParityTest do
       assert_in_delta Theta.estimate(pure_merged), Theta.estimate(rust_merged), 1.0e-9
     end
 
+    test "compact produces identical serialization and estimate" do
+      pure = Theta.new(backend: Pure) |> Theta.update_many(@items_1000) |> Theta.compact()
+      rust = Theta.new(backend: Rust) |> Theta.update_many(@items_1000) |> Theta.compact()
+
+      assert Theta.serialize(pure) == Theta.serialize(rust)
+      assert_in_delta Theta.estimate(pure), Theta.estimate(rust), 1.0e-9
+    end
+
     test "compact + merge produces identical serialization and estimate" do
       pure_a = Theta.new(backend: Pure) |> Theta.update_many(@items_a) |> Theta.compact()
       pure_b = Theta.new(backend: Pure) |> Theta.update_many(@items_b) |> Theta.compact()

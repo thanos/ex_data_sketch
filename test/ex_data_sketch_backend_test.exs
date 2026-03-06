@@ -167,6 +167,14 @@ defmodule ExDataSketch.BackendTest do
       end
 
       assert_raise ErlangError, fn ->
+        ExDataSketch.Nif.theta_compact_nif(<<>>)
+      end
+
+      assert_raise ErlangError, fn ->
+        ExDataSketch.Nif.theta_compact_dirty_nif(<<>>)
+      end
+
+      assert_raise ErlangError, fn ->
         ExDataSketch.Nif.theta_merge_nif(<<>>, <<>>)
       end
 

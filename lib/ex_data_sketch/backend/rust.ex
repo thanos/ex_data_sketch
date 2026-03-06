@@ -20,6 +20,7 @@ defmodule ExDataSketch.Backend.Rust do
   - `cms_update_many`: 10,000 pairs
   - `theta_update_many`: 10,000 hashes
   - `cms_merge`: 100,000 total counters
+  - `theta_compact`: 50,000 entries
   - `theta_merge`: 50,000 combined entries
   - `kll_update_many`: 10,000 values
   - `kll_merge`: 50,000 combined items
@@ -48,6 +49,7 @@ defmodule ExDataSketch.Backend.Rust do
     cms_update_many: 10_000,
     theta_update_many: 10_000,
     cms_merge: 100_000,
+    theta_compact: 50_000,
     theta_merge: 50_000,
     kll_update_many: 10_000,
     kll_merge: 50_000,
@@ -194,7 +196,19 @@ defmodule ExDataSketch.Backend.Rust do
   end
 
   @impl true
-  def theta_compact(state_bin, opts), do: Pure.theta_compact(state_bin, opts)
+  def theta_compact(state_bin, opts) do
+    threshold = dirty_threshold(:theta_compact, opts)
+    entry_count = theta_entry_count(state_bin)
+
+    result =
+      if entry_count > threshold do
+        ExDataSketch.Nif.theta_compact_dirty_nif(state_bin)
+      else
+        ExDataSketch.Nif.theta_compact_nif(state_bin)
+      end
+
+    unwrap_ok!(result)
+  end
 
   @impl true
   def theta_merge(a_bin, b_bin, opts) do

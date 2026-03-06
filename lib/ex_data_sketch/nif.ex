@@ -43,6 +43,8 @@ defmodule ExDataSketch.Nif do
   # Theta
   def theta_update_many_nif(_state_bin, _hashes_bin), do: :erlang.nif_error(:not_loaded)
   def theta_update_many_dirty_nif(_state_bin, _hashes_bin), do: :erlang.nif_error(:not_loaded)
+  def theta_compact_nif(_state_bin), do: :erlang.nif_error(:not_loaded)
+  def theta_compact_dirty_nif(_state_bin), do: :erlang.nif_error(:not_loaded)
   def theta_merge_nif(_a_bin, _b_bin), do: :erlang.nif_error(:not_loaded)
   def theta_merge_dirty_nif(_a_bin, _b_bin), do: :erlang.nif_error(:not_loaded)
 

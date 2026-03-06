@@ -131,6 +131,41 @@ fn theta_merge_impl<'a>(env: Env<'a>, a_bin: Binary, b_bin: Binary) -> Term<'a> 
     error::ok_binary(env, &result)
 }
 
+fn theta_compact_impl<'a>(env: Env<'a>, state_bin: Binary) -> Term<'a> {
+    let state = match parse_theta_state(state_bin.as_slice()) {
+        Ok(s) => s,
+        Err(e) => return error::error_string(env, e),
+    };
+
+    let k = state.k as usize;
+    let mut theta = state.theta;
+
+    // Filter by theta, sort via BTreeSet, compact if needed
+    let set: BTreeSet<u64> = state.entries.into_iter().filter(|&e| e < theta).collect();
+
+    let sorted: Vec<u64> = if set.len() > k {
+        let mut iter = set.into_iter();
+        let kept: Vec<u64> = iter.by_ref().take(k).collect();
+        theta = iter.next().unwrap_or(THETA_MAX_U64);
+        kept
+    } else {
+        set.into_iter().collect()
+    };
+
+    let result = encode_theta_state(state.k, theta, &sorted);
+    error::ok_binary(env, &result)
+}
+
+#[rustler::nif]
+fn theta_compact_nif<'a>(env: Env<'a>, state_bin: Binary) -> Term<'a> {
+    theta_compact_impl(env, state_bin)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn theta_compact_dirty_nif<'a>(env: Env<'a>, state_bin: Binary) -> Term<'a> {
+    theta_compact_impl(env, state_bin)
+}
+
 #[rustler::nif]
 fn theta_update_many_nif<'a>(env: Env<'a>, state_bin: Binary, hashes_bin: Binary) -> Term<'a> {
     theta_update_many_impl(env, state_bin, hashes_bin)
