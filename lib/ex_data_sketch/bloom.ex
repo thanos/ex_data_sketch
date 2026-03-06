@@ -398,8 +398,7 @@ defmodule ExDataSketch.Bloom do
     raise Errors.InvalidOptionError,
       option: :capacity,
       value: capacity,
-      message:
-        "capacity must fit in a u32 (max #{0xFFFFFFFF}), got: #{capacity}"
+      message: "capacity must fit in a u32 (max #{0xFFFFFFFF}), got: #{capacity}"
   end
 
   defp validate_capacity!(capacity) do
