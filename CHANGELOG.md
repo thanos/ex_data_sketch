@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-03-06
+
+### Added
+
+- FrequentItems sketch (`ExDataSketch.FrequentItems`) using the SpaceSaving algorithm for approximate heavy-hitter detection.
+- FrequentItems backend callbacks: `fi_new/1`, `fi_update/3`, `fi_update_many/3`, `fi_merge/3`, `fi_estimate/3`, `fi_top_k/3`, `fi_count/2`, `fi_entry_count/2`.
+- Rust NIF acceleration for all FrequentItems operations (`fi_update_many`, `fi_merge`, `fi_estimate`, `fi_top_k`, `fi_new`, `fi_count`, `fi_entry_count`) with dirty scheduler support.
+- Size-based NIF routing: query operations (`fi_top_k`, `fi_estimate`) use Rust only when k >= 256; header reads (`fi_count`, `fi_entry_count`) always use Pure Elixir.
+- Canonical FI1 binary state format (32-byte header + variable-length sorted entries).
+- Configurable key encoding: `:binary` (default), `:int` (signed 64-bit LE), `{:term, :external}` (`:erlang.term_to_binary`).
+- Deterministic merge via additive count combination and canonical replay in sorted key order.
+- FrequentItems merge law property tests (commutativity, identity, count conservation).
+- FrequentItems golden vector test fixtures (empty, single, small_set_k5, small_set_k10, merge).
+- FrequentItems parity tests ensuring byte-identical output between Pure and Rust backends.
+- FrequentItems benchmark suite (`bench/frequent_items_bench.exs`).
+- EXSK codec sketch ID 6 for FrequentItems.
+- FrequentItems FI1 binary format documentation (`docs/frequent_items_format.md`).
+- Rust NIF for `theta_compact` with dirty scheduler support.
+- Mox test dependency for backend contract testing.
+
 ## [0.2.1] - 2026-03-05
 
 ### Added
