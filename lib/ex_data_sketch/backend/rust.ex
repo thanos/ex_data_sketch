@@ -343,6 +343,27 @@ defmodule ExDataSketch.Backend.Rust do
   @impl true
   def ddsketch_max(state_bin, opts), do: Pure.ddsketch_max(state_bin, opts)
 
+  # -- Bloom callbacks --
+
+  @impl true
+  def bloom_new(opts), do: Pure.bloom_new(opts)
+
+  @impl true
+  def bloom_put(state_bin, hash64, opts), do: Pure.bloom_put(state_bin, hash64, opts)
+
+  @impl true
+  def bloom_put_many(state_bin, hashes, opts), do: Pure.bloom_put_many(state_bin, hashes, opts)
+
+  @impl true
+  def bloom_member?(state_bin, hash64, opts), do: Pure.bloom_member?(state_bin, hash64, opts)
+
+  @impl true
+  def bloom_merge(state_bin_a, state_bin_b, opts),
+    do: Pure.bloom_merge(state_bin_a, state_bin_b, opts)
+
+  @impl true
+  def bloom_count(state_bin, opts), do: Pure.bloom_count(state_bin, opts)
+
   # -- FrequentItems callbacks --
 
   @impl true

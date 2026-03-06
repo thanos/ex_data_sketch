@@ -1430,6 +1430,202 @@ defmodule ExDataSketch.Backend.Pure do
   end
 
   # ============================================================
+  # Bloom Filter Implementation
+  # ============================================================
+  #
+  # Binary layout (BLM1):
+  #   HEADER (40 bytes, all little-endian):
+  #     0:4   magic              "BLM1"
+  #     4:1   version            u8 = 1
+  #     5:1   hash_scheme        u8 = 0 (double hashing)
+  #     6:2   hash_count         u16
+  #     8:4   bit_count          u32
+  #     12:4  seed               u32
+  #     16:8  target_fpr         f64
+  #     24:4  capacity_hint      u32
+  #     28:4  bitset_byte_length u32
+  #     32:8  reserved           must be 0
+  #
+  #   BODY (bitset_byte_length bytes):
+  #     LSB-first packed bit array. Padding bits in last byte are zero.
+
+  @blm_magic "BLM1"
+  @blm_version 1
+  @blm_header_size 40
+
+  @impl true
+  @spec bloom_new(keyword()) :: binary()
+  def bloom_new(opts) do
+    bit_count = Keyword.fetch!(opts, :bit_count)
+    hash_count = Keyword.fetch!(opts, :hash_count)
+    seed = Keyword.get(opts, :seed, 0)
+    capacity = Keyword.get(opts, :capacity, 0)
+    fpr = Keyword.get(opts, :false_positive_rate, 0.0)
+    bitset_byte_length = div(bit_count + 7, 8)
+    bitset = :binary.copy(<<0>>, bitset_byte_length)
+
+    <<
+      @blm_magic::binary,
+      @blm_version::unsigned-8,
+      0::unsigned-8,
+      hash_count::unsigned-little-16,
+      bit_count::unsigned-little-32,
+      seed::unsigned-little-32,
+      fpr::float-little-64,
+      capacity::unsigned-little-32,
+      bitset_byte_length::unsigned-little-32,
+      0::unsigned-little-64,
+      bitset::binary
+    >>
+  end
+
+  @impl true
+  @spec bloom_put(binary(), non_neg_integer(), keyword()) :: binary()
+  def bloom_put(state_bin, hash64, _opts) do
+    <<header::binary-size(@blm_header_size), bitset::binary>> = state_bin
+
+    <<
+      @blm_magic::binary,
+      @blm_version::unsigned-8,
+      _scheme::unsigned-8,
+      hash_count::unsigned-little-16,
+      bit_count::unsigned-little-32,
+      _rest_header::binary
+    >> = header
+
+    h1 = hash64 >>> 32
+    h2 = hash64 &&& 0xFFFFFFFF
+
+    new_bitset =
+      Enum.reduce(0..(hash_count - 1), bitset, fn i, bs ->
+        pos = rem(h1 + i * h2, bit_count)
+        blm_set_bit(bs, pos)
+      end)
+
+    <<header::binary, new_bitset::binary>>
+  end
+
+  @impl true
+  @spec bloom_put_many(binary(), [non_neg_integer()], keyword()) :: binary()
+  def bloom_put_many(state_bin, [], _opts), do: state_bin
+
+  def bloom_put_many(state_bin, hashes, _opts) do
+    <<header::binary-size(@blm_header_size), bitset::binary>> = state_bin
+
+    <<
+      @blm_magic::binary,
+      @blm_version::unsigned-8,
+      _scheme::unsigned-8,
+      hash_count::unsigned-little-16,
+      bit_count::unsigned-little-32,
+      _rest_header::binary
+    >> = header
+
+    # Convert bitset to mutable tuple for O(1) updates
+    bytes_tuple = bitset |> :binary.bin_to_list() |> List.to_tuple()
+
+    new_tuple =
+      Enum.reduce(hashes, bytes_tuple, fn hash64, bt ->
+        h1 = hash64 >>> 32
+        h2 = hash64 &&& 0xFFFFFFFF
+
+        Enum.reduce(0..(hash_count - 1), bt, fn i, bt2 ->
+          pos = rem(h1 + i * h2, bit_count)
+          byte_idx = div(pos, 8)
+          bit_idx = rem(pos, 8)
+          old_byte = elem(bt2, byte_idx)
+          put_elem(bt2, byte_idx, old_byte ||| 1 <<< bit_idx)
+        end)
+      end)
+
+    new_bitset = new_tuple |> Tuple.to_list() |> :binary.list_to_bin()
+    <<header::binary, new_bitset::binary>>
+  end
+
+  @impl true
+  @spec bloom_member?(binary(), non_neg_integer(), keyword()) :: boolean()
+  def bloom_member?(state_bin, hash64, _opts) do
+    <<
+      @blm_magic::binary,
+      @blm_version::unsigned-8,
+      _scheme::unsigned-8,
+      hash_count::unsigned-little-16,
+      bit_count::unsigned-little-32,
+      _seed::unsigned-little-32,
+      _fpr::binary-size(8),
+      _capacity::unsigned-little-32,
+      _bsl::unsigned-little-32,
+      _reserved::binary-size(8),
+      bitset::binary
+    >> = state_bin
+
+    h1 = hash64 >>> 32
+    h2 = hash64 &&& 0xFFFFFFFF
+
+    Enum.all?(0..(hash_count - 1), fn i ->
+      pos = rem(h1 + i * h2, bit_count)
+      byte_idx = div(pos, 8)
+      bit_idx = rem(pos, 8)
+      <<_before::binary-size(byte_idx), byte::unsigned-8, _::binary>> = bitset
+      (byte &&& 1 <<< bit_idx) != 0
+    end)
+  end
+
+  @impl true
+  @spec bloom_merge(binary(), binary(), keyword()) :: binary()
+  def bloom_merge(state_bin_a, state_bin_b, _opts) do
+    <<header_a::binary-size(@blm_header_size), bitset_a::binary>> = state_bin_a
+    <<_header_b::binary-size(@blm_header_size), bitset_b::binary>> = state_bin_b
+
+    # Bitwise OR the two bitsets
+    new_bitset = blm_bitwise_or(bitset_a, bitset_b)
+
+    <<header_a::binary, new_bitset::binary>>
+  end
+
+  @impl true
+  @spec bloom_count(binary(), keyword()) :: non_neg_integer()
+  def bloom_count(state_bin, _opts) do
+    <<_header::binary-size(@blm_header_size), bitset::binary>> = state_bin
+    blm_popcount(bitset)
+  end
+
+  # -- Bloom private helpers --
+
+  defp blm_set_bit(bitset, pos) do
+    byte_idx = div(pos, 8)
+    bit_idx = rem(pos, 8)
+    <<before::binary-size(byte_idx), byte::unsigned-8, rest::binary>> = bitset
+    <<before::binary, byte ||| 1 <<< bit_idx::unsigned-8, rest::binary>>
+  end
+
+  defp blm_bitwise_or(a, b) do
+    a_bytes = :binary.bin_to_list(a)
+    b_bytes = :binary.bin_to_list(b)
+
+    Enum.zip(a_bytes, b_bytes)
+    |> Enum.map(fn {ba, bb} -> ba ||| bb end)
+    |> :binary.list_to_bin()
+  end
+
+  defp blm_popcount(bitset) do
+    bitset
+    |> :binary.bin_to_list()
+    |> Enum.reduce(0, fn byte, acc -> acc + blm_byte_popcount(byte) end)
+  end
+
+  defp blm_byte_popcount(byte) do
+    # Kernighan's bit counting
+    blm_byte_popcount_acc(byte, 0)
+  end
+
+  defp blm_byte_popcount_acc(0, acc), do: acc
+
+  defp blm_byte_popcount_acc(byte, acc) do
+    blm_byte_popcount_acc(byte &&& byte - 1, acc + 1)
+  end
+
+  # ============================================================
   # FrequentItems Implementation (SpaceSaving)
   # ============================================================
   #

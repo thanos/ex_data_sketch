@@ -146,6 +146,26 @@ defmodule ExDataSketch.Backend do
   @doc "Return the maximum value in DDSketch state, or nil if empty."
   @callback ddsketch_max(state_bin(), opts()) :: float() | nil
 
+  # -- Bloom callbacks --
+
+  @doc "Create a new Bloom filter state binary with the given options."
+  @callback bloom_new(opts()) :: state_bin()
+
+  @doc "Update Bloom state by setting bit positions for a single hash64 value."
+  @callback bloom_put(state_bin(), hash64(), opts()) :: state_bin()
+
+  @doc "Update Bloom state by setting bit positions for a list of hash64 values."
+  @callback bloom_put_many(state_bin(), [hash64()], opts()) :: state_bin()
+
+  @doc "Test membership of a single hash64 value in Bloom state."
+  @callback bloom_member?(state_bin(), hash64(), opts()) :: boolean()
+
+  @doc "Merge two Bloom state binaries (bitwise OR of bitsets)."
+  @callback bloom_merge(state_bin(), state_bin(), opts()) :: state_bin()
+
+  @doc "Return the number of set bits (popcount) in Bloom state."
+  @callback bloom_count(state_bin(), opts()) :: non_neg_integer()
+
   # -- FrequentItems callbacks --
 
   @doc "Create a new FrequentItems state binary with the given options."

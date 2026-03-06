@@ -8,7 +8,7 @@ defmodule ExDataSketch.ParityTest do
   use ExUnit.Case, async: true
 
   alias ExDataSketch.Backend.{Pure, Rust}
-  alias ExDataSketch.{CMS, DDSketch, FrequentItems, HLL, KLL, Theta}
+  alias ExDataSketch.{Bloom, CMS, DDSketch, FrequentItems, HLL, KLL, Theta}
 
   # Deterministic input strings
   @items_1000 Enum.map(0..999, &"parity_item_#{&1}")
@@ -263,6 +263,41 @@ defmodule ExDataSketch.ParityTest do
 
       assert Theta.serialize(pure_merged) == Theta.serialize(rust_merged)
       assert_in_delta Theta.estimate(pure_merged), Theta.estimate(rust_merged), 1.0e-9
+    end
+  end
+
+  describe "Bloom parity" do
+    @describetag :rust_nif
+
+    test "put_many produces identical serialization" do
+      pure = Bloom.new(capacity: 1000, backend: Pure) |> Bloom.put_many(@items_1000)
+      rust = Bloom.new(capacity: 1000, backend: Rust) |> Bloom.put_many(@items_1000)
+
+      assert Bloom.serialize(pure) == Bloom.serialize(rust)
+    end
+
+    test "merge produces identical serialization" do
+      pure_a = Bloom.new(capacity: 1000, backend: Pure) |> Bloom.put_many(@items_a)
+      pure_b = Bloom.new(capacity: 1000, backend: Pure) |> Bloom.put_many(@items_b)
+      pure_merged = Bloom.merge(pure_a, pure_b)
+
+      rust_a = Bloom.new(capacity: 1000, backend: Rust) |> Bloom.put_many(@items_a)
+      rust_b = Bloom.new(capacity: 1000, backend: Rust) |> Bloom.put_many(@items_b)
+      rust_merged = Bloom.merge(rust_a, rust_b)
+
+      assert Bloom.serialize(pure_merged) == Bloom.serialize(rust_merged)
+    end
+
+    test "member? returns identical results" do
+      pure = Bloom.new(capacity: 1000, backend: Pure) |> Bloom.put_many(@items_a)
+      rust = Bloom.new(capacity: 1000, backend: Rust) |> Bloom.put_many(@items_a)
+
+      test_items = @items_a ++ @items_b
+
+      for item <- test_items do
+        assert Bloom.member?(pure, item) == Bloom.member?(rust, item),
+               "Bloom member? parity mismatch for #{item}"
+      end
     end
   end
 end
