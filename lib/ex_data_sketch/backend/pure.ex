@@ -3487,4 +3487,420 @@ defmodule ExDataSketch.Backend.Pure do
       body::binary
     >>
   end
+
+  # ============================================================
+  # IBLT (Invertible Bloom Lookup Table) Implementation
+  # ============================================================
+
+  @iblt_magic "IBL1"
+  @iblt_version 1
+  @iblt_header_size 24
+  @iblt_cell_size 24
+
+  @impl true
+  @spec iblt_new(keyword()) :: binary()
+  def iblt_new(opts) do
+    cell_count = Keyword.get(opts, :cell_count, 1000)
+    hash_count = Keyword.get(opts, :hash_count, 3)
+    seed = Keyword.get(opts, :seed, 0)
+
+    body = :binary.copy(<<0::size(@iblt_cell_size * 8)>>, cell_count)
+
+    <<
+      @iblt_magic::binary,
+      @iblt_version::unsigned-8,
+      hash_count::unsigned-8,
+      0::unsigned-16,
+      cell_count::unsigned-little-32,
+      0::unsigned-little-32,
+      seed::unsigned-little-32,
+      0::unsigned-little-32,
+      body::binary
+    >>
+  end
+
+  @impl true
+  @spec iblt_put(binary(), non_neg_integer(), non_neg_integer(), keyword()) :: binary()
+  def iblt_put(state_bin, key_hash, value_hash, _opts) do
+    <<header::binary-size(@iblt_header_size), body::binary>> = state_bin
+
+    <<
+      @iblt_magic::binary,
+      version::unsigned-8,
+      hash_count::unsigned-8,
+      reserved1::unsigned-16,
+      cell_count::unsigned-little-32,
+      item_count::unsigned-little-32,
+      seed::unsigned-little-32,
+      reserved2::unsigned-little-32
+    >> = header
+
+    check = iblt_check_hash(key_hash)
+    positions = iblt_positions(key_hash, seed, hash_count, cell_count)
+
+    new_body =
+      Enum.reduce(positions, body, fn pos, acc ->
+        iblt_update_cell(acc, pos, 1, key_hash, value_hash, check)
+      end)
+
+    <<
+      @iblt_magic::binary,
+      version::unsigned-8,
+      hash_count::unsigned-8,
+      reserved1::unsigned-16,
+      cell_count::unsigned-little-32,
+      item_count + 1::unsigned-little-32,
+      seed::unsigned-little-32,
+      reserved2::unsigned-little-32,
+      new_body::binary
+    >>
+  end
+
+  @impl true
+  @spec iblt_put_many(binary(), [{non_neg_integer(), non_neg_integer()}], keyword()) :: binary()
+  def iblt_put_many(state_bin, pairs, _opts) do
+    Enum.reduce(pairs, state_bin, fn {key_hash, value_hash}, acc ->
+      iblt_put(acc, key_hash, value_hash, [])
+    end)
+  end
+
+  @impl true
+  @spec iblt_member?(binary(), non_neg_integer(), keyword()) :: boolean()
+  def iblt_member?(state_bin, key_hash, _opts) do
+    <<_header::binary-size(@iblt_header_size), body::binary>> = state_bin
+
+    <<
+      _magic::binary-size(4),
+      _version::unsigned-8,
+      hash_count::unsigned-8,
+      _reserved::unsigned-16,
+      cell_count::unsigned-little-32,
+      _item_count::unsigned-little-32,
+      seed::unsigned-little-32,
+      _reserved2::unsigned-little-32
+    >> = binary_part(state_bin, 0, @iblt_header_size)
+
+    positions = iblt_positions(key_hash, seed, hash_count, cell_count)
+
+    Enum.all?(positions, fn pos ->
+      offset = pos * @iblt_cell_size
+      <<_before::binary-size(offset), count::signed-little-32, _rest::binary>> = body
+      count != 0
+    end)
+  end
+
+  @impl true
+  @spec iblt_delete(binary(), non_neg_integer(), non_neg_integer(), keyword()) :: binary()
+  def iblt_delete(state_bin, key_hash, value_hash, _opts) do
+    <<header::binary-size(@iblt_header_size), body::binary>> = state_bin
+
+    <<
+      @iblt_magic::binary,
+      version::unsigned-8,
+      hash_count::unsigned-8,
+      reserved1::unsigned-16,
+      cell_count::unsigned-little-32,
+      item_count::unsigned-little-32,
+      seed::unsigned-little-32,
+      reserved2::unsigned-little-32
+    >> = header
+
+    check = iblt_check_hash(key_hash)
+    positions = iblt_positions(key_hash, seed, hash_count, cell_count)
+
+    new_body =
+      Enum.reduce(positions, body, fn pos, acc ->
+        iblt_update_cell(acc, pos, -1, key_hash, value_hash, check)
+      end)
+
+    new_item_count = if item_count > 0, do: item_count - 1, else: 0
+
+    <<
+      @iblt_magic::binary,
+      version::unsigned-8,
+      hash_count::unsigned-8,
+      reserved1::unsigned-16,
+      cell_count::unsigned-little-32,
+      new_item_count::unsigned-little-32,
+      seed::unsigned-little-32,
+      reserved2::unsigned-little-32,
+      new_body::binary
+    >>
+  end
+
+  @impl true
+  @spec iblt_subtract(binary(), binary(), keyword()) :: binary()
+  def iblt_subtract(state_a, state_b, _opts) do
+    <<header_a::binary-size(@iblt_header_size), body_a::binary>> = state_a
+    <<_header_b::binary-size(@iblt_header_size), body_b::binary>> = state_b
+
+    <<
+      @iblt_magic::binary,
+      version::unsigned-8,
+      hash_count::unsigned-8,
+      reserved1::unsigned-16,
+      cell_count::unsigned-little-32,
+      item_count_a::unsigned-little-32,
+      seed::unsigned-little-32,
+      reserved2::unsigned-little-32
+    >> = header_a
+
+    <<
+      @iblt_magic::binary,
+      _::unsigned-8,
+      _::unsigned-8,
+      _::unsigned-16,
+      _::unsigned-little-32,
+      item_count_b::unsigned-little-32,
+      _::unsigned-little-32,
+      _::unsigned-little-32
+    >> = binary_part(state_b, 0, @iblt_header_size)
+
+    new_body = iblt_cellwise_op(body_a, body_b, cell_count, :subtract)
+
+    diff = abs(item_count_a - item_count_b)
+
+    <<
+      @iblt_magic::binary,
+      version::unsigned-8,
+      hash_count::unsigned-8,
+      reserved1::unsigned-16,
+      cell_count::unsigned-little-32,
+      diff::unsigned-little-32,
+      seed::unsigned-little-32,
+      reserved2::unsigned-little-32,
+      new_body::binary
+    >>
+  end
+
+  @impl true
+  @spec iblt_list_entries(binary(), keyword()) ::
+          {:ok, %{positive: list(), negative: list()}} | {:error, :decode_failed}
+  def iblt_list_entries(state_bin, _opts) do
+    <<_header::binary-size(@iblt_header_size), body::binary>> = state_bin
+
+    <<
+      @iblt_magic::binary,
+      _version::unsigned-8,
+      hash_count::unsigned-8,
+      _reserved::unsigned-16,
+      cell_count::unsigned-little-32,
+      _item_count::unsigned-little-32,
+      seed::unsigned-little-32,
+      _reserved2::unsigned-little-32
+    >> = binary_part(state_bin, 0, @iblt_header_size)
+
+    cells = iblt_decode_cells(body, cell_count)
+    iblt_peel(cells, hash_count, seed, cell_count)
+  end
+
+  @impl true
+  @spec iblt_count(binary(), keyword()) :: non_neg_integer()
+  def iblt_count(state_bin, _opts) do
+    <<_magic::binary-size(4), _version::unsigned-8, _hc::unsigned-8, _r::unsigned-16,
+      _cc::unsigned-little-32, item_count::unsigned-little-32, _rest::binary>> = state_bin
+
+    item_count
+  end
+
+  @impl true
+  @spec iblt_merge(binary(), binary(), keyword()) :: binary()
+  def iblt_merge(state_a, state_b, _opts) do
+    <<header_a::binary-size(@iblt_header_size), body_a::binary>> = state_a
+    <<_header_b::binary-size(@iblt_header_size), body_b::binary>> = state_b
+
+    <<
+      @iblt_magic::binary,
+      version::unsigned-8,
+      hash_count::unsigned-8,
+      reserved1::unsigned-16,
+      cell_count::unsigned-little-32,
+      item_count_a::unsigned-little-32,
+      seed::unsigned-little-32,
+      reserved2::unsigned-little-32
+    >> = header_a
+
+    <<
+      @iblt_magic::binary,
+      _::unsigned-8,
+      _::unsigned-8,
+      _::unsigned-16,
+      _::unsigned-little-32,
+      item_count_b::unsigned-little-32,
+      _::unsigned-little-32,
+      _::unsigned-little-32
+    >> = binary_part(state_b, 0, @iblt_header_size)
+
+    new_body = iblt_cellwise_op(body_a, body_b, cell_count, :merge)
+
+    <<
+      @iblt_magic::binary,
+      version::unsigned-8,
+      hash_count::unsigned-8,
+      reserved1::unsigned-16,
+      cell_count::unsigned-little-32,
+      item_count_a + item_count_b::unsigned-little-32,
+      seed::unsigned-little-32,
+      reserved2::unsigned-little-32,
+      new_body::binary
+    >>
+  end
+
+  # -- IBLT private helpers --
+
+  defp iblt_check_hash(key_hash) do
+    mixed = iblt_splitmix64(key_hash * 0x517CC1B727220A95 &&& @mask64)
+    mixed >>> 32 &&& 0xFFFFFFFF
+  end
+
+  defp iblt_splitmix64(x) do
+    x = bxor(x, x >>> 30) * 0xBF58476D1CE4E5B9 &&& @mask64
+    x = bxor(x, x >>> 27) * 0x94D049BB133111EB &&& @mask64
+    bxor(x, x >>> 31) &&& @mask64
+  end
+
+  defp iblt_positions(key_hash, seed, hash_count, cell_count) do
+    positions =
+      Enum.reduce(0..(hash_count - 1), [], fn i, acc ->
+        input = key_hash + (seed + i) * 0x9E3779B97F4A7C15 &&& @mask64
+        h = iblt_splitmix64(input)
+        pos = rem(h, cell_count)
+
+        # Ensure distinct positions
+        pos = iblt_resolve_collision(pos, acc, h, cell_count, 1)
+        [pos | acc]
+      end)
+
+    Enum.reverse(positions)
+  end
+
+  defp iblt_resolve_collision(pos, existing, _h, cell_count, attempt)
+       when attempt > cell_count do
+    # Fallback: find first unused position
+    all = MapSet.new(existing)
+
+    Enum.find(0..(cell_count - 1), pos, fn p ->
+      not MapSet.member?(all, p)
+    end)
+  end
+
+  defp iblt_resolve_collision(pos, existing, h, cell_count, attempt) do
+    if pos in existing do
+      new_h = iblt_splitmix64(h + attempt &&& @mask64)
+      new_pos = rem(new_h, cell_count)
+      iblt_resolve_collision(new_pos, existing, new_h, cell_count, attempt + 1)
+    else
+      pos
+    end
+  end
+
+  defp iblt_update_cell(body, pos, count_delta, key_hash, value_hash, check_hash) do
+    offset = pos * @iblt_cell_size
+
+    <<before::binary-size(offset), count::signed-little-32, key_sum::unsigned-little-64,
+      value_sum::unsigned-little-64, check_sum::unsigned-little-32, rest::binary>> = body
+
+    <<before::binary, count + count_delta::signed-little-32,
+      bxor(key_sum, key_hash)::unsigned-little-64,
+      bxor(value_sum, value_hash)::unsigned-little-64,
+      bxor(check_sum, check_hash)::unsigned-little-32, rest::binary>>
+  end
+
+  defp iblt_cellwise_op(body_a, body_b, cell_count, op) do
+    Enum.reduce(0..(cell_count - 1), <<>>, fn i, acc ->
+      offset = i * @iblt_cell_size
+
+      <<_::binary-size(offset), ca::signed-little-32, ksa::unsigned-little-64,
+        vsa::unsigned-little-64, csa::unsigned-little-32, _::binary>> = body_a
+
+      <<_::binary-size(offset), cb::signed-little-32, ksb::unsigned-little-64,
+        vsb::unsigned-little-64, csb::unsigned-little-32, _::binary>> = body_b
+
+      new_count =
+        case op do
+          :subtract -> ca - cb
+          :merge -> ca + cb
+        end
+
+      <<acc::binary, new_count::signed-little-32, bxor(ksa, ksb)::unsigned-little-64,
+        bxor(vsa, vsb)::unsigned-little-64, bxor(csa, csb)::unsigned-little-32>>
+    end)
+  end
+
+  defp iblt_decode_cells(body, cell_count) do
+    for i <- 0..(cell_count - 1) do
+      offset = i * @iblt_cell_size
+
+      <<_::binary-size(offset), count::signed-little-32, key_sum::unsigned-little-64,
+        value_sum::unsigned-little-64, check_sum::unsigned-little-32, _::binary>> = body
+
+      {count, key_sum, value_sum, check_sum}
+    end
+    |> :erlang.list_to_tuple()
+  end
+
+  defp iblt_peel(cells, hash_count, seed, cell_count) do
+    iblt_peel_loop(cells, hash_count, seed, cell_count, [], [])
+  end
+
+  defp iblt_peel_loop(cells, hash_count, seed, cell_count, pos_acc, neg_acc) do
+    # Find pure cells
+    pure_cells =
+      for i <- 0..(cell_count - 1),
+          {count, key_sum, _value_sum, check_sum} = elem(cells, i),
+          abs(count) == 1,
+          iblt_check_hash(key_sum) == check_sum do
+        i
+      end
+
+    if pure_cells == [] do
+      # Check if all done
+      all_zero =
+        Enum.all?(0..(cell_count - 1), fn i ->
+          {count, _, _, _} = elem(cells, i)
+          count == 0
+        end)
+
+      if all_zero do
+        {:ok, %{positive: Enum.reverse(pos_acc), negative: Enum.reverse(neg_acc)}}
+      else
+        {:error, :decode_failed}
+      end
+    else
+      {new_cells, new_pos, new_neg} =
+        Enum.reduce(pure_cells, {cells, pos_acc, neg_acc}, fn i, {c_acc, p_acc, n_acc} ->
+          iblt_peel_one(c_acc, i, p_acc, n_acc, hash_count, seed, cell_count)
+        end)
+
+      iblt_peel_loop(new_cells, hash_count, seed, cell_count, new_pos, new_neg)
+    end
+  end
+
+  defp iblt_peel_one(c_acc, i, p_acc, n_acc, hash_count, seed, cell_count) do
+    {count, key_sum, value_sum, check_sum} = elem(c_acc, i)
+
+    # Only process if still pure (may have been modified by earlier peel in this batch)
+    if abs(count) == 1 and iblt_check_hash(key_sum) == check_sum do
+      entry = {key_sum, value_sum}
+
+      {p_acc, n_acc} =
+        if count == 1, do: {[entry | p_acc], n_acc}, else: {p_acc, [entry | n_acc]}
+
+      c_acc = iblt_remove_entry(c_acc, key_sum, value_sum, count, hash_count, seed, cell_count)
+      {c_acc, p_acc, n_acc}
+    else
+      {c_acc, p_acc, n_acc}
+    end
+  end
+
+  defp iblt_remove_entry(cells, key_sum, value_sum, count, hash_count, seed, cell_count) do
+    positions = iblt_positions(key_sum, seed, hash_count, cell_count)
+    check = iblt_check_hash(key_sum)
+
+    Enum.reduce(positions, cells, fn pos, ca ->
+      {pc, pk, pv, pck} = elem(ca, pos)
+      new_cell = {pc - count, bxor(pk, key_sum), bxor(pv, value_sum), bxor(pck, check)}
+      put_elem(ca, pos, new_cell)
+    end)
+  end
 end

@@ -74,6 +74,15 @@ defmodule ExDataSketch.BackendTest.StubBackend do
   def xor_build(_hashes, _o), do: {:ok, <<>>}
   def xor_member?(_s, _h, _o), do: false
   def xor_count(_s, _o), do: 0
+  def iblt_new(_opts), do: <<>>
+  def iblt_put(s, _kh, _vh, _o), do: s
+  def iblt_put_many(s, _pairs, _o), do: s
+  def iblt_member?(_s, _kh, _o), do: false
+  def iblt_delete(s, _kh, _vh, _o), do: s
+  def iblt_subtract(s, _b, _o), do: s
+  def iblt_list_entries(_s, _o), do: {:ok, %{positive: [], negative: []}}
+  def iblt_count(_s, _o), do: 0
+  def iblt_merge(s, _b, _o), do: s
 end
 
 defmodule ExDataSketch.BackendTest do

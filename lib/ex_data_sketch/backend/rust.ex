@@ -522,6 +522,37 @@ defmodule ExDataSketch.Backend.Rust do
   @impl true
   def xor_count(state_bin, opts), do: Pure.xor_count(state_bin, opts)
 
+  # -- IBLT callbacks --
+
+  @impl true
+  def iblt_new(opts), do: Pure.iblt_new(opts)
+
+  @impl true
+  def iblt_put(state_bin, key_hash, value_hash, opts),
+    do: Pure.iblt_put(state_bin, key_hash, value_hash, opts)
+
+  @impl true
+  def iblt_put_many(state_bin, pairs, opts), do: Pure.iblt_put_many(state_bin, pairs, opts)
+
+  @impl true
+  def iblt_member?(state_bin, key_hash, opts), do: Pure.iblt_member?(state_bin, key_hash, opts)
+
+  @impl true
+  def iblt_delete(state_bin, key_hash, value_hash, opts),
+    do: Pure.iblt_delete(state_bin, key_hash, value_hash, opts)
+
+  @impl true
+  def iblt_subtract(state_a, state_b, opts), do: Pure.iblt_subtract(state_a, state_b, opts)
+
+  @impl true
+  def iblt_list_entries(state_bin, opts), do: Pure.iblt_list_entries(state_bin, opts)
+
+  @impl true
+  def iblt_count(state_bin, opts), do: Pure.iblt_count(state_bin, opts)
+
+  @impl true
+  def iblt_merge(state_a, state_b, opts), do: Pure.iblt_merge(state_a, state_b, opts)
+
   # -- Private helpers --
 
   defp encode_f64s(values) do

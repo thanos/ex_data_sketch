@@ -59,7 +59,19 @@ defmodule ExDataSketch do
   See the [Quick Start guide](quick_start.md) for more examples.
   """
 
-  alias ExDataSketch.{Bloom, CMS, CQF, Cuckoo, DDSketch, FrequentItems, HLL, KLL, Quotient, Theta}
+  alias ExDataSketch.{
+    Bloom,
+    CMS,
+    CQF,
+    Cuckoo,
+    DDSketch,
+    FrequentItems,
+    HLL,
+    IBLT,
+    KLL,
+    Quotient,
+    Theta
+  }
 
   @doc """
   Updates a sketch with multiple items in a single pass.
@@ -85,7 +97,8 @@ defmodule ExDataSketch do
           | Bloom.t()
           | Cuckoo.t()
           | Quotient.t()
-          | CQF.t(),
+          | CQF.t()
+          | IBLT.t(),
           Enumerable.t()
         ) ::
           HLL.t()
@@ -98,6 +111,7 @@ defmodule ExDataSketch do
           | Cuckoo.t()
           | Quotient.t()
           | CQF.t()
+          | IBLT.t()
   def update_many(%Cuckoo{} = sketch, items) do
     case Cuckoo.put_many(sketch, items) do
       {:ok, updated} -> updated
@@ -117,4 +131,5 @@ defmodule ExDataSketch do
 
   def update_many(%Quotient{} = sketch, items), do: Quotient.put_many(sketch, items)
   def update_many(%CQF{} = sketch, items), do: CQF.put_many(sketch, items)
+  def update_many(%IBLT{} = sketch, items), do: IBLT.put_many(sketch, items)
 end

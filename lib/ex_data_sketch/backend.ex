@@ -275,6 +275,37 @@ defmodule ExDataSketch.Backend do
   @doc "Return the number of items the XorFilter was built from."
   @callback xor_count(state_bin(), opts()) :: non_neg_integer()
 
+  # -- IBLT (Invertible Bloom Lookup Table) callbacks --
+
+  @doc "Create a new IBLT state binary with the given options."
+  @callback iblt_new(opts()) :: state_bin()
+
+  @doc "Insert a key_hash and value_hash into IBLT state."
+  @callback iblt_put(state_bin(), hash64(), hash64(), opts()) :: state_bin()
+
+  @doc "Insert a list of {key_hash, value_hash} pairs into IBLT state."
+  @callback iblt_put_many(state_bin(), [{hash64(), hash64()}], opts()) :: state_bin()
+
+  @doc "Test membership of a single key_hash in IBLT state."
+  @callback iblt_member?(state_bin(), hash64(), opts()) :: boolean()
+
+  @doc "Delete a key_hash and value_hash from IBLT state."
+  @callback iblt_delete(state_bin(), hash64(), hash64(), opts()) :: state_bin()
+
+  @doc "Subtract two IBLT state binaries cell-wise (set difference)."
+  @callback iblt_subtract(state_bin(), state_bin(), opts()) :: state_bin()
+
+  @doc "List entries by peeling the IBLT. Returns {:ok, entries} or {:error, :decode_failed}."
+  @callback iblt_list_entries(state_bin(), opts()) ::
+              {:ok, %{positive: [{hash64(), hash64()}], negative: [{hash64(), hash64()}]}}
+              | {:error, :decode_failed}
+
+  @doc "Return the item count from IBLT state."
+  @callback iblt_count(state_bin(), opts()) :: non_neg_integer()
+
+  @doc "Merge two IBLT state binaries cell-wise (set union)."
+  @callback iblt_merge(state_bin(), state_bin(), opts()) :: state_bin()
+
   @doc """
   Returns the default backend module.
 

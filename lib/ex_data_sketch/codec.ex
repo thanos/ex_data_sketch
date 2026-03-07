@@ -59,8 +59,9 @@ defmodule ExDataSketch.Codec do
   @sketch_id_quotient 9
   @sketch_id_cqf 10
   @sketch_id_xor 11
+  @sketch_id_iblt 12
 
-  @type sketch_id :: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11
+  @type sketch_id :: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12
   @type decoded :: %{
           version: pos_integer(),
           sketch_id: sketch_id(),
@@ -223,6 +224,18 @@ defmodule ExDataSketch.Codec do
   """
   @spec sketch_id_xor() :: sketch_id()
   def sketch_id_xor, do: @sketch_id_xor
+
+  @doc """
+  Returns the sketch ID constant for IBLT.
+
+  ## Examples
+
+      iex> ExDataSketch.Codec.sketch_id_iblt()
+      12
+
+  """
+  @spec sketch_id_iblt() :: sketch_id()
+  def sketch_id_iblt, do: @sketch_id_iblt
 
   @doc """
   Encodes sketch data into the EXSK binary format.
