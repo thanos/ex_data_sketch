@@ -367,6 +367,39 @@ defmodule ExDataSketch.Bloom do
     fn a, b -> merge(a, b) end
   end
 
+  @doc """
+  Returns `true` if two Bloom filters have compatible parameters.
+
+  ## Examples
+
+      iex> a = ExDataSketch.Bloom.new(capacity: 100)
+      iex> b = ExDataSketch.Bloom.new(capacity: 100)
+      iex> ExDataSketch.Bloom.compatible_with?(a, b)
+      true
+
+  """
+  @spec compatible_with?(t(), t()) :: boolean()
+  def compatible_with?(%__MODULE__{opts: opts_a}, %__MODULE__{opts: opts_b}) do
+    opts_a[:bit_count] == opts_b[:bit_count] and
+      opts_a[:hash_count] == opts_b[:hash_count] and
+      opts_a[:seed] == opts_b[:seed]
+  end
+
+  def capabilities do
+    MapSet.new([
+      :new,
+      :put,
+      :put_many,
+      :member?,
+      :merge,
+      :merge_many,
+      :count,
+      :serialize,
+      :deserialize,
+      :compatible_with?
+    ])
+  end
+
   # -- Private --
 
   defp hash_item(item, opts) do
