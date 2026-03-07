@@ -2155,6 +2155,11 @@ defmodule ExDataSketch.Backend.Pure do
     defstruct [:q, :r, :slot_count, :item_count, :seed, :slot_bytes, :slots]
   end
 
+  defmodule CqfCtx do
+    @moduledoc false
+    defstruct [:q, :r, :slot_count, :occupied_count, :total_count, :seed, :slot_bytes, :slots]
+  end
+
   @qot_magic "QOT1"
   @qot_version 1
 
@@ -2369,6 +2374,12 @@ defmodule ExDataSketch.Backend.Pure do
   end
 
   defp qot_split_hash(%QotCtx{q: q, r: r}, hash64) do
+    quotient = hash64 >>> (64 - q) &&& (1 <<< q) - 1
+    remainder = hash64 >>> (64 - q - r) &&& (1 <<< r) - 1
+    {quotient, remainder}
+  end
+
+  defp qot_split_hash(%CqfCtx{q: q, r: r}, hash64) do
     quotient = hash64 >>> (64 - q) &&& (1 <<< q) - 1
     remainder = hash64 >>> (64 - q - r) &&& (1 <<< r) - 1
     {quotient, remainder}
@@ -2713,6 +2724,455 @@ defmodule ExDataSketch.Backend.Pure do
 
   defp qot_find_occ(ctx, pos, remaining) do
     if qot_occ?(ctx, pos), do: pos, else: qot_find_occ(ctx, qot_nxt(ctx, pos), remaining - 1)
+  end
+
+  # ============================================================
+  # CQF (Counting Quotient Filter)
+  # ============================================================
+  #
+  # CQF extends Quotient with unary counter encoding.
+  # Same slot layout (3 meta bits + r remainder bits per slot).
+  # Within a run, each distinct remainder's count is stored as
+  # N consecutive copies of that remainder value:
+  #
+  #   count=1: [r]             (one slot)
+  #   count=2: [r, r]          (two consecutive identical slots)
+  #   count=N: [r, r, ..., r]  (N consecutive identical slots)
+  #
+  # This is unambiguous because remainders within a run are stored
+  # in strictly increasing order -- consecutive identical values
+  # can only mean a counter.
+  #
+  # The CQF1 binary format uses a 40-byte header (vs 32 for QOT1)
+  # to accommodate a 64-bit total_count field.
+  #
+  #   HEADER (40 bytes, little-endian):
+  #     0:4   magic         "CQF1"
+  #     4:1   version       u8 = 1
+  #     5:1   q_bits        u8
+  #     6:1   r_bits        u8
+  #     7:1   flags         u8 = 0
+  #     8:4   slot_count    u32
+  #     12:4  occupied_cnt  u32 (distinct fingerprints)
+  #     16:8  total_count   u64 (sum of multiplicities)
+  #     24:4  seed          u32
+  #     28:12 reserved      zeroed
+  #
+  #   BODY: slot_count * slot_bytes (same packing as QOT1)
+
+  @cqf_magic "CQF1"
+  @cqf_version 1
+
+  @impl true
+  @spec cqf_new(keyword()) :: binary()
+  def cqf_new(opts) do
+    q = Keyword.fetch!(opts, :q)
+    r = Keyword.fetch!(opts, :r)
+    slot_count = Keyword.fetch!(opts, :slot_count)
+    seed = Keyword.get(opts, :seed, 0)
+
+    slot_bytes = div(3 + r + 7, 8)
+    body_size = slot_count * slot_bytes
+    body = :binary.copy(<<0>>, body_size)
+
+    <<
+      @cqf_magic::binary,
+      @cqf_version::unsigned-8,
+      q::unsigned-8,
+      r::unsigned-8,
+      0::unsigned-8,
+      slot_count::unsigned-little-32,
+      0::unsigned-little-32,
+      0::unsigned-little-64,
+      seed::unsigned-little-32,
+      0::96,
+      body::binary
+    >>
+  end
+
+  @impl true
+  @spec cqf_put(binary(), non_neg_integer(), keyword()) :: binary()
+  def cqf_put(state_bin, hash64, _opts) do
+    ctx = cqf_decode(state_bin)
+    {fq, fr} = qot_split_hash(ctx, hash64)
+    ctx = cqf_do_insert(ctx, fq, fr)
+    cqf_encode(ctx)
+  end
+
+  @impl true
+  @spec cqf_put_many(binary(), [non_neg_integer()], keyword()) :: binary()
+  def cqf_put_many(state_bin, [], _opts), do: state_bin
+
+  def cqf_put_many(state_bin, hashes, _opts) do
+    ctx = cqf_decode(state_bin)
+
+    ctx =
+      Enum.reduce(hashes, ctx, fn hash64, acc ->
+        {fq, fr} = qot_split_hash(acc, hash64)
+        cqf_do_insert(acc, fq, fr)
+      end)
+
+    cqf_encode(ctx)
+  end
+
+  @impl true
+  @spec cqf_member?(binary(), non_neg_integer(), keyword()) :: boolean()
+  def cqf_member?(state_bin, hash64, _opts) do
+    ctx = cqf_decode(state_bin)
+    {fq, fr} = qot_split_hash(ctx, hash64)
+    cqf_estimate(ctx, fq, fr) > 0
+  end
+
+  @impl true
+  @spec cqf_estimate_count(binary(), non_neg_integer(), keyword()) :: non_neg_integer()
+  def cqf_estimate_count(state_bin, hash64, _opts) do
+    ctx = cqf_decode(state_bin)
+    {fq, fr} = qot_split_hash(ctx, hash64)
+    cqf_estimate(ctx, fq, fr)
+  end
+
+  @impl true
+  @spec cqf_delete(binary(), non_neg_integer(), keyword()) :: binary()
+  def cqf_delete(state_bin, hash64, _opts) do
+    ctx = cqf_decode(state_bin)
+    {fq, fr} = qot_split_hash(ctx, hash64)
+
+    case cqf_estimate(ctx, fq, fr) do
+      0 ->
+        cqf_encode(ctx)
+
+      _count ->
+        ctx = cqf_do_delete(ctx, fq, fr)
+        cqf_encode(ctx)
+    end
+  end
+
+  @impl true
+  @spec cqf_merge(binary(), binary(), keyword()) :: binary()
+  def cqf_merge(state_a, state_b, _opts) do
+    ctx_a = cqf_decode(state_a)
+    ctx_b = cqf_decode(state_b)
+
+    triples_a = cqf_extract_all_counted(ctx_a)
+    triples_b = cqf_extract_all_counted(ctx_b)
+
+    all = cqf_merge_counted(triples_a, triples_b)
+
+    fresh =
+      cqf_decode(
+        cqf_new(
+          q: ctx_a.q,
+          r: ctx_a.r,
+          slot_count: ctx_a.slot_count,
+          seed: ctx_a.seed
+        )
+      )
+
+    merged =
+      Enum.reduce(all, fresh, fn {fq, fr, count}, acc ->
+        cqf_insert_with_count(acc, fq, fr, count)
+      end)
+
+    cqf_encode(merged)
+  end
+
+  @impl true
+  @spec cqf_count(binary(), keyword()) :: non_neg_integer()
+  def cqf_count(state_bin, _opts) do
+    <<_magic::binary-size(4), _version::8, _q::8, _r::8, _flags::8,
+      _slot_count::unsigned-little-32, _occupied::unsigned-little-32,
+      total_count::unsigned-little-64, _rest::binary>> = state_bin
+
+    total_count
+  end
+
+  # -- CQF: decode/encode --
+
+  defp cqf_decode(state_bin) do
+    <<
+      @cqf_magic::binary,
+      @cqf_version::unsigned-8,
+      q::unsigned-8,
+      r::unsigned-8,
+      _flags::unsigned-8,
+      slot_count::unsigned-little-32,
+      occupied_count::unsigned-little-32,
+      total_count::unsigned-little-64,
+      seed::unsigned-little-32,
+      _reserved::binary-size(12),
+      body::binary
+    >> = state_bin
+
+    sb = div(3 + r + 7, 8)
+    slots = qot_body_to_tuple(body, sb, slot_count)
+
+    %CqfCtx{
+      q: q,
+      r: r,
+      slot_count: slot_count,
+      occupied_count: occupied_count,
+      total_count: total_count,
+      seed: seed,
+      slot_bytes: sb,
+      slots: slots
+    }
+  end
+
+  defp cqf_encode(%CqfCtx{} = ctx) do
+    body = qot_tuple_to_body(ctx.slots, ctx.slot_bytes, ctx.slot_count)
+
+    <<
+      @cqf_magic::binary,
+      @cqf_version::unsigned-8,
+      ctx.q::unsigned-8,
+      ctx.r::unsigned-8,
+      0::unsigned-8,
+      ctx.slot_count::unsigned-little-32,
+      ctx.occupied_count::unsigned-little-32,
+      ctx.total_count::unsigned-little-64,
+      ctx.seed::unsigned-little-32,
+      0::96,
+      body::binary
+    >>
+  end
+
+  # -- CQF: insert (always increments count) --
+
+  defp cqf_do_insert(ctx, fq, fr) do
+    if qot_occ?(ctx, fq) do
+      # Existing quotient -- find remainder in run and increment, or insert new
+      cqf_do_insert_existing(ctx, fq, fr)
+    else
+      # New fingerprint -- insert remainder with count 1
+      cqf_do_insert_new(ctx, fq, fr)
+    end
+  end
+
+  defp cqf_do_insert_new(ctx, fq, fr) do
+    ctx = qot_set_meta_bit(ctx, fq, @qot_occ)
+    had_entry = qot_meta(ctx, fq) != @qot_occ
+
+    ctx =
+      if had_entry do
+        run_start = qot_find_run_start(ctx, fq)
+        meta = if run_start == fq, do: 0, else: @qot_shi
+        qot_shift_right(ctx, run_start, meta, fr)
+      else
+        qot_set(ctx, fq, {@qot_occ, fr})
+      end
+
+    %{ctx | occupied_count: ctx.occupied_count + 1, total_count: ctx.total_count + 1}
+  end
+
+  defp cqf_do_insert_existing(ctx, fq, fr) do
+    run_start = qot_find_run_start(ctx, fq)
+
+    case cqf_find_remainder_in_run(ctx, run_start, fr) do
+      nil ->
+        ctx = qot_insert_into_run(ctx, fq, run_start, fr)
+        %{ctx | occupied_count: ctx.occupied_count + 1, total_count: ctx.total_count + 1}
+
+      pos ->
+        last = cqf_last_copy(ctx, pos, fr)
+        nxt = qot_nxt(ctx, last)
+        ctx = qot_shift_right(ctx, nxt, @qot_con ||| @qot_shi, fr)
+        %{ctx | total_count: ctx.total_count + 1}
+    end
+  end
+
+  # Insert a fingerprint with a specific count (used by merge).
+  # Inserts the remainder once, then adds (count-1) duplicate copies.
+  defp cqf_insert_with_count(ctx, fq, fr, count) do
+    was_occ = qot_occ?(ctx, fq)
+    had_entry = qot_meta(ctx, fq) != 0
+
+    ctx = qot_set_meta_bit(ctx, fq, @qot_occ)
+
+    ctx =
+      cond do
+        not was_occ and not had_entry ->
+          qot_set(ctx, fq, {@qot_occ, fr})
+
+        was_occ ->
+          run_start = qot_find_run_start(ctx, fq)
+          qot_insert_into_run(ctx, fq, run_start, fr)
+
+        true ->
+          run_start = qot_find_run_start(ctx, fq)
+          meta = if run_start == fq, do: 0, else: @qot_shi
+          qot_shift_right(ctx, run_start, meta, fr)
+      end
+
+    ctx = %{ctx | occupied_count: ctx.occupied_count + 1, total_count: ctx.total_count + count}
+
+    # Add (count-1) duplicate copies after the remainder
+    if count <= 1 do
+      ctx
+    else
+      run_start = qot_find_run_start(ctx, fq)
+      pos = cqf_find_remainder_in_run(ctx, run_start, fr)
+
+      Enum.reduce(1..(count - 1), ctx, fn _i, acc ->
+        last = cqf_last_copy(acc, pos, fr)
+        nxt = qot_nxt(acc, last)
+        qot_shift_right(acc, nxt, @qot_con ||| @qot_shi, fr)
+      end)
+    end
+  end
+
+  # -- CQF: find remainder in run (returns position or nil) --
+
+  # Scan through a run, skipping counter duplicates, looking for a remainder.
+  defp cqf_find_remainder_in_run(ctx, run_start, target_fr) do
+    cqf_scan_run(ctx, run_start, target_fr)
+  end
+
+  defp cqf_scan_run(ctx, pos, target_fr) do
+    r = qot_rem(ctx, pos)
+
+    cond do
+      r == target_fr ->
+        pos
+
+      r > target_fr ->
+        nil
+
+      true ->
+        # Skip past all duplicate copies of this remainder
+        next_pos = cqf_skip_duplicates(ctx, pos, r)
+
+        if qot_con?(ctx, next_pos) do
+          cqf_scan_run(ctx, next_pos, target_fr)
+        else
+          nil
+        end
+    end
+  end
+
+  # Skip past all consecutive copies of remainder_val.
+  # Returns the position of the first slot that is NOT a copy.
+  defp cqf_skip_duplicates(ctx, pos, remainder_val) do
+    nxt = qot_nxt(ctx, pos)
+
+    if qot_con?(ctx, nxt) and qot_rem(ctx, nxt) == remainder_val do
+      cqf_skip_duplicates(ctx, nxt, remainder_val)
+    else
+      nxt
+    end
+  end
+
+  # Find the last consecutive copy of remainder_val starting from pos.
+  defp cqf_last_copy(ctx, pos, remainder_val) do
+    nxt = qot_nxt(ctx, pos)
+
+    if qot_con?(ctx, nxt) and qot_rem(ctx, nxt) == remainder_val do
+      cqf_last_copy(ctx, nxt, remainder_val)
+    else
+      pos
+    end
+  end
+
+  # -- CQF: read counter (count consecutive copies) --
+
+  defp cqf_read_counter(ctx, pos, remainder_val) do
+    nxt = qot_nxt(ctx, pos)
+
+    if qot_con?(ctx, nxt) and qot_rem(ctx, nxt) == remainder_val do
+      1 + cqf_read_counter(ctx, nxt, remainder_val)
+    else
+      1
+    end
+  end
+
+  # -- CQF: estimate count for a fingerprint --
+
+  defp cqf_estimate(ctx, fq, fr) do
+    if qot_occ?(ctx, fq) do
+      run_start = qot_find_run_start(ctx, fq)
+
+      case cqf_find_remainder_in_run(ctx, run_start, fr) do
+        nil -> 0
+        pos -> cqf_read_counter(ctx, pos, fr)
+      end
+    else
+      0
+    end
+  end
+
+  # -- CQF: delete (remove one duplicate copy) --
+
+  defp cqf_do_delete(ctx, fq, fr) do
+    run_start = qot_find_run_start(ctx, fq)
+    pos = cqf_find_remainder_in_run(ctx, run_start, fr)
+
+    if pos == nil do
+      ctx
+    else
+      count = cqf_read_counter(ctx, pos, fr)
+
+      if count == 1 do
+        # Remove the remainder entirely (like QOT delete)
+        ctx = qot_do_delete(ctx, fq, pos)
+
+        %{
+          ctx
+          | occupied_count: max(ctx.occupied_count - 1, 0),
+            total_count: max(ctx.total_count - 1, 0)
+        }
+      else
+        # Remove one duplicate copy (the last one)
+        last = cqf_last_copy(ctx, pos, fr)
+        ctx = qot_shift_left(ctx, last)
+        %{ctx | total_count: max(ctx.total_count - 1, 0)}
+      end
+    end
+  end
+
+  # -- CQF: extract all counted fingerprints (for merge) --
+
+  # Iterate over all occupied quotients and extract {q, r, count} triples.
+  defp cqf_extract_all_counted(ctx) do
+    Enum.reduce(0..(ctx.slot_count - 1), [], fn i, acc ->
+      if qot_occ?(ctx, i) do
+        run_start = qot_find_run_start(ctx, i)
+        run_triples = cqf_extract_run_counted(ctx, run_start, i)
+        run_triples ++ acc
+      else
+        acc
+      end
+    end)
+    |> Enum.reverse()
+    |> Enum.sort()
+  end
+
+  defp cqf_extract_run_counted(ctx, pos, quotient) do
+    cqf_extract_run_loop(ctx, pos, quotient, [])
+  end
+
+  defp cqf_extract_run_loop(ctx, pos, quotient, acc) do
+    fr = qot_rem(ctx, pos)
+    count = cqf_read_counter(ctx, pos, fr)
+    acc = [{quotient, fr, count} | acc]
+
+    next_pos = cqf_skip_duplicates(ctx, pos, fr)
+
+    if qot_con?(ctx, next_pos) do
+      cqf_extract_run_loop(ctx, next_pos, quotient, acc)
+    else
+      Enum.reverse(acc)
+    end
+  end
+
+  # Merge two sorted lists of {quotient, remainder, count} triples, summing counts
+  defp cqf_merge_counted([], b), do: b
+  defp cqf_merge_counted(a, []), do: a
+
+  defp cqf_merge_counted([{qa, ra, ca} = ha | ta], [{qb, rb, cb} = hb | tb]) do
+    cond do
+      {qa, ra} < {qb, rb} -> [ha | cqf_merge_counted(ta, [hb | tb])]
+      {qa, ra} > {qb, rb} -> [hb | cqf_merge_counted([ha | ta], tb)]
+      true -> [{qa, ra, ca + cb} | cqf_merge_counted(ta, tb)]
+    end
   end
 
   # Merge two sorted lists of {quotient, remainder} tuples, removing duplicates

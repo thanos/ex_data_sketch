@@ -238,6 +238,32 @@ defmodule ExDataSketch.Backend do
   @doc "Return the number of stored items from Quotient state."
   @callback quotient_count(state_bin(), opts()) :: non_neg_integer()
 
+  # -- CQF (Counting Quotient Filter) callbacks --
+
+  @doc "Create a new CQF state binary with the given options."
+  @callback cqf_new(opts()) :: state_bin()
+
+  @doc "Insert a single hash64 into CQF state, incrementing its count."
+  @callback cqf_put(state_bin(), hash64(), opts()) :: state_bin()
+
+  @doc "Insert a list of hash64 values into CQF state."
+  @callback cqf_put_many(state_bin(), [hash64()], opts()) :: state_bin()
+
+  @doc "Test membership of a single hash64 value in CQF state."
+  @callback cqf_member?(state_bin(), hash64(), opts()) :: boolean()
+
+  @doc "Return the estimated count of a single hash64 in CQF state."
+  @callback cqf_estimate_count(state_bin(), hash64(), opts()) :: non_neg_integer()
+
+  @doc "Delete a single occurrence of hash64 from CQF state (decrement count)."
+  @callback cqf_delete(state_bin(), hash64(), opts()) :: state_bin()
+
+  @doc "Merge two CQF state binaries (multiset union: counts summed)."
+  @callback cqf_merge(state_bin(), state_bin(), opts()) :: state_bin()
+
+  @doc "Return the total count of all items from CQF state (sum of multiplicities)."
+  @callback cqf_count(state_bin(), opts()) :: non_neg_integer()
+
   @doc """
   Returns the default backend module.
 

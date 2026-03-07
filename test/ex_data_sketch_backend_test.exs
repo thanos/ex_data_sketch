@@ -63,6 +63,14 @@ defmodule ExDataSketch.BackendTest.StubBackend do
   def quotient_delete(s, _h, _o), do: s
   def quotient_merge(s, _b, _o), do: s
   def quotient_count(_s, _o), do: 0
+  def cqf_new(_opts), do: <<>>
+  def cqf_put(s, _h, _o), do: s
+  def cqf_put_many(s, _h, _o), do: s
+  def cqf_member?(_s, _h, _o), do: false
+  def cqf_estimate_count(_s, _h, _o), do: 0
+  def cqf_delete(s, _h, _o), do: s
+  def cqf_merge(s, _b, _o), do: s
+  def cqf_count(_s, _o), do: 0
 end
 
 defmodule ExDataSketch.BackendTest do
