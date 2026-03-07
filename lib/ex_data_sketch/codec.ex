@@ -34,6 +34,8 @@ defmodule ExDataSketch.Codec do
   - 7: Bloom
   - 8: Cuckoo
   - 9: Quotient
+  - 10: CQF (Counting Quotient Filter)
+  - 11: XorFilter
 
   ## Versioning
 
@@ -56,8 +58,9 @@ defmodule ExDataSketch.Codec do
   @sketch_id_cuckoo 8
   @sketch_id_quotient 9
   @sketch_id_cqf 10
+  @sketch_id_xor 11
 
-  @type sketch_id :: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10
+  @type sketch_id :: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11
   @type decoded :: %{
           version: pos_integer(),
           sketch_id: sketch_id(),
@@ -208,6 +211,18 @@ defmodule ExDataSketch.Codec do
   """
   @spec sketch_id_cqf() :: sketch_id()
   def sketch_id_cqf, do: @sketch_id_cqf
+
+  @doc """
+  Returns the sketch ID constant for XorFilter.
+
+  ## Examples
+
+      iex> ExDataSketch.Codec.sketch_id_xor()
+      11
+
+  """
+  @spec sketch_id_xor() :: sketch_id()
+  def sketch_id_xor, do: @sketch_id_xor
 
   @doc """
   Encodes sketch data into the EXSK binary format.

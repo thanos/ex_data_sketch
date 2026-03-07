@@ -511,6 +511,17 @@ defmodule ExDataSketch.Backend.Rust do
   @impl true
   def cqf_count(state_bin, opts), do: Pure.cqf_count(state_bin, opts)
 
+  # -- XorFilter callbacks --
+
+  @impl true
+  def xor_build(hashes, opts), do: Pure.xor_build(hashes, opts)
+
+  @impl true
+  def xor_member?(state_bin, hash64, opts), do: Pure.xor_member?(state_bin, hash64, opts)
+
+  @impl true
+  def xor_count(state_bin, opts), do: Pure.xor_count(state_bin, opts)
+
   # -- Private helpers --
 
   defp encode_f64s(values) do

@@ -264,6 +264,17 @@ defmodule ExDataSketch.Backend do
   @doc "Return the total count of all items from CQF state (sum of multiplicities)."
   @callback cqf_count(state_bin(), opts()) :: non_neg_integer()
 
+  # -- XorFilter callbacks --
+
+  @doc "Build an XorFilter from a list of hash64 values. Returns {:ok, state} or {:error, :build_failed}."
+  @callback xor_build([hash64()], opts()) :: {:ok, state_bin()} | {:error, :build_failed}
+
+  @doc "Test membership of a single hash64 value in XorFilter state."
+  @callback xor_member?(state_bin(), hash64(), opts()) :: boolean()
+
+  @doc "Return the number of items the XorFilter was built from."
+  @callback xor_count(state_bin(), opts()) :: non_neg_integer()
+
   @doc """
   Returns the default backend module.
 

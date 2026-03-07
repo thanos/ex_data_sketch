@@ -3186,4 +3186,305 @@ defmodule ExDataSketch.Backend.Pure do
       true -> [ha | merge_sorted_unique(ta, tb)]
     end
   end
+
+  # ============================================================
+  # XorFilter Implementation
+  # ============================================================
+  #
+  # XOR1 Binary Format (32-byte header + fingerprint array):
+  #
+  #   Offset  Size  Field
+  #   0       4     magic            "XOR1"
+  #   4       1     version          u8 = 1
+  #   5       1     fingerprint_bits u8 (8 or 16)
+  #   6       1     variant          u8 (0=xor8, 1=xor16)
+  #   7       1     flags            u8, reserved = 0
+  #   8       4     item_count       u32-LE
+  #   12      4     segment_size     u32-LE
+  #   16      4     seed             u32-LE
+  #   20      4     array_length     u32-LE (3 * segment_size)
+  #   24      8     reserved         zeroed
+  #
+  #   Body: fingerprint array (1 byte per entry for xor8, 2 bytes LE for xor16)
+  # ============================================================
+
+  @xor1_magic "XOR1"
+  @xor1_version 1
+  @xor_max_retries 100
+
+  @impl true
+  @spec xor_build([non_neg_integer()], keyword()) ::
+          {:ok, binary()} | {:error, :build_failed}
+  def xor_build(hashes, opts) do
+    fingerprint_bits = Keyword.get(opts, :fingerprint_bits, 8)
+    seed = Keyword.get(opts, :seed, 0)
+    variant = if fingerprint_bits == 16, do: 1, else: 0
+
+    unique_hashes = Enum.uniq(hashes)
+    n = length(unique_hashes)
+
+    if n == 0 do
+      segment_size = 1
+      array_length = 3
+
+      empty_body =
+        case fingerprint_bits do
+          8 -> :binary.copy(<<0>>, array_length)
+          16 -> :binary.copy(<<0, 0>>, array_length)
+        end
+
+      {:ok,
+       xor_encode_state(
+         0,
+         segment_size,
+         array_length,
+         seed,
+         fingerprint_bits,
+         variant,
+         empty_body
+       )}
+    else
+      # Standard xor filter sizing: capacity = ceil(1.23 * n) + 32, then divide by 3
+      # The 1.23 factor ensures the random 3-partite hypergraph is peelable w.h.p.
+      capacity = ceil(1.23 * n) + 32
+      segment_size = max(div(capacity + 2, 3), 1)
+      array_length = 3 * segment_size
+
+      case xor_try_build(unique_hashes, n, segment_size, array_length, fingerprint_bits, seed, 0) do
+        {:ok, fingerprint_array, final_seed} ->
+          body = xor_encode_body(fingerprint_array, array_length, fingerprint_bits)
+
+          {:ok,
+           xor_encode_state(
+             n,
+             segment_size,
+             array_length,
+             final_seed,
+             fingerprint_bits,
+             variant,
+             body
+           )}
+
+        :error ->
+          {:error, :build_failed}
+      end
+    end
+  end
+
+  @impl true
+  @spec xor_member?(binary(), non_neg_integer(), keyword()) :: boolean()
+  def xor_member?(state_bin, hash64, _opts) do
+    <<@xor1_magic, @xor1_version::unsigned-8, fp_bits::unsigned-8, _variant::unsigned-8,
+      _flags::unsigned-8, _item_count::unsigned-little-32, segment_size::unsigned-little-32,
+      seed::unsigned-little-32, _array_length::unsigned-little-32, _reserved::binary-size(8),
+      body::binary>> = state_bin
+
+    {h0, h1, h2} = xor_hash_positions(hash64, seed, segment_size)
+    fp = xor_fingerprint(hash64, fp_bits)
+
+    f0 = xor_read_fp(body, h0, fp_bits)
+    f1 = xor_read_fp(body, h1, fp_bits)
+    f2 = xor_read_fp(body, h2, fp_bits)
+
+    bxor(bxor(f0, f1), f2) == fp
+  end
+
+  @impl true
+  @spec xor_count(binary(), keyword()) :: non_neg_integer()
+  def xor_count(state_bin, _opts) do
+    <<@xor1_magic, @xor1_version::unsigned-8, _fp_bits::unsigned-8, _variant::unsigned-8,
+      _flags::unsigned-8, item_count::unsigned-little-32, _rest::binary>> = state_bin
+
+    item_count
+  end
+
+  # -- XorFilter private helpers --
+
+  defp xor_try_build(_hashes, _n, _seg_size, _arr_len, _fp_bits, _seed, retry)
+       when retry >= @xor_max_retries,
+       do: :error
+
+  defp xor_try_build(hashes, n, seg_size, arr_len, fp_bits, seed, retry) do
+    current_seed = seed + retry
+
+    # Build degree counts and sets for each position
+    {degrees, sets} = xor_build_graph(hashes, current_seed, seg_size, arr_len)
+
+    # Peel the hypergraph
+    case xor_peel(hashes, degrees, sets, n, current_seed, seg_size) do
+      {:ok, stack} ->
+        # Assign fingerprints
+        fingerprint_array = xor_assign(stack, arr_len, fp_bits, current_seed, seg_size)
+        {:ok, fingerprint_array, current_seed}
+
+      :retry ->
+        xor_try_build(hashes, n, seg_size, arr_len, fp_bits, seed, retry + 1)
+    end
+  end
+
+  defp xor_build_graph(hashes, seed, seg_size, arr_len) do
+    # degrees: tuple of arr_len integers tracking how many hashes map to each position
+    # sets: tuple of arr_len MapSets tracking which hashes map to each position
+    degrees = :erlang.make_tuple(arr_len, 0)
+    sets = :erlang.make_tuple(arr_len, MapSet.new())
+
+    Enum.reduce(hashes, {degrees, sets}, fn hash, {deg, s} ->
+      {h0, h1, h2} = xor_hash_positions(hash, seed, seg_size)
+
+      deg =
+        deg
+        |> put_elem(h0, elem(deg, h0) + 1)
+        |> put_elem(h1, elem(deg, h1) + 1)
+        |> put_elem(h2, elem(deg, h2) + 1)
+
+      s =
+        s
+        |> put_elem(h0, MapSet.put(elem(s, h0), hash))
+        |> put_elem(h1, MapSet.put(elem(s, h1), hash))
+        |> put_elem(h2, MapSet.put(elem(s, h2), hash))
+
+      {deg, s}
+    end)
+  end
+
+  defp xor_peel(_hashes, degrees, sets, n, seed, seg_size) do
+    arr_len = tuple_size(degrees)
+
+    # Find initial queue of degree-1 positions
+    queue =
+      for i <- 0..(arr_len - 1), elem(degrees, i) == 1, do: i
+
+    xor_peel_loop(queue, degrees, sets, [], 0, n, seed, seg_size)
+  end
+
+  defp xor_peel_loop([], _degrees, _sets, stack, peeled, n, _seed, _seg_size) do
+    if peeled == n, do: {:ok, Enum.reverse(stack)}, else: :retry
+  end
+
+  defp xor_peel_loop([pos | rest], degrees, sets, stack, peeled, n, seed, seg_size) do
+    if elem(degrees, pos) != 1 do
+      # Position is no longer degree-1, skip it
+      xor_peel_loop(rest, degrees, sets, stack, peeled, n, seed, seg_size)
+    else
+      # Get the single hash at this position
+      hash_set = elem(sets, pos)
+      hash = MapSet.to_list(hash_set) |> hd()
+
+      # Get all 3 positions for this hash
+      {h0, h1, h2} = xor_hash_positions(hash, seed, seg_size)
+
+      # Push to stack and remove hash from all 3 positions
+      stack = [{hash, pos} | stack]
+
+      {degrees, sets, new_queue} =
+        Enum.reduce([h0, h1, h2], {degrees, sets, rest}, fn p, acc ->
+          xor_remove_edge(acc, p, pos, hash)
+        end)
+
+      xor_peel_loop(new_queue, degrees, sets, stack, peeled + 1, n, seed, seg_size)
+    end
+  end
+
+  defp xor_remove_edge({deg, s, q}, p, peel_pos, hash) do
+    new_set = MapSet.delete(elem(s, p), hash)
+    new_deg = elem(deg, p) - 1
+    deg = put_elem(deg, p, new_deg)
+    s = put_elem(s, p, new_set)
+    q = if new_deg == 1 and p != peel_pos, do: [p | q], else: q
+    {deg, s, q}
+  end
+
+  defp xor_assign(stack, arr_len, fp_bits, seed, seg_size) do
+    # Process stack in reverse (it was already reversed in peel)
+    # stack is in peel order, we need reverse order
+    b = :erlang.make_tuple(arr_len, 0)
+
+    Enum.reduce(Enum.reverse(stack), b, fn {hash, peel_pos}, b ->
+      {h0, h1, h2} = xor_hash_positions(hash, seed, seg_size)
+      fp = xor_fingerprint(hash, fp_bits)
+
+      # Get the other two positions
+      [other1, other2] = Enum.reject([h0, h1, h2], &(&1 == peel_pos))
+
+      value = bxor(bxor(fp, elem(b, other1)), elem(b, other2))
+      put_elem(b, peel_pos, value)
+    end)
+  end
+
+  defp xor_fingerprint(hash64, fp_bits) do
+    fp_mask = (1 <<< fp_bits) - 1
+    fp = hash64 &&& fp_mask
+    # Ensure non-zero fingerprint
+    if fp == 0, do: 1, else: fp
+  end
+
+  defp xor_hash_positions(hash64, seed, seg_size) do
+    # Remix hash with seed via splitmix64 for full independence per seed
+    h = xor_splitmix64(hash64 + seed * 0x9E3779B97F4A7C15 &&& @mask64)
+
+    # Use 64-bit rotation to derive 3 independent positions
+    # Fastrange maps each rotated hash to [0, seg_size)
+    h0 = xor_fastrange(h, seg_size)
+    h1 = xor_fastrange(xor_rotl64(h, 21), seg_size) + seg_size
+    h2 = xor_fastrange(xor_rotl64(h, 42), seg_size) + seg_size * 2
+
+    {h0, h1, h2}
+  end
+
+  # splitmix64 finalizer: strong bijective 64-bit -> 64-bit mix
+  defp xor_splitmix64(x) do
+    x = bxor(x, x >>> 30) * 0xBF58476D1CE4E5B9 &&& @mask64
+    x = bxor(x, x >>> 27) * 0x94D049BB133111EB &&& @mask64
+    bxor(x, x >>> 31) &&& @mask64
+  end
+
+  # 64-bit left rotation
+  defp xor_rotl64(x, r) do
+    (x <<< r ||| x >>> (64 - r)) &&& @mask64
+  end
+
+  # Fastrange: maps a 64-bit hash to [0, range) via multiply-shift
+  # Equivalent to (uint128_t(hash) * range) >> 64
+  defp xor_fastrange(hash, range) do
+    (hash * range) >>> 64
+  end
+
+  defp xor_read_fp(body, index, 8) do
+    <<_before::binary-size(index), fp::unsigned-8, _rest::binary>> = body
+    fp
+  end
+
+  defp xor_read_fp(body, index, 16) do
+    byte_offset = index * 2
+    <<_before::binary-size(byte_offset), fp::unsigned-little-16, _rest::binary>> = body
+    fp
+  end
+
+  defp xor_encode_body(fingerprint_tuple, arr_len, fp_bits) do
+    entries = for i <- 0..(arr_len - 1), do: elem(fingerprint_tuple, i)
+
+    case fp_bits do
+      8 ->
+        entries |> Enum.map(fn v -> <<v::unsigned-8>> end) |> IO.iodata_to_binary()
+
+      16 ->
+        entries |> Enum.map(fn v -> <<v::unsigned-little-16>> end) |> IO.iodata_to_binary()
+    end
+  end
+
+  defp xor_encode_state(item_count, segment_size, array_length, seed, fp_bits, variant, body) do
+    <<
+      @xor1_magic::binary,
+      @xor1_version::unsigned-8,
+      fp_bits::unsigned-8,
+      variant::unsigned-8,
+      0::unsigned-8,
+      item_count::unsigned-little-32,
+      segment_size::unsigned-little-32,
+      seed::unsigned-little-32,
+      array_length::unsigned-little-32,
+      0::unsigned-64,
+      body::binary
+    >>
+  end
 end

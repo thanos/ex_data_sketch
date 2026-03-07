@@ -71,6 +71,9 @@ defmodule ExDataSketch.BackendTest.StubBackend do
   def cqf_delete(s, _h, _o), do: s
   def cqf_merge(s, _b, _o), do: s
   def cqf_count(_s, _o), do: 0
+  def xor_build(_hashes, _o), do: {:ok, <<>>}
+  def xor_member?(_s, _h, _o), do: false
+  def xor_count(_s, _o), do: 0
 end
 
 defmodule ExDataSketch.BackendTest do
