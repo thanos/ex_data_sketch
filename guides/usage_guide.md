@@ -103,6 +103,186 @@ Parameters are derived automatically:
 
 For capacity=100,000 and fpr=0.01: bit_count=958,506, hash_count=7, ~117 KB.
 
+### Cuckoo Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `:capacity` | pos_integer | 10,000 | Expected number of items. Used to derive bucket count. |
+| `:fingerprint_size` | integer | 8 | Fingerprint width in bits. Valid values: 8, 12, 16. Larger fingerprints reduce false positive rate. |
+| `:bucket_size` | integer | 4 | Slots per bucket. Valid values: 2, 4. Bucket size 4 gives better space efficiency. |
+| `:max_kicks` | integer | 500 | Maximum relocation attempts before reporting full. Valid range: 100..2000. |
+| `:seed` | non_neg_integer | 0 | Hash seed. Filters with different seeds are not compatible. |
+| `:backend` | module | `ExDataSketch.Backend.Pure` | Backend module for computation. |
+
+Cuckoo filters provide membership testing with deletion support. Unlike Bloom
+filters, items can be removed after insertion without introducing false
+negatives. Uses partial-key cuckoo hashing where fingerprints are stored in
+one of two candidate buckets.
+
+`put/2` returns `{:ok, cuckoo}` on success or `{:error, :full}` when the
+filter cannot relocate fingerprints after `max_kicks` attempts. `delete/2`
+returns `{:ok, cuckoo}` on success or `{:error, :not_found}` if the
+fingerprint is not present.
+
+False positive rate: approximately `2 * bucket_size / 2^fingerprint_size`.
+For fingerprint_size=8, bucket_size=4: ~3.1%. For fingerprint_size=16,
+bucket_size=4: ~0.012%.
+
+### Quotient Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `:q` | integer | 16 | Quotient bits. Determines number of slots (2^q). Valid range: 1..28. |
+| `:r` | integer | 8 | Remainder bits stored per slot. Valid range: 1..32. Constraint: q + r <= 64. |
+| `:seed` | non_neg_integer | 0 | Hash seed. Filters with different seeds cannot be merged. |
+| `:backend` | module | `ExDataSketch.Backend.Pure` | Backend module for computation. |
+
+Quotient filters split each fingerprint into a quotient (slot index) and
+remainder (stored value). Three metadata bits per slot (is_occupied,
+is_continuation, is_shifted) enable linear probing with cluster tracking.
+
+Supports safe deletion and merge without re-hashing. Merge combines two
+filters with matching parameters by iterating runs from both filters.
+
+False positive rate: approximately `1 / 2^r`. For r=8: ~0.4%. For r=16: ~0.0015%.
+
+Memory usage: `2^q * (r + 3) / 8` bytes (3 metadata bits per slot).
+
+### CQF Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `:q` | integer | 16 | Quotient bits. Determines number of slots (2^q). Valid range: 1..28. |
+| `:r` | integer | 8 | Remainder bits stored per slot. Valid range: 1..32. Constraint: q + r <= 64. |
+| `:seed` | non_neg_integer | 0 | Hash seed. Filters with different seeds cannot be merged. |
+| `:backend` | module | `ExDataSketch.Backend.Pure` | Backend module for computation. |
+
+CQF extends the quotient filter with variable-length counter encoding to
+track item multiplicities. Use `estimate_count/2` to query how many times an
+item has been inserted. Counts are approximate -- never underestimated but may
+be overestimated.
+
+Merge sums counts across filters. Deletion decrements the count for an item
+(safe no-op if the item is not present).
+
+```elixir
+cqf = ExDataSketch.CQF.new(q: 16, r: 8)
+cqf = cqf |> ExDataSketch.CQF.put("event") |> ExDataSketch.CQF.put("event")
+ExDataSketch.CQF.estimate_count(cqf, "event")  # >= 2
+```
+
+### XorFilter Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `:fingerprint_bits` | integer | 8 | Fingerprint width. Valid values: 8, 16. |
+| `:seed` | non_neg_integer | 0 | Hash seed. |
+| `:backend` | module | `ExDataSketch.Backend.Pure` | Backend module for computation. |
+
+XorFilter is a static, immutable membership filter. All items must be
+provided at construction time via `build/2`. After construction, only
+`member?/2` queries are supported -- no insertion, deletion, or merge.
+
+XorFilter offers the smallest memory footprint and fastest lookups of all
+membership filters in this library. Use it when the set is known ahead of
+time and will not change.
+
+```elixir
+items = MapSet.new(["alice", "bob", "carol"])
+{:ok, xor} = ExDataSketch.XorFilter.build(items, fingerprint_bits: 8)
+ExDataSketch.XorFilter.member?(xor, "alice")  # true
+ExDataSketch.XorFilter.member?(xor, "dave")   # false (probably)
+```
+
+False positive rate: approximately `1 / 2^fingerprint_bits`. For 8-bit: ~0.4%.
+For 16-bit: ~0.0015%.
+
+### IBLT Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `:cell_count` | pos_integer | 1,000 | Number of cells. Valid range: 1..16,777,216. More cells improve decode success rate. |
+| `:hash_count` | pos_integer | 3 | Number of hash functions. Valid range: 1..10. |
+| `:seed` | non_neg_integer | 0 | Hash seed. IBLTs with different seeds cannot be subtracted or merged. |
+| `:backend` | module | `ExDataSketch.Backend.Pure` | Backend module for computation. |
+
+IBLT (Invertible Bloom Lookup Table) extends Bloom filters with the ability
+to list entries and find set differences. Two parties build IBLTs from their
+respective sets, exchange them, and subtract to discover items present in one
+set but not the other.
+
+Supports two modes:
+- **Set mode**: `put/2` and `delete/2` operate on items (value_hash = 0).
+- **Key-value mode**: `put/3` and `delete/3` operate on key-value pairs.
+
+`subtract/2` performs cell-wise subtraction. `list_entries/1` peels the
+resulting IBLT to recover entries, returning `{:ok, %{positive: [...],
+negative: [...]}}` or `{:error, :decode_failed}` if the difference is too
+large for the cell count.
+
+```elixir
+iblt_a = ExDataSketch.IBLT.new(cell_count: 1000) |> ExDataSketch.IBLT.put_many(set_a)
+iblt_b = ExDataSketch.IBLT.new(cell_count: 1000) |> ExDataSketch.IBLT.put_many(set_b)
+
+diff = ExDataSketch.IBLT.subtract(iblt_a, iblt_b)
+{:ok, %{positive: only_in_a, negative: only_in_b}} = ExDataSketch.IBLT.list_entries(diff)
+```
+
+Rule of thumb: set `cell_count` to at least 3x the expected number of
+differences for reliable decoding.
+
+### FilterChain Options
+
+FilterChain composes multiple membership filters into a pipeline with
+capability-aware stage validation.
+
+```elixir
+chain =
+  ExDataSketch.FilterChain.new()
+  |> ExDataSketch.FilterChain.add_stage(ExDataSketch.Cuckoo.new(capacity: 10_000))
+  |> ExDataSketch.FilterChain.add_stage(ExDataSketch.Bloom.new(capacity: 100_000))
+```
+
+**Stage positions:**
+
+| Position | Allowed types | Notes |
+|----------|--------------|-------|
+| Front / Middle | Bloom, Cuckoo, Quotient, CQF | Dynamic filters supporting `:put` |
+| Terminal | XorFilter | Static filter, must be last stage |
+| Adjunct | IBLT | Not in query path, used for reconciliation |
+
+**Operations:**
+
+- `put/2` -- Inserts into all stages supporting `:put` (skips XorFilter).
+- `member?/2` -- Queries stages in order, short-circuits on `false`.
+- `delete/2` -- Deletes from all stages. Raises `UnsupportedOperationError`
+  if any stage does not support `:delete`.
+
+**Lifecycle-tier pattern example:**
+
+```elixir
+# Hot tier (absorbs writes) -> Cold tier (compacted snapshot)
+chain =
+  ExDataSketch.FilterChain.new()
+  |> ExDataSketch.FilterChain.add_stage(ExDataSketch.Cuckoo.new(capacity: 50_000))
+
+# Later, compact hot tier into a static XorFilter
+{:ok, xor} = ExDataSketch.XorFilter.build(compacted_items, fingerprint_bits: 16)
+chain = ExDataSketch.FilterChain.add_stage(chain, xor)
+```
+
+### Membership Filter Comparison
+
+| Property | Bloom | Cuckoo | Quotient | CQF | XorFilter | IBLT |
+|----------|-------|--------|----------|-----|-----------|------|
+| Insert | yes | yes | yes | yes | build-only | yes |
+| Delete | no | yes | yes | yes | no | yes |
+| Merge | yes | no | yes | yes | no | yes |
+| Count items | yes | yes | yes | yes (multiset) | yes | yes |
+| Static | no | no | no | no | yes | no |
+| Reconciliation | no | no | no | no | no | yes |
+| Space efficiency | good | better at low FPR | moderate | moderate | best | depends on diff size |
+
 ### KLL vs DDSketch
 
 Both are quantile sketches available through `ExDataSketch.Quantiles`, but they
@@ -310,6 +490,11 @@ within the same BEAM instance.
 | Latency percentiles and SLO monitoring | DDSketch | `alpha: 0.01` | P99 with value-relative error (e.g., 142ms +/- 1%) |
 | Top-k / heavy hitter detection | FrequentItems | `k: 64` | Most frequent items with count and error bounds |
 | Membership testing (seen before?) | Bloom | `capacity: 100_000` | "Probably yes" or "definitely no" with tunable FPR |
+| Membership with deletion | Cuckoo | `capacity: 100_000` | Bloom-like but supports delete |
+| Membership with deletion + merge | Quotient | `q: 16, r: 8` | Mergeable filter with safe deletion |
+| Multiset counting (how many times?) | CQF | `q: 16, r: 8` | Approximate per-item multiplicity |
+| Static set membership | XorFilter | `fingerprint_bits: 8` | Smallest footprint, fastest lookup |
+| Set reconciliation (what's different?) | IBLT | `cell_count: 1000` | Find symmetric difference between sets |
 
 ### HLL: Real-time unique visitor counting
 
@@ -866,6 +1051,102 @@ defmodule MyPipeline do
     |> Enum.each(&process_event/1)
 
     messages
+  end
+end
+```
+
+### Cuckoo: Session revocation cache
+
+A session management system needs to maintain a revoked-session cache that
+supports both addition and removal of session IDs. Cuckoo filters support
+deletion, making them suitable for caches where items expire or are reinstated.
+
+```elixir
+defmodule Auth.RevocationCache do
+  alias ExDataSketch.Cuckoo
+
+  def new_cache(capacity \\ 100_000) do
+    Cuckoo.new(capacity: capacity, fingerprint_size: 16)
+  end
+
+  def revoke(cache, session_id) do
+    case Cuckoo.put(cache, session_id) do
+      {:ok, updated} -> {:ok, updated}
+      {:error, :full} -> {:error, :cache_full}
+    end
+  end
+
+  def reinstate(cache, session_id) do
+    case Cuckoo.delete(cache, session_id) do
+      {:ok, updated} -> {:ok, updated}
+      {:error, :not_found} -> {:ok, cache}
+    end
+  end
+
+  def revoked?(cache, session_id) do
+    Cuckoo.member?(cache, session_id)
+  end
+end
+```
+
+### IBLT: Replica set reconciliation
+
+Two database replicas need to synchronize their key sets without exchanging
+full inventories. Each node builds an IBLT from its keys, they exchange the
+compact IBLTs, and subtract to find only the differing keys.
+
+```elixir
+defmodule Sync.Reconciler do
+  alias ExDataSketch.IBLT
+
+  # Each node builds an IBLT from its local keys
+  def build_digest(keys, cell_count \\ 3000) do
+    iblt = IBLT.new(cell_count: cell_count, hash_count: 3)
+    IBLT.put_many(iblt, keys)
+  end
+
+  # Find keys that differ between two nodes
+  def find_differences(local_digest, remote_digest) do
+    diff = IBLT.subtract(local_digest, remote_digest)
+
+    case IBLT.list_entries(diff) do
+      {:ok, %{positive: only_local, negative: only_remote}} ->
+        {:ok, %{push: only_local, pull: only_remote}}
+
+      {:error, :decode_failed} ->
+        {:error, :too_many_differences}
+    end
+  end
+end
+```
+
+### FilterChain: Hot/cold lifecycle tiers
+
+A membership service uses a hot Cuckoo filter for active writes and periodic
+compaction into a cold XorFilter for archived snapshots.
+
+```elixir
+defmodule Membership.TieredFilter do
+  alias ExDataSketch.{FilterChain, Cuckoo, XorFilter}
+
+  def new_hot(capacity \\ 50_000) do
+    FilterChain.new()
+    |> FilterChain.add_stage(Cuckoo.new(capacity: capacity))
+  end
+
+  def ingest(chain, items) do
+    Enum.reduce(items, chain, fn item, acc ->
+      FilterChain.put(acc, item)
+    end)
+  end
+
+  def compact(chain, archived_items) do
+    {:ok, xor} = XorFilter.build(archived_items, fingerprint_bits: 16)
+    FilterChain.add_stage(chain, xor)
+  end
+
+  def seen?(chain, item) do
+    FilterChain.member?(chain, item)
   end
 end
 ```
