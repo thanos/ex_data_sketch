@@ -189,10 +189,200 @@ tensor
 > **Note:** Sketches operate on discrete items, not continuous numerical data.
 > Use Nx for numerical operations and sketches for approximate counting.
 
-## ex_arrow and ExZarr
+## ExArrow (Apache Arrow IPC / Flight / ADBC)
 
-For columnar / chunked data formats like Arrow and Zarr, use the chunk
-iterator pattern: update each chunk separately, then merge:
+[ExArrow](https://hex.pm/packages/ex_arrow) provides Apache Arrow support
+for the BEAM: IPC stream and file reading, Arrow Flight clients, and ADBC
+database connections.
+
+### Arrow IPC stream -- chunked sketch aggregation
+
+Arrow IPC streams deliver data as a sequence of RecordBatches. Build a
+sketch per batch, then merge:
+
+```elixir
+alias ExDataSketch.HLL
+
+{:ok, stream} = ExArrow.IPC.Reader.from_file("/data/events.arrows")
+{:ok, _schema} = ExArrow.Stream.schema(stream)
+
+stream
+|> Stream.unfold(fn s ->
+  case ExArrow.Stream.next(s) do
+    nil -> nil
+    {:error, _} -> nil
+    batch -> {batch, s}
+  end
+end)
+|> Stream.map(fn batch ->
+  batch
+  |> ExArrow.RecordBatch.column("user_id")
+  |> ExArrow.Array.to_list()
+  |> HLL.from_enumerable(p: 14)
+end)
+|> Enum.to_list()
+|> HLL.merge_many()
+|> HLL.estimate()
+```
+
+### Arrow IPC file -- random-access batch processing
+
+IPC files support random access to individual batches, useful for parallel
+sketch construction:
+
+```elixir
+alias ExDataSketch.{Bloom, FrequentItems}
+
+{:ok, file} = ExArrow.IPC.File.from_file("/data/users.arrow")
+n = ExArrow.IPC.File.batch_count(file)
+
+# Build a Bloom filter of known user IDs across all batches
+bloom =
+  0..(n - 1)
+  |> Task.async_stream(fn i ->
+    {:ok, batch} = ExArrow.IPC.File.get_batch(file, i)
+    ids = batch |> ExArrow.RecordBatch.column("user_id") |> ExArrow.Array.to_list()
+    Bloom.from_enumerable(ids, capacity: 1_000_000)
+  end)
+  |> Enum.map(fn {:ok, sketch} -> sketch end)
+  |> Bloom.merge_many()
+
+# Build a FrequentItems sketch of search queries
+top_queries =
+  0..(n - 1)
+  |> Enum.reduce(FrequentItems.new(k: 64), fn i, sketch ->
+    {:ok, batch} = ExArrow.IPC.File.get_batch(file, i)
+    queries = batch |> ExArrow.RecordBatch.column("query") |> ExArrow.Array.to_list()
+    FrequentItems.update_many(sketch, queries)
+  end)
+  |> FrequentItems.top_k(limit: 20)
+```
+
+### ADBC -- query databases with sketch aggregation
+
+Use ADBC with DuckDB to query Parquet files or databases and feed results
+into sketches:
+
+```elixir
+alias ExDataSketch.CMS
+
+{:ok, result} =
+  Adbc.Connection.query(MyApp.Conn,
+    "SELECT search_query FROM read_parquet('/data/queries/*.parquet')")
+
+result
+|> Adbc.Result.to_map()
+|> Map.fetch!("search_query")
+|> CMS.from_enumerable()
+|> CMS.estimate("popular_query")
+```
+
+## ExZarr (Zarr v2/v3 N-dimensional arrays)
+
+[ExZarr](https://hex.pm/packages/ex_zarr) provides chunked, compressed
+N-dimensional arrays with multiple storage backends (filesystem, S3, GCS,
+memory). Its `chunk_stream/1` returns a lazy enumerable -- ideal for
+building sketches without loading the full array into memory.
+
+### Chunk streaming -- memory-efficient sketch construction
+
+```elixir
+alias ExDataSketch.{HLL, KLL}
+
+{:ok, array} = ExZarr.open(path: "/data/sensor_readings", storage: :filesystem)
+
+# Count distinct sensor values using chunk streaming
+# ExZarr returns raw binaries -- decode based on dtype
+hll =
+  ExZarr.Array.chunk_stream(array)
+  |> Enum.reduce(HLL.new(p: 14), fn {_idx, bin}, sketch ->
+    values = for <<v::float-64-little <- bin>>, do: v
+    HLL.update_many(sketch, values)
+  end)
+
+IO.puts("Distinct values: #{HLL.estimate(hll)}")
+
+# Compute quantiles over the same chunked data
+kll =
+  ExZarr.Array.chunk_stream(array)
+  |> Enum.reduce(KLL.new(k: 200), fn {_idx, bin}, sketch ->
+    values = for <<v::float-64-little <- bin>>, do: v
+    KLL.update_many(sketch, values)
+  end)
+
+IO.puts("Median: #{KLL.quantile(kll, 0.5)}")
+IO.puts("P99: #{KLL.quantile(kll, 0.99)}")
+```
+
+### Parallel chunk processing
+
+For large arrays, process chunks in parallel and merge:
+
+```elixir
+alias ExDataSketch.DDSketch
+
+{:ok, array} = ExZarr.open(path: "/data/latencies", storage: :s3,
+  bucket: "metrics", prefix: "2026/03")
+
+DDSketch =
+  ExZarr.Array.chunk_stream(array, parallel: true)
+  |> Task.async_stream(fn {_idx, bin} ->
+    values = for <<v::float-64-little <- bin>>, do: v
+    DDSketch.from_enumerable(values, alpha: 0.01)
+  end, max_concurrency: System.schedulers_online())
+  |> Enum.map(fn {:ok, sketch} -> sketch end)
+  |> DDSketch.merge_many()
+
+IO.puts("P50: #{DDSketch.quantile(sketch, 0.5)}")
+IO.puts("P99: #{DDSketch.quantile(sketch, 0.99)}")
+```
+
+### Zarr + Nx bridge
+
+When working with ExZarr's Nx integration, convert tensors to flat lists
+for sketch consumption:
+
+```elixir
+alias ExDataSketch.HLL
+
+{:ok, array} = ExZarr.open(path: "/data/experiment", storage: :filesystem)
+{:ok, tensor} = ExZarr.Nx.to_tensor(array)
+
+tensor
+|> Nx.to_flat_list()
+|> HLL.from_enumerable(p: 14)
+|> HLL.estimate()
+```
+
+### Multi-array group analysis
+
+Zarr groups organize related arrays hierarchically. Sketch each array
+and compare:
+
+```elixir
+alias ExDataSketch.{HLL, CMS}
+
+{:ok, group} = ExZarr.Group.open("/", storage: :filesystem, path: "/data/experiments")
+array_names = ExZarr.Group.list_arrays(group)
+
+# Build an HLL per array to compare cardinalities
+sketches =
+  for name <- array_names, into: %{} do
+    {:ok, arr} = ExZarr.Group.get_array(group, name)
+    {:ok, bin} = ExZarr.Array.to_binary(arr)
+    values = for <<v::float-64-little <- bin>>, do: v
+    {name, HLL.from_enumerable(values, p: 14)}
+  end
+
+for {name, sketch} <- sketches do
+  IO.puts("#{name}: ~#{round(HLL.estimate(sketch))} distinct values")
+end
+```
+
+## General chunked data pattern
+
+The chunk-iterate-merge pattern works with any data source that provides
+batched or chunked iteration:
 
 ```elixir
 alias ExDataSketch.HLL
@@ -207,5 +397,5 @@ end)
 |> HLL.estimate()
 ```
 
-This pattern works with any library that provides chunked iteration over
-columnar data, including `ex_arrow`, `ExZarr`, and custom Parquet readers.
+This applies to `ex_arrow`, `ex_zarr`, custom Parquet readers, Kafka
+consumer batches, or any other chunked data source.

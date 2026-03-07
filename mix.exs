@@ -1,7 +1,7 @@
 defmodule ExDataSketch.MixProject do
   use Mix.Project
 
-  @version "0.3.0"
+  @version "0.4.0"
   @source_url "https://github.com/thanos/ex_data_sketch"
 
   def project do
@@ -15,7 +15,7 @@ defmodule ExDataSketch.MixProject do
       aliases: aliases(),
       package: package(),
       description:
-        "Production-grade streaming data sketching algorithms (HLL, CMS, Theta, KLL) with optional Rust NIF acceleration.",
+        "Production-grade streaming data sketching algorithms (HLL, CMS, Theta, KLL, DDSketch, FrequentItems, Bloom) with optional Rust NIF acceleration.",
 
       # Docs
       name: "ExDataSketch",
@@ -116,6 +116,7 @@ defmodule ExDataSketch.MixProject do
           ExDataSketch.KLL,
           ExDataSketch.DDSketch,
           ExDataSketch.FrequentItems,
+          ExDataSketch.Bloom,
           ExDataSketch.Quantiles
         ],
         Infrastructure: [
@@ -139,7 +140,10 @@ defmodule ExDataSketch.MixProject do
         "run bench/hll_bench.exs",
         "run bench/cms_bench.exs",
         "run bench/theta_bench.exs",
-        "run bench/kll_bench.exs"
+        "run bench/kll_bench.exs",
+        "run bench/ddsketch_bench.exs",
+        "run bench/frequent_items_bench.exs",
+        "run bench/bloom_bench.exs"
       ],
       verify: &verify/1
     ]

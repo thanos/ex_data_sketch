@@ -6,7 +6,7 @@ defmodule ExDataSketch.MergeLawsTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
-  alias ExDataSketch.{CMS, DDSketch, FrequentItems, HLL, KLL, Theta}
+  alias ExDataSketch.{Bloom, CMS, DDSketch, FrequentItems, HLL, KLL, Theta}
 
   @max_runs 50
   @hll_opts [p: 10]
@@ -15,6 +15,7 @@ defmodule ExDataSketch.MergeLawsTest do
   @kll_opts [k: 200]
   @dds_opts [alpha: 0.01]
   @fi_opts [k: 16]
+  @bloom_opts [capacity: 1000]
 
   defp string_list(max_length \\ 20) do
     list_of(string(:alphanumeric, min_length: 1), min_length: 1, max_length: max_length)
@@ -376,6 +377,67 @@ defmodule ExDataSketch.MergeLawsTest do
         merged = DDSketch.merge(sa, sb)
         assert DDSketch.min_value(merged) == min(DDSketch.min_value(sa), DDSketch.min_value(sb))
         assert DDSketch.max_value(merged) == max(DDSketch.max_value(sa), DDSketch.max_value(sb))
+      end
+    end
+  end
+
+  describe "Bloom merge laws" do
+    property "commutativity" do
+      check all(
+              a <- string_list(),
+              b <- string_list(),
+              max_runs: @max_runs
+            ) do
+        sa = Bloom.from_enumerable(a, @bloom_opts)
+        sb = Bloom.from_enumerable(b, @bloom_opts)
+
+        assert Bloom.serialize(Bloom.merge(sa, sb)) ==
+                 Bloom.serialize(Bloom.merge(sb, sa))
+      end
+    end
+
+    property "associativity" do
+      check all(
+              a <- string_list(10),
+              b <- string_list(10),
+              c <- string_list(10),
+              max_runs: @max_runs
+            ) do
+        sa = Bloom.from_enumerable(a, @bloom_opts)
+        sb = Bloom.from_enumerable(b, @bloom_opts)
+        sc = Bloom.from_enumerable(c, @bloom_opts)
+
+        left = Bloom.merge(Bloom.merge(sa, sb), sc)
+        right = Bloom.merge(sa, Bloom.merge(sb, sc))
+
+        assert Bloom.serialize(left) == Bloom.serialize(right)
+      end
+    end
+
+    property "identity: merge with empty" do
+      check all(items <- string_list(), max_runs: @max_runs) do
+        sketch = Bloom.from_enumerable(items, @bloom_opts)
+        empty = Bloom.new(@bloom_opts)
+
+        assert Bloom.serialize(Bloom.merge(sketch, empty)) ==
+                 Bloom.serialize(sketch)
+
+        assert Bloom.serialize(Bloom.merge(empty, sketch)) ==
+                 Bloom.serialize(sketch)
+      end
+    end
+
+    property "count monotonicity" do
+      check all(
+              a <- string_list(),
+              b <- string_list(),
+              max_runs: @max_runs
+            ) do
+        sa = Bloom.from_enumerable(a, @bloom_opts)
+        sb = Bloom.from_enumerable(b, @bloom_opts)
+
+        merged = Bloom.merge(sa, sb)
+        assert Bloom.count(merged) >= max(Bloom.count(sa), Bloom.count(sb))
       end
     end
   end
