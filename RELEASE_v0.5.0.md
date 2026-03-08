@@ -175,7 +175,7 @@ chain =
   |> ExDataSketch.FilterChain.add_stage(ExDataSketch.Cuckoo.new(capacity: 10_000))
   |> ExDataSketch.FilterChain.add_stage(ExDataSketch.Bloom.new(capacity: 100_000))
 
-chain = ExDataSketch.FilterChain.put(chain, "item_1")
+{:ok, chain} = ExDataSketch.FilterChain.put(chain, "item_1")
 ExDataSketch.FilterChain.member?(chain, "item_1")  # true
 ```
 

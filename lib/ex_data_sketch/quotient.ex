@@ -318,6 +318,9 @@ defmodule ExDataSketch.Quotient do
     opts_a[:q] == opts_b[:q] and opts_a[:r] == opts_b[:r] and opts_a[:seed] == opts_b[:seed]
   end
 
+  @doc """
+  Returns the set of capabilities supported by Quotient filter.
+  """
   def capabilities do
     MapSet.new([
       :new,

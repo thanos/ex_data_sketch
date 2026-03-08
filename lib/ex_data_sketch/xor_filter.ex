@@ -97,7 +97,10 @@ defmodule ExDataSketch.XorFilter do
         seed: seed
       ] ++ if(hash_fn, do: [hash_fn: hash_fn], else: [])
 
-    hashes = Enum.map(items, &hash_item(&1, clean_opts))
+    hashes =
+      items
+      |> Enum.map(&hash_item(&1, clean_opts))
+      |> Enum.uniq()
 
     case backend.xor_build(hashes, clean_opts) do
       {:ok, state} ->

@@ -271,8 +271,17 @@ defmodule ExDataSketch.FilterChain do
           adjunct_count::unsigned-8, _reserved::unsigned-8, rest::binary>>
       ) do
     with {:ok, stages, rest} <- decode_stages(rest, stage_count, []),
-         {:ok, adjuncts, <<>>} <- decode_stages(rest, adjunct_count, []) do
-      {:ok, %__MODULE__{stages: stages, adjuncts: adjuncts}}
+         {:ok, adjuncts, rest2} <- decode_stages(rest, adjunct_count, []) do
+      case rest2 do
+        <<>> ->
+          {:ok, %__MODULE__{stages: stages, adjuncts: adjuncts}}
+
+        _ ->
+          {:error,
+           Errors.DeserializationError.exception(
+             reason: "trailing data after FCN1 stages (#{byte_size(rest2)} extra bytes)"
+           )}
+      end
     end
   end
 
@@ -284,6 +293,9 @@ defmodule ExDataSketch.FilterChain do
     {:error, Errors.DeserializationError.exception(reason: "invalid FCN1 header")}
   end
 
+  @doc """
+  Returns the set of capabilities supported by FilterChain.
+  """
   def capabilities do
     MapSet.new([
       :new,

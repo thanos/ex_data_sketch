@@ -390,6 +390,9 @@ defmodule ExDataSketch.IBLT do
       opts_a[:seed] == opts_b[:seed]
   end
 
+  @doc """
+  Returns the set of capabilities supported by IBLT.
+  """
   def capabilities do
     MapSet.new([
       :new,

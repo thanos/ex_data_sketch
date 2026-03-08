@@ -385,6 +385,9 @@ defmodule ExDataSketch.Bloom do
       opts_a[:seed] == opts_b[:seed]
   end
 
+  @doc """
+  Returns the set of capabilities supported by Bloom filter.
+  """
   def capabilities do
     MapSet.new([
       :new,

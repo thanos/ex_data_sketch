@@ -329,6 +329,9 @@ defmodule ExDataSketch.CQF do
     opts_a[:q] == opts_b[:q] and opts_a[:r] == opts_b[:r] and opts_a[:seed] == opts_b[:seed]
   end
 
+  @doc """
+  Returns the set of capabilities supported by CQF.
+  """
   def capabilities do
     MapSet.new([
       :new,
