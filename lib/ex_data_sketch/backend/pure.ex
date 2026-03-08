@@ -1298,31 +1298,21 @@ defmodule ExDataSketch.Backend.Pure do
   @spec ddsketch_rank(binary(), float(), keyword()) :: float() | nil
   def ddsketch_rank(state_bin, value, _opts) do
     state = dds_decode_state(state_bin)
+    dds_compute_rank(state, value)
+  end
 
-    cond do
-      state.n == 0 ->
-        nil
+  defp dds_compute_rank(%{n: 0}, _value), do: nil
+  defp dds_compute_rank(_state, value) when value < 0.0, do: 0.0
 
-      value < 0.0 ->
-        0.0
+  defp dds_compute_rank(state, value) do
+    value_index = dds_compute_index(value, state.min_indexable, state.log_gamma)
 
-      true ->
-        cumulative =
-          if value >= 0.0 do
-            state.zero_count
-          else
-            0
-          end
+    cumulative =
+      Enum.reduce(state.bins, state.zero_count, fn {index, count}, acc ->
+        if index <= value_index, do: acc + count, else: acc
+      end)
 
-        value_index = dds_compute_index(value, state.min_indexable, state.log_gamma)
-
-        cumulative =
-          Enum.reduce(state.bins, cumulative, fn {index, count}, acc ->
-            if index <= value_index, do: acc + count, else: acc
-          end)
-
-        cumulative / state.n
-    end
+    cumulative / state.n
   end
 
   # -- DDSketch Private Helpers --
@@ -4178,6 +4168,32 @@ defmodule ExDataSketch.Backend.Pure do
   @req_magic "REQ1"
   @req_nan <<0, 0, 0, 0, 0, 0, 248, 127>>
 
+  defmodule REQState do
+    @moduledoc false
+    @enforce_keys [
+      :k,
+      :hra,
+      :n,
+      :min_val,
+      :max_val,
+      :num_levels,
+      :compaction_bits,
+      :level_sizes,
+      :levels
+    ]
+    defstruct [
+      :k,
+      :hra,
+      :n,
+      :min_val,
+      :max_val,
+      :num_levels,
+      :compaction_bits,
+      :level_sizes,
+      :levels
+    ]
+  end
+
   @impl true
   @spec req_new(keyword()) :: binary()
   def req_new(opts) do
@@ -4188,7 +4204,18 @@ defmodule ExDataSketch.Backend.Pure do
     compaction_bits = :binary.copy(<<0>>, parity_bytes)
     level_sizes = List.duplicate(0, num_levels)
     levels = List.duplicate([], num_levels)
-    req_encode_state(k, hra, 0, :nan, :nan, num_levels, compaction_bits, level_sizes, levels)
+
+    req_encode_state(%REQState{
+      k: k,
+      hra: hra,
+      n: 0,
+      min_val: :nan,
+      max_val: :nan,
+      num_levels: num_levels,
+      compaction_bits: compaction_bits,
+      level_sizes: level_sizes,
+      levels: levels
+    })
   end
 
   @impl true
@@ -4315,17 +4342,17 @@ defmodule ExDataSketch.Backend.Pure do
     max(2, floor(k * :math.pow(2 / 3, depth)) + 1)
   end
 
-  defp req_encode_state(
-         k,
-         hra,
-         n,
-         min_val,
-         max_val,
-         num_levels,
-         compaction_bits,
-         level_sizes,
-         items
-       ) do
+  defp req_encode_state(%REQState{
+         k: k,
+         hra: hra,
+         n: n,
+         min_val: min_val,
+         max_val: max_val,
+         num_levels: num_levels,
+         compaction_bits: compaction_bits,
+         levels: items,
+         level_sizes: level_sizes
+       }) do
     min_bin = req_encode_f64(min_val)
     max_bin = req_encode_f64(max_val)
     flags = if hra, do: 1, else: 0
@@ -4395,7 +4422,7 @@ defmodule ExDataSketch.Backend.Pure do
     level_sizes = kll_decode_u32_list(level_sizes_bin, [])
     levels = kll_decode_levels(items_bin, level_sizes, [])
 
-    %{
+    %REQState{
       k: k,
       hra: hra,
       n: n,
@@ -4416,17 +4443,7 @@ defmodule ExDataSketch.Backend.Pure do
   defp req_decode_f64_value(<<val::float-little-64>>), do: val
 
   defp req_encode_from_map(state) do
-    req_encode_state(
-      state.k,
-      state.hra,
-      state.n,
-      state.min_val,
-      state.max_val,
-      state.num_levels,
-      state.compaction_bits,
-      state.level_sizes,
-      state.levels
-    )
+    req_encode_state(state)
   end
 
   defp req_insert_value(state, value) do
@@ -4595,7 +4612,7 @@ defmodule ExDataSketch.Backend.Pure do
       |> Enum.map(fn {ab, bb} -> bor(ab, bb) end)
       |> :binary.list_to_bin()
 
-    state = %{
+    state = %REQState{
       k: a.k,
       hra: a.hra,
       n: new_n,
