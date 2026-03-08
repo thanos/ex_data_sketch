@@ -23,6 +23,15 @@ defmodule ExDataSketch.Hash do
   For cross-version stability, a custom hash function can be supplied via the
   `:hash_fn` option.
 
+  ## XXHash3
+
+  When the Rust NIF is available, `xxhash3_64/1` and `xxhash3_64/2` provide
+  XXHash3 hashing which is faster and has better distribution than the
+  phash2-based default. XXHash3 is opt-in for backwards compatibility with
+  existing serialized data:
+
+      HLL.new(p: 14, hash_fn: &ExDataSketch.Hash.xxhash3_64/1)
+
   ## Pluggable Hash
 
   Pass `hash_fn: fn term -> non_neg_integer end` to override the default.
@@ -111,6 +120,56 @@ defmodule ExDataSketch.Hash do
 
       hash_fn when is_function(hash_fn, 1) ->
         hash_fn.(binary)
+    end
+  end
+
+  @doc """
+  Hashes a binary using XXHash3 (64-bit) via Rust NIF.
+
+  Returns a deterministic 64-bit hash that is stable across platforms and
+  versions. Falls back to the phash2-based hash if the NIF is not available.
+
+  This function operates on raw binary data. For Elixir terms, convert to
+  binary first (e.g., using `:erlang.term_to_binary/1` or `to_string/1`).
+
+  ## Examples
+
+      iex> h = ExDataSketch.Hash.xxhash3_64("hello")
+      iex> is_integer(h) and h >= 0
+      true
+
+      iex> ExDataSketch.Hash.xxhash3_64("hello") == ExDataSketch.Hash.xxhash3_64("hello")
+      true
+
+  """
+  @spec xxhash3_64(binary()) :: hash64()
+  def xxhash3_64(data) when is_binary(data) do
+    xxhash3_64(data, 0)
+  end
+
+  @doc """
+  Hashes a binary using XXHash3 (64-bit) with a seed via Rust NIF.
+
+  Falls back to the phash2-based hash if the NIF is not available.
+
+  ## Examples
+
+      iex> h = ExDataSketch.Hash.xxhash3_64("hello", 42)
+      iex> is_integer(h) and h >= 0
+      true
+
+      iex> ExDataSketch.Hash.xxhash3_64("hello", 0) != ExDataSketch.Hash.xxhash3_64("hello", 42)
+      true
+
+  """
+  @spec xxhash3_64(binary(), non_neg_integer()) :: hash64()
+  def xxhash3_64(data, seed) when is_binary(data) and is_integer(seed) do
+    try do
+      ExDataSketch.Nif.xxhash3_64_seeded_nif(data, seed)
+    rescue
+      _ ->
+        # Fallback to phash2-based hash
+        mix64(:erlang.phash2(data, 1 <<< 32), seed)
     end
   end
 

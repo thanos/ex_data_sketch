@@ -28,6 +28,8 @@ defmodule ExDataSketch.BackendTest.StubBackend do
   def kll_count(_s, _o), do: 0
   def kll_min(_s, _o), do: nil
   def kll_max(_s, _o), do: nil
+  def kll_cdf(_s, _sp, _o), do: nil
+  def kll_pmf(_s, _sp, _o), do: nil
   def ddsketch_new(_opts), do: <<>>
   def ddsketch_update(s, _v, _o), do: s
   def ddsketch_update_many(s, _v, _o), do: s
@@ -36,6 +38,26 @@ defmodule ExDataSketch.BackendTest.StubBackend do
   def ddsketch_count(_s, _o), do: 0
   def ddsketch_min(_s, _o), do: nil
   def ddsketch_max(_s, _o), do: nil
+  def ddsketch_rank(_s, _v, _o), do: nil
+  def req_new(_opts), do: <<>>
+  def req_update(s, _v, _o), do: s
+  def req_update_many(s, _v, _o), do: s
+  def req_merge(s, _b, _o), do: s
+  def req_quantile(_s, _r, _o), do: nil
+  def req_rank(_s, _v, _o), do: nil
+  def req_cdf(_s, _sp, _o), do: nil
+  def req_pmf(_s, _sp, _o), do: nil
+  def req_count(_s, _o), do: 0
+  def req_min(_s, _o), do: nil
+  def req_max(_s, _o), do: nil
+  def mg_new(_opts), do: <<>>
+  def mg_update(s, _ib, _o), do: s
+  def mg_update_many(s, _items, _o), do: s
+  def mg_merge(s, _b, _o), do: s
+  def mg_estimate(_s, _ib, _o), do: 0
+  def mg_top_k(_s, _l, _o), do: []
+  def mg_count(_s, _o), do: 0
+  def mg_entry_count(_s, _o), do: 0
   def bloom_new(_opts), do: <<>>
   def bloom_put(s, _h, _o), do: s
   def bloom_put_many(s, _h, _o), do: s

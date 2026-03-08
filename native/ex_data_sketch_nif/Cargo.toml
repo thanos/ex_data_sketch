@@ -15,6 +15,7 @@ nif_version_2_17 = ["rustler/nif_version_2_17"]
 
 [dependencies]
 rustler = { version = "0.36", default-features = false, features = ["derive"] }
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 [profile.release]
 opt-level = 3

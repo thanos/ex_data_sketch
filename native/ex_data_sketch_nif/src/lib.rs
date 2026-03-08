@@ -2,6 +2,7 @@ mod cms;
 mod ddsketch;
 mod error;
 mod fi;
+mod hash;
 mod hll;
 mod kll;
 mod theta;

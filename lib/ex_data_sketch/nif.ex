@@ -60,6 +60,10 @@ defmodule ExDataSketch.Nif do
   def ddsketch_merge_nif(_a_bin, _b_bin), do: :erlang.nif_error(:not_loaded)
   def ddsketch_merge_dirty_nif(_a_bin, _b_bin), do: :erlang.nif_error(:not_loaded)
 
+  # Hash (XXHash3)
+  def xxhash3_64_nif(_data), do: :erlang.nif_error(:not_loaded)
+  def xxhash3_64_seeded_nif(_data, _seed), do: :erlang.nif_error(:not_loaded)
+
   # FrequentItems
   def fi_new_nif(_k, _flags), do: :erlang.nif_error(:not_loaded)
   def fi_update_many_nif(_state_bin, _packed_items_bin), do: :erlang.nif_error(:not_loaded)

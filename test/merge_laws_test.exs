@@ -6,7 +6,7 @@ defmodule ExDataSketch.MergeLawsTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
-  alias ExDataSketch.{Bloom, CMS, DDSketch, FrequentItems, HLL, KLL, Theta}
+  alias ExDataSketch.{Bloom, CMS, DDSketch, FrequentItems, HLL, KLL, MisraGries, REQ, Theta}
 
   @max_runs 50
   @hll_opts [p: 10]
@@ -16,6 +16,8 @@ defmodule ExDataSketch.MergeLawsTest do
   @dds_opts [alpha: 0.01]
   @fi_opts [k: 16]
   @bloom_opts [capacity: 1000]
+  @req_opts [k: 12, hra: true]
+  @mg_opts [k: 10]
 
   defp string_list(max_length \\ 20) do
     list_of(string(:alphanumeric, min_length: 1), min_length: 1, max_length: max_length)
@@ -483,6 +485,95 @@ defmodule ExDataSketch.MergeLawsTest do
 
         assert FrequentItems.count(merged) ==
                  FrequentItems.count(sa) + FrequentItems.count(sb)
+      end
+    end
+  end
+
+  describe "REQ merge laws" do
+    property "commutativity (count)" do
+      check all(
+              a <- float_list(),
+              b <- float_list(),
+              max_runs: @max_runs
+            ) do
+        sa = REQ.from_enumerable(a, @req_opts)
+        sb = REQ.from_enumerable(b, @req_opts)
+
+        assert REQ.count(REQ.merge(sa, sb)) == REQ.count(REQ.merge(sb, sa))
+      end
+    end
+
+    property "identity (merge with empty)" do
+      check all(
+              a <- float_list(),
+              max_runs: @max_runs
+            ) do
+        sa = REQ.from_enumerable(a, @req_opts)
+        empty = REQ.new(@req_opts)
+
+        merged = REQ.merge(sa, empty)
+        assert REQ.count(merged) == REQ.count(sa)
+        assert REQ.min_value(merged) == REQ.min_value(sa)
+        assert REQ.max_value(merged) == REQ.max_value(sa)
+      end
+    end
+
+    property "count additivity" do
+      check all(
+              a <- float_list(),
+              b <- float_list(),
+              max_runs: @max_runs
+            ) do
+        sa = REQ.from_enumerable(a, @req_opts)
+        sb = REQ.from_enumerable(b, @req_opts)
+
+        merged = REQ.merge(sa, sb)
+        assert REQ.count(merged) == REQ.count(sa) + REQ.count(sb)
+      end
+    end
+  end
+
+  describe "MisraGries merge laws" do
+    property "commutativity (count)" do
+      check all(
+              a <- string_list(),
+              b <- string_list(),
+              max_runs: @max_runs
+            ) do
+        sa = MisraGries.from_enumerable(a, @mg_opts)
+        sb = MisraGries.from_enumerable(b, @mg_opts)
+
+        assert MisraGries.count(MisraGries.merge(sa, sb)) ==
+                 MisraGries.count(MisraGries.merge(sb, sa))
+      end
+    end
+
+    property "identity (merge with empty)" do
+      check all(
+              a <- string_list(),
+              max_runs: @max_runs
+            ) do
+        sa = MisraGries.from_enumerable(a, @mg_opts)
+        empty = MisraGries.new(@mg_opts)
+
+        merged = MisraGries.merge(sa, empty)
+        assert MisraGries.count(merged) == MisraGries.count(sa)
+      end
+    end
+
+    property "count additivity" do
+      check all(
+              a <- string_list(),
+              b <- string_list(),
+              max_runs: @max_runs
+            ) do
+        sa = MisraGries.from_enumerable(a, @mg_opts)
+        sb = MisraGries.from_enumerable(b, @mg_opts)
+
+        merged = MisraGries.merge(sa, sb)
+
+        assert MisraGries.count(merged) ==
+                 MisraGries.count(sa) + MisraGries.count(sb)
       end
     end
   end

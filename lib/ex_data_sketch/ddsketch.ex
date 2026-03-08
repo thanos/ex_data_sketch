@@ -236,6 +236,26 @@ defmodule ExDataSketch.DDSketch do
   end
 
   @doc """
+  Returns the approximate normalized rank of a given value.
+
+  The rank is the fraction of items in the sketch that are less than or
+  equal to the given value. Returns `nil` if the sketch is empty.
+
+  ## Examples
+
+      iex> sketch = ExDataSketch.DDSketch.new() |> ExDataSketch.DDSketch.update_many(1..100)
+      iex> r = ExDataSketch.DDSketch.rank(sketch, 50.0)
+      iex> is_float(r)
+      true
+
+  """
+  @spec rank(t(), number()) :: float() | nil
+  def rank(%__MODULE__{state: state, opts: opts, backend: backend}, value)
+      when is_number(value) do
+    backend.ddsketch_rank(state, value * 1.0, opts)
+  end
+
+  @doc """
   Returns the total number of items inserted into the sketch.
 
   ## Examples

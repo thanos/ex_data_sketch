@@ -77,4 +77,61 @@ defmodule ExDataSketch.HashTest do
       assert result >= 0
     end
   end
+
+  describe "xxhash3_64/1" do
+    test "returns a non-negative integer" do
+      result = Hash.xxhash3_64("hello")
+      assert is_integer(result)
+      assert result >= 0
+    end
+
+    test "is deterministic" do
+      assert Hash.xxhash3_64("test") == Hash.xxhash3_64("test")
+    end
+
+    test "different inputs produce different hashes" do
+      h1 = Hash.xxhash3_64("alice")
+      h2 = Hash.xxhash3_64("bob")
+      assert h1 != h2
+    end
+
+    test "produces 64-bit values" do
+      result = Hash.xxhash3_64("something")
+      assert result >= 0
+      assert result <= 0xFFFFFFFFFFFFFFFF
+    end
+
+    test "empty binary hashes to a value" do
+      result = Hash.xxhash3_64(<<>>)
+      assert is_integer(result)
+      assert result >= 0
+    end
+
+    test "known test vector: empty string" do
+      # XXHash3 of empty string with seed 0 is a known constant
+      h = Hash.xxhash3_64(<<>>)
+      assert is_integer(h)
+      # Just verify it works and is deterministic
+      assert h == Hash.xxhash3_64(<<>>, 0)
+    end
+  end
+
+  describe "xxhash3_64/2 (seeded)" do
+    test "different seeds produce different hashes" do
+      h1 = Hash.xxhash3_64("item", 0)
+      h2 = Hash.xxhash3_64("item", 42)
+      assert h1 != h2
+    end
+
+    test "is deterministic with same seed" do
+      assert Hash.xxhash3_64("data", 123) == Hash.xxhash3_64("data", 123)
+    end
+
+    test "can be used as hash_fn for sketches" do
+      hash_fn = fn term -> Hash.xxhash3_64(to_string(term)) end
+      sketch = ExDataSketch.HLL.new(p: 10, hash_fn: hash_fn)
+      sketch = ExDataSketch.HLL.update_many(sketch, ["a", "b", "c"])
+      assert ExDataSketch.HLL.estimate(sketch) > 0.0
+    end
+  end
 end

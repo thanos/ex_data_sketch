@@ -689,6 +689,39 @@ defmodule ExDataSketch.Backend.Pure do
     if n == 0, do: nil, else: kll_decode_f64_value(max_bin)
   end
 
+  @impl true
+  @spec kll_cdf(binary(), [float()], keyword()) :: [float()] | nil
+  def kll_cdf(state_bin, split_points, _opts) do
+    state = kll_decode_state(state_bin)
+
+    if state.n == 0 do
+      nil
+    else
+      sorted_view = kll_build_sorted_view(state)
+      Enum.map(split_points, fn sp -> kll_query_rank(sorted_view, state.n, sp) end)
+    end
+  end
+
+  @impl true
+  @spec kll_pmf(binary(), [float()], keyword()) :: [float()] | nil
+  def kll_pmf(state_bin, split_points, _opts) do
+    state = kll_decode_state(state_bin)
+
+    if state.n == 0 do
+      nil
+    else
+      sorted_view = kll_build_sorted_view(state)
+      cdf_values = Enum.map(split_points, fn sp -> kll_query_rank(sorted_view, state.n, sp) end)
+
+      # PMF returns m+1 bins: (-inf, s1], (s1, s2], ..., (sm, +inf)
+      cdf_with_bounds = [0.0] ++ cdf_values ++ [1.0]
+
+      cdf_with_bounds
+      |> Enum.chunk_every(2, 1, :discard)
+      |> Enum.map(fn [a, b] -> b - a end)
+    end
+  end
+
   # -- KLL Private Helpers --
 
   defp kll_level_capacity(k, level, num_levels) do
@@ -1259,6 +1292,37 @@ defmodule ExDataSketch.Backend.Pure do
       _min_bin::binary-size(8), max_bin::binary-size(8), _rest::binary>> = state_bin
 
     if n == 0, do: nil, else: dds_decode_f64_value(max_bin)
+  end
+
+  @impl true
+  @spec ddsketch_rank(binary(), float(), keyword()) :: float() | nil
+  def ddsketch_rank(state_bin, value, _opts) do
+    state = dds_decode_state(state_bin)
+
+    cond do
+      state.n == 0 ->
+        nil
+
+      value < 0.0 ->
+        0.0
+
+      true ->
+        cumulative =
+          if value >= 0.0 do
+            state.zero_count
+          else
+            0
+          end
+
+        value_index = dds_compute_index(value, state.min_indexable, state.log_gamma)
+
+        cumulative =
+          Enum.reduce(state.bins, cumulative, fn {index, count}, acc ->
+            if index <= value_index, do: acc + count, else: acc
+          end)
+
+        cumulative / state.n
+    end
   end
 
   # -- DDSketch Private Helpers --
@@ -3489,6 +3553,198 @@ defmodule ExDataSketch.Backend.Pure do
   end
 
   # ============================================================
+  # MisraGries Implementation
+  # ============================================================
+  #
+  # Misra-Gries algorithm for deterministic heavy hitter detection.
+  # Maintains at most k counters. Any item with true frequency > n/k
+  # is guaranteed to be tracked (deterministic guarantee).
+  #
+  # State binary layout (MG01):
+  #   magic:       4 bytes  "MG01"
+  #   version:     u8       1
+  #   reserved:    u8       0
+  #   k:           u32 LE   max counters
+  #   n:           u64 LE   total count
+  #   entry_count: u32 LE   number of entries
+  #   entries:     entry_count x (key_len: u32 LE, key: key_len bytes, count: u64 LE)
+
+  @mg_magic "MG01"
+
+  @impl true
+  @spec mg_new(keyword()) :: binary()
+  def mg_new(opts) do
+    k = Keyword.fetch!(opts, :k)
+
+    <<
+      @mg_magic::binary,
+      1::unsigned-8,
+      0::unsigned-8,
+      k::unsigned-little-32,
+      0::unsigned-little-64,
+      0::unsigned-little-32
+    >>
+  end
+
+  @impl true
+  @spec mg_update(binary(), binary(), keyword()) :: binary()
+  def mg_update(state_bin, item_bytes, _opts) do
+    state = mg_decode_state(state_bin)
+    state = mg_insert(state, item_bytes)
+    mg_encode_state(state)
+  end
+
+  @impl true
+  @spec mg_update_many(binary(), [binary()], keyword()) :: binary()
+  def mg_update_many(state_bin, items, _opts) do
+    state = mg_decode_state(state_bin)
+    state = Enum.reduce(items, state, &mg_insert(&2, &1))
+    mg_encode_state(state)
+  end
+
+  @impl true
+  @spec mg_merge(binary(), binary(), keyword()) :: binary()
+  def mg_merge(state_bin_a, state_bin_b, _opts) do
+    a = mg_decode_state(state_bin_a)
+    b = mg_decode_state(state_bin_b)
+
+    if a.k != b.k do
+      raise ExDataSketch.Errors.IncompatibleSketchesError,
+        reason: "MisraGries k mismatch: #{a.k} vs #{b.k}"
+    end
+
+    # Merge: combine counters additively
+    merged_entries =
+      Map.merge(a.entries, b.entries, fn _key, c1, c2 -> c1 + c2 end)
+
+    new_n = a.n + b.n
+
+    # If more than k entries, prune: subtract the (k+1)th largest count,
+    # then remove entries with count <= 0
+    pruned =
+      if map_size(merged_entries) > a.k do
+        counts = merged_entries |> Map.values() |> Enum.sort(:desc)
+        # The (k+1)th largest count (0-indexed: index k)
+        threshold = Enum.at(counts, a.k, 0)
+
+        merged_entries
+        |> Enum.map(fn {key, count} -> {key, count - threshold} end)
+        |> Enum.filter(fn {_key, count} -> count > 0 end)
+        |> Map.new()
+      else
+        merged_entries
+      end
+
+    mg_encode_state(%{k: a.k, n: new_n, entries: pruned})
+  end
+
+  @impl true
+  @spec mg_estimate(binary(), binary(), keyword()) :: non_neg_integer()
+  def mg_estimate(state_bin, item_bytes, _opts) do
+    state = mg_decode_state(state_bin)
+    Map.get(state.entries, item_bytes, 0)
+  end
+
+  @impl true
+  @spec mg_top_k(binary(), non_neg_integer(), keyword()) :: [{binary(), non_neg_integer()}]
+  def mg_top_k(state_bin, limit, _opts) do
+    state = mg_decode_state(state_bin)
+
+    state.entries
+    |> Enum.sort_by(fn {_key, count} -> count end, :desc)
+    |> Enum.take(limit)
+  end
+
+  @impl true
+  @spec mg_count(binary(), keyword()) :: non_neg_integer()
+  def mg_count(state_bin, _opts) do
+    <<@mg_magic, 1::8, _::8, _k::32, n::unsigned-little-64, _::binary>> = state_bin
+    n
+  end
+
+  @impl true
+  @spec mg_entry_count(binary(), keyword()) :: non_neg_integer()
+  def mg_entry_count(state_bin, _opts) do
+    <<@mg_magic, 1::8, _::8, _k::32, _n::64, entry_count::unsigned-little-32, _::binary>> =
+      state_bin
+
+    entry_count
+  end
+
+  # -- MisraGries Private Helpers --
+
+  defp mg_decode_state(state_bin) do
+    <<
+      @mg_magic::binary,
+      1::unsigned-8,
+      _reserved::unsigned-8,
+      k::unsigned-little-32,
+      n::unsigned-little-64,
+      entry_count::unsigned-little-32,
+      body::binary
+    >> = state_bin
+
+    entries = mg_decode_entries(body, entry_count, %{})
+    %{k: k, n: n, entries: entries}
+  end
+
+  defp mg_decode_entries(_bin, 0, acc), do: acc
+
+  defp mg_decode_entries(bin, remaining, acc) do
+    <<key_len::unsigned-little-32, rest::binary>> = bin
+    <<key::binary-size(^key_len), count::unsigned-little-64, rest2::binary>> = rest
+    mg_decode_entries(rest2, remaining - 1, Map.put(acc, key, count))
+  end
+
+  defp mg_encode_state(%{k: k, n: n, entries: entries}) do
+    entry_count = map_size(entries)
+
+    entries_bin =
+      entries
+      |> Enum.sort_by(&elem(&1, 0))
+      |> Enum.map(fn {key, count} ->
+        <<byte_size(key)::unsigned-little-32, key::binary, count::unsigned-little-64>>
+      end)
+      |> IO.iodata_to_binary()
+
+    <<
+      @mg_magic::binary,
+      1::unsigned-8,
+      0::unsigned-8,
+      k::unsigned-little-32,
+      n::unsigned-little-64,
+      entry_count::unsigned-little-32,
+      entries_bin::binary
+    >>
+  end
+
+  defp mg_insert(state, item_bytes) do
+    new_n = state.n + 1
+
+    cond do
+      # Item already tracked: increment
+      Map.has_key?(state.entries, item_bytes) ->
+        new_entries = Map.update!(state.entries, item_bytes, &(&1 + 1))
+        %{state | n: new_n, entries: new_entries}
+
+      # Room for new entry
+      map_size(state.entries) < state.k ->
+        new_entries = Map.put(state.entries, item_bytes, 1)
+        %{state | n: new_n, entries: new_entries}
+
+      # No room: decrement all counters by 1, remove zeros
+      true ->
+        new_entries =
+          state.entries
+          |> Enum.map(fn {key, count} -> {key, count - 1} end)
+          |> Enum.filter(fn {_key, count} -> count > 0 end)
+          |> Map.new()
+
+        %{state | n: new_n, entries: new_entries}
+    end
+  end
+
+  # ============================================================
   # IBLT (Invertible Bloom Lookup Table) Implementation
   # ============================================================
 
@@ -3891,6 +4147,474 @@ defmodule ExDataSketch.Backend.Pure do
     else
       {c_acc, p_acc, n_acc}
     end
+  end
+
+  # ============================================================
+  # REQ (Relative Error Quantiles) Implementation
+  # ============================================================
+  #
+  # REQ sketch provides relative error guarantees on quantile values,
+  # with asymmetric accuracy: HRA mode gives better accuracy at high
+  # ranks (p99, p99.9), LRA mode at low ranks.
+  #
+  # The key difference from KLL is biased compaction: in HRA mode,
+  # compaction preferentially discards low-value items, preserving
+  # more data points at the high end of the distribution.
+  #
+  # State binary layout (REQ1):
+  #   magic:           4 bytes  "REQ1"
+  #   version:         u8       1
+  #   flags:           u8       bit0 = hra (1=HRA, 0=LRA)
+  #   reserved:        u16      0
+  #   k:               u32 LE   accuracy parameter
+  #   n:               u64 LE   total count
+  #   min_val:         f64 LE   (NaN sentinel for empty)
+  #   max_val:         f64 LE   (NaN sentinel for empty)
+  #   num_levels:      u8
+  #   compaction_bits: ceil(num_levels/8) bytes (1 bit per level parity)
+  #   level_sizes:     num_levels x u32 LE
+  #   items:           sum(level_sizes) x f64 LE (level 0 first)
+
+  @req_magic "REQ1"
+  @req_nan <<0, 0, 0, 0, 0, 0, 248, 127>>
+
+  @impl true
+  @spec req_new(keyword()) :: binary()
+  def req_new(opts) do
+    k = Keyword.fetch!(opts, :k)
+    hra = Keyword.get(opts, :hra, true)
+    num_levels = 2
+    parity_bytes = div(num_levels + 7, 8)
+    compaction_bits = :binary.copy(<<0>>, parity_bytes)
+    level_sizes = List.duplicate(0, num_levels)
+    levels = List.duplicate([], num_levels)
+    req_encode_state(k, hra, 0, :nan, :nan, num_levels, compaction_bits, level_sizes, levels)
+  end
+
+  @impl true
+  @spec req_update(binary(), float(), keyword()) :: binary()
+  def req_update(state_bin, value, _opts) do
+    state = req_decode_state(state_bin)
+    state = req_insert_value(state, value)
+    req_encode_from_map(state)
+  end
+
+  @impl true
+  @spec req_update_many(binary(), [float()], keyword()) :: binary()
+  def req_update_many(state_bin, values, _opts) do
+    state = req_decode_state(state_bin)
+    state = Enum.reduce(values, state, &req_insert_value(&2, &1))
+    req_encode_from_map(state)
+  end
+
+  @impl true
+  @spec req_merge(binary(), binary(), keyword()) :: binary()
+  def req_merge(state_bin_a, state_bin_b, _opts) do
+    a = req_decode_state(state_bin_a)
+    b = req_decode_state(state_bin_b)
+    merged = req_do_merge(a, b)
+    req_encode_from_map(merged)
+  end
+
+  @impl true
+  @spec req_quantile(binary(), float(), keyword()) :: float() | nil
+  def req_quantile(state_bin, rank, _opts) do
+    state = req_decode_state(state_bin)
+
+    cond do
+      state.n == 0 ->
+        nil
+
+      rank == 0.0 ->
+        state.min_val
+
+      rank == 1.0 ->
+        state.max_val
+
+      true ->
+        sorted_view = req_build_sorted_view(state)
+        kll_query_quantile(sorted_view, state.n, rank)
+    end
+  end
+
+  @impl true
+  @spec req_rank(binary(), float(), keyword()) :: float() | nil
+  def req_rank(state_bin, value, _opts) do
+    state = req_decode_state(state_bin)
+
+    if state.n == 0 do
+      nil
+    else
+      sorted_view = req_build_sorted_view(state)
+      kll_query_rank(sorted_view, state.n, value)
+    end
+  end
+
+  @impl true
+  @spec req_cdf(binary(), [float()], keyword()) :: [float()] | nil
+  def req_cdf(state_bin, split_points, _opts) do
+    state = req_decode_state(state_bin)
+
+    if state.n == 0 do
+      nil
+    else
+      sorted_view = req_build_sorted_view(state)
+      Enum.map(split_points, fn sp -> kll_query_rank(sorted_view, state.n, sp) end)
+    end
+  end
+
+  @impl true
+  @spec req_pmf(binary(), [float()], keyword()) :: [float()] | nil
+  def req_pmf(state_bin, split_points, _opts) do
+    state = req_decode_state(state_bin)
+
+    if state.n == 0 do
+      nil
+    else
+      sorted_view = req_build_sorted_view(state)
+      cdf_values = Enum.map(split_points, fn sp -> kll_query_rank(sorted_view, state.n, sp) end)
+      cdf_with_bounds = [0.0] ++ cdf_values ++ [1.0]
+
+      cdf_with_bounds
+      |> Enum.chunk_every(2, 1, :discard)
+      |> Enum.map(fn [a, b] -> b - a end)
+    end
+  end
+
+  @impl true
+  @spec req_count(binary(), keyword()) :: non_neg_integer()
+  def req_count(state_bin, _opts) do
+    <<@req_magic, 1::8, _flags::8, _reserved::16, _k::32, n::unsigned-little-64, _::binary>> =
+      state_bin
+
+    n
+  end
+
+  @impl true
+  @spec req_min(binary(), keyword()) :: float() | nil
+  def req_min(state_bin, _opts) do
+    <<@req_magic, 1::8, _flags::8, _reserved::16, _k::32, n::unsigned-little-64,
+      min_bin::binary-size(8), _::binary>> = state_bin
+
+    if n == 0, do: nil, else: req_decode_f64_value(min_bin)
+  end
+
+  @impl true
+  @spec req_max(binary(), keyword()) :: float() | nil
+  def req_max(state_bin, _opts) do
+    <<@req_magic, 1::8, _flags::8, _reserved::16, _k::32, n::unsigned-little-64,
+      _min_bin::binary-size(8), max_bin::binary-size(8), _::binary>> = state_bin
+
+    if n == 0, do: nil, else: req_decode_f64_value(max_bin)
+  end
+
+  # -- REQ Private Helpers --
+
+  defp req_level_capacity(k, level, num_levels) do
+    depth = num_levels - 1 - level
+    max(2, floor(k * :math.pow(2 / 3, depth)) + 1)
+  end
+
+  defp req_encode_state(
+         k,
+         hra,
+         n,
+         min_val,
+         max_val,
+         num_levels,
+         compaction_bits,
+         level_sizes,
+         items
+       ) do
+    min_bin = req_encode_f64(min_val)
+    max_bin = req_encode_f64(max_val)
+    flags = if hra, do: 1, else: 0
+    parity_bytes = div(num_levels + 7, 8)
+
+    compaction_bin =
+      if byte_size(compaction_bits) < parity_bytes do
+        <<compaction_bits::binary, 0::size((parity_bytes - byte_size(compaction_bits)) * 8)>>
+      else
+        binary_part(compaction_bits, 0, parity_bytes)
+      end
+
+    level_sizes_bin =
+      level_sizes
+      |> Enum.map(fn s -> <<s::unsigned-little-32>> end)
+      |> IO.iodata_to_binary()
+
+    items_bin =
+      items
+      |> List.flatten()
+      |> Enum.map(fn v -> <<v::float-little-64>> end)
+      |> IO.iodata_to_binary()
+
+    <<
+      @req_magic::binary,
+      1::unsigned-8,
+      flags::unsigned-8,
+      0::unsigned-little-16,
+      k::unsigned-little-32,
+      n::unsigned-little-64,
+      min_bin::binary-size(8),
+      max_bin::binary-size(8),
+      num_levels::unsigned-8,
+      compaction_bin::binary,
+      level_sizes_bin::binary,
+      items_bin::binary
+    >>
+  end
+
+  defp req_encode_f64(:nan), do: @req_nan
+  defp req_encode_f64(val) when is_float(val), do: <<val::float-little-64>>
+
+  defp req_decode_state(state_bin) do
+    <<
+      @req_magic::binary,
+      1::unsigned-8,
+      flags::unsigned-8,
+      _reserved::unsigned-little-16,
+      k::unsigned-little-32,
+      n::unsigned-little-64,
+      min_bin::binary-size(8),
+      max_bin::binary-size(8),
+      num_levels::unsigned-8,
+      rest::binary
+    >> = state_bin
+
+    hra = (flags &&& 1) == 1
+    min_val = req_decode_f64(min_bin, n)
+    max_val = req_decode_f64(max_bin, n)
+
+    parity_bytes = div(num_levels + 7, 8)
+    <<compaction_bits::binary-size(^parity_bytes), rest2::binary>> = rest
+
+    level_sizes_bytes = num_levels * 4
+    <<level_sizes_bin::binary-size(^level_sizes_bytes), items_bin::binary>> = rest2
+
+    level_sizes = kll_decode_u32_list(level_sizes_bin, [])
+    levels = kll_decode_levels(items_bin, level_sizes, [])
+
+    %{
+      k: k,
+      hra: hra,
+      n: n,
+      min_val: min_val,
+      max_val: max_val,
+      num_levels: num_levels,
+      compaction_bits: compaction_bits,
+      level_sizes: level_sizes,
+      levels: levels
+    }
+  end
+
+  defp req_decode_f64(@req_nan, _n), do: :nan
+  defp req_decode_f64(_bin, 0), do: :nan
+  defp req_decode_f64(<<val::float-little-64>>, _n), do: val
+
+  defp req_decode_f64_value(@req_nan), do: nil
+  defp req_decode_f64_value(<<val::float-little-64>>), do: val
+
+  defp req_encode_from_map(state) do
+    req_encode_state(
+      state.k,
+      state.hra,
+      state.n,
+      state.min_val,
+      state.max_val,
+      state.num_levels,
+      state.compaction_bits,
+      state.level_sizes,
+      state.levels
+    )
+  end
+
+  defp req_insert_value(state, value) do
+    new_min =
+      case state.min_val do
+        :nan -> value
+        cur -> min(cur, value)
+      end
+
+    new_max =
+      case state.max_val do
+        :nan -> value
+        cur -> max(cur, value)
+      end
+
+    [level0 | rest_levels] = state.levels
+    new_level0 = [value | level0]
+    new_level0_size = hd(state.level_sizes) + 1
+
+    state = %{
+      state
+      | n: state.n + 1,
+        min_val: new_min,
+        max_val: new_max,
+        levels: [new_level0 | rest_levels],
+        level_sizes: [new_level0_size | tl(state.level_sizes)]
+    }
+
+    state = req_compact_if_needed(state, 0)
+    req_check_grow(state)
+  end
+
+  defp req_compact_if_needed(state, level) do
+    if level >= state.num_levels - 1 do
+      state
+    else
+      capacity = req_level_capacity(state.k, level, state.num_levels)
+      level_size = Enum.at(state.level_sizes, level)
+
+      if level_size >= capacity do
+        req_compact_level(state, level)
+      else
+        state
+      end
+    end
+  end
+
+  defp req_check_grow(state) do
+    top = state.num_levels - 1
+    top_cap = req_level_capacity(state.k, top, state.num_levels)
+    top_size = Enum.at(state.level_sizes, top)
+
+    if top_size >= top_cap do
+      req_grow_levels(state)
+    else
+      state
+    end
+  end
+
+  defp req_grow_levels(state) do
+    new_num_levels = state.num_levels + 1
+    new_levels = state.levels ++ [[]]
+    new_level_sizes = state.level_sizes ++ [0]
+
+    new_parity_bytes = div(new_num_levels + 7, 8)
+    old_parity_bytes = byte_size(state.compaction_bits)
+
+    new_compaction_bits =
+      if new_parity_bytes > old_parity_bytes do
+        state.compaction_bits <> <<0>>
+      else
+        state.compaction_bits
+      end
+
+    state = %{
+      state
+      | num_levels: new_num_levels,
+        levels: new_levels,
+        level_sizes: new_level_sizes,
+        compaction_bits: new_compaction_bits
+    }
+
+    state = req_recompact(state, 0)
+    req_check_grow(state)
+  end
+
+  defp req_compact_level(state, level) do
+    current_level = Enum.at(state.levels, level)
+    sorted = Enum.sort(current_level)
+    n = length(sorted)
+    parity = kll_get_parity(state.compaction_bits, level)
+
+    # REQ biased compaction:
+    # HRA: compact (halve) the LOWER portion, keep UPPER intact at this level
+    # LRA: compact (halve) the UPPER portion, keep LOWER intact at this level
+    half = div(n, 2)
+
+    {stay, promoted} =
+      if state.hra do
+        {lower, upper} = Enum.split(sorted, half)
+        {upper, kll_select_half(lower, parity)}
+      else
+        {lower, upper} = Enum.split(sorted, n - half)
+        {lower, kll_select_half(upper, parity)}
+      end
+
+    new_compaction_bits = kll_flip_parity(state.compaction_bits, level)
+
+    new_levels = List.replace_at(state.levels, level, stay)
+    new_level_sizes = List.replace_at(state.level_sizes, level, length(stay))
+
+    next_level = Enum.at(new_levels, level + 1)
+    new_next_level = promoted ++ next_level
+    new_levels = List.replace_at(new_levels, level + 1, new_next_level)
+    new_level_sizes = List.replace_at(new_level_sizes, level + 1, length(new_next_level))
+
+    state = %{
+      state
+      | levels: new_levels,
+        level_sizes: new_level_sizes,
+        compaction_bits: new_compaction_bits
+    }
+
+    req_compact_if_needed(state, level + 1)
+  end
+
+  defp req_build_sorted_view(state) do
+    state.levels
+    |> Enum.with_index()
+    |> Enum.flat_map(fn {level, idx} ->
+      weight = 1 <<< idx
+      Enum.map(level, fn val -> {val, weight} end)
+    end)
+    |> Enum.sort_by(&elem(&1, 0))
+  end
+
+  defp req_do_merge(a, b) do
+    if a.hra != b.hra do
+      raise ExDataSketch.Errors.IncompatibleSketchesError,
+        reason: "REQ mode mismatch: cannot merge HRA and LRA sketches"
+    end
+
+    {new_min, new_max} =
+      case {a.min_val, b.min_val} do
+        {:nan, :nan} -> {:nan, :nan}
+        {:nan, _} -> {b.min_val, b.max_val}
+        {_, :nan} -> {a.min_val, a.max_val}
+        _ -> {min(a.min_val, b.min_val), max(a.max_val, b.max_val)}
+      end
+
+    new_n = a.n + b.n
+    max_levels = max(a.num_levels, b.num_levels)
+
+    a_levels = a.levels ++ List.duplicate([], max_levels - a.num_levels)
+    b_levels = b.levels ++ List.duplicate([], max_levels - b.num_levels)
+
+    merged_levels = Enum.zip_with(a_levels, b_levels, fn al, bl -> al ++ bl end)
+    merged_sizes = Enum.map(merged_levels, &length/1)
+
+    a_bits = kll_pad_bits(a.compaction_bits, max_levels)
+    b_bits = kll_pad_bits(b.compaction_bits, max_levels)
+
+    merged_bits =
+      :binary.bin_to_list(a_bits)
+      |> Enum.zip(:binary.bin_to_list(b_bits))
+      |> Enum.map(fn {ab, bb} -> bor(ab, bb) end)
+      |> :binary.list_to_bin()
+
+    state = %{
+      k: a.k,
+      hra: a.hra,
+      n: new_n,
+      min_val: new_min,
+      max_val: new_max,
+      num_levels: max_levels,
+      compaction_bits: merged_bits,
+      level_sizes: merged_sizes,
+      levels: merged_levels
+    }
+
+    req_recompact(state, 0)
+  end
+
+  defp req_recompact(state, level) when level >= state.num_levels, do: state
+
+  defp req_recompact(state, level) do
+    state = req_compact_if_needed(state, level)
+    req_recompact(state, level + 1)
   end
 
   defp iblt_remove_entry(cells, key_sum, value_sum, count, hash_count, seed, cell_count) do

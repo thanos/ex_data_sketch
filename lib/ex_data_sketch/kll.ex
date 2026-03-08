@@ -245,6 +245,56 @@ defmodule ExDataSketch.KLL do
   end
 
   @doc """
+  Returns the Cumulative Distribution Function (CDF) at the given split points.
+
+  Given split points `[s1, s2, ..., sm]`, returns `[rank(s1), rank(s2), ..., rank(sm)]`.
+  Each value is the approximate fraction of items less than or equal to the
+  corresponding split point.
+
+  Returns `nil` if the sketch is empty.
+
+  ## Examples
+
+      iex> sketch = ExDataSketch.KLL.new() |> ExDataSketch.KLL.update_many(1..100)
+      iex> cdf = ExDataSketch.KLL.cdf(sketch, [25.0, 50.0, 75.0])
+      iex> length(cdf)
+      3
+
+  """
+  @spec cdf(t(), [number()]) :: [float()] | nil
+  def cdf(%__MODULE__{state: state, opts: opts, backend: backend}, split_points)
+      when is_list(split_points) do
+    floats = Enum.map(split_points, fn v when is_number(v) -> v * 1.0 end)
+    backend.kll_cdf(state, floats, opts)
+  end
+
+  @doc """
+  Returns the Probability Mass Function (PMF) at the given split points.
+
+  Given split points `[s1, s2, ..., sm]`, returns `m+1` values representing
+  the approximate fraction of items in the intervals
+  `(-inf, s1], (s1, s2], ..., (sm, +inf)`.
+
+  The returned values sum to 1.0.
+
+  Returns `nil` if the sketch is empty.
+
+  ## Examples
+
+      iex> sketch = ExDataSketch.KLL.new() |> ExDataSketch.KLL.update_many(1..100)
+      iex> pmf = ExDataSketch.KLL.pmf(sketch, [50.0])
+      iex> length(pmf)
+      2
+
+  """
+  @spec pmf(t(), [number()]) :: [float()] | nil
+  def pmf(%__MODULE__{state: state, opts: opts, backend: backend}, split_points)
+      when is_list(split_points) do
+    floats = Enum.map(split_points, fn v when is_number(v) -> v * 1.0 end)
+    backend.kll_pmf(state, floats, opts)
+  end
+
+  @doc """
   Returns the total number of items inserted into the sketch.
 
   ## Examples

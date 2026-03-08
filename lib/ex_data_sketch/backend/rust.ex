@@ -290,6 +290,12 @@ defmodule ExDataSketch.Backend.Rust do
   @impl true
   def kll_max(state_bin, opts), do: Pure.kll_max(state_bin, opts)
 
+  @impl true
+  def kll_cdf(state_bin, split_points, opts), do: Pure.kll_cdf(state_bin, split_points, opts)
+
+  @impl true
+  def kll_pmf(state_bin, split_points, opts), do: Pure.kll_pmf(state_bin, split_points, opts)
+
   # -- DDSketch callbacks --
 
   @impl true
@@ -342,6 +348,72 @@ defmodule ExDataSketch.Backend.Rust do
 
   @impl true
   def ddsketch_max(state_bin, opts), do: Pure.ddsketch_max(state_bin, opts)
+
+  @impl true
+  def ddsketch_rank(state_bin, value, opts), do: Pure.ddsketch_rank(state_bin, value, opts)
+
+  # -- REQ callbacks --
+
+  @impl true
+  def req_new(opts), do: Pure.req_new(opts)
+
+  @impl true
+  def req_update(state_bin, value, opts), do: Pure.req_update(state_bin, value, opts)
+
+  @impl true
+  def req_update_many(state_bin, values, opts), do: Pure.req_update_many(state_bin, values, opts)
+
+  @impl true
+  def req_merge(state_bin_a, state_bin_b, opts),
+    do: Pure.req_merge(state_bin_a, state_bin_b, opts)
+
+  @impl true
+  def req_quantile(state_bin, rank, opts), do: Pure.req_quantile(state_bin, rank, opts)
+
+  @impl true
+  def req_rank(state_bin, value, opts), do: Pure.req_rank(state_bin, value, opts)
+
+  @impl true
+  def req_cdf(state_bin, split_points, opts), do: Pure.req_cdf(state_bin, split_points, opts)
+
+  @impl true
+  def req_pmf(state_bin, split_points, opts), do: Pure.req_pmf(state_bin, split_points, opts)
+
+  @impl true
+  def req_count(state_bin, opts), do: Pure.req_count(state_bin, opts)
+
+  @impl true
+  def req_min(state_bin, opts), do: Pure.req_min(state_bin, opts)
+
+  @impl true
+  def req_max(state_bin, opts), do: Pure.req_max(state_bin, opts)
+
+  # -- MisraGries callbacks --
+
+  @impl true
+  def mg_new(opts), do: Pure.mg_new(opts)
+
+  @impl true
+  def mg_update(state_bin, item_bytes, opts), do: Pure.mg_update(state_bin, item_bytes, opts)
+
+  @impl true
+  def mg_update_many(state_bin, items, opts), do: Pure.mg_update_many(state_bin, items, opts)
+
+  @impl true
+  def mg_merge(state_bin_a, state_bin_b, opts),
+    do: Pure.mg_merge(state_bin_a, state_bin_b, opts)
+
+  @impl true
+  def mg_estimate(state_bin, item_bytes, opts), do: Pure.mg_estimate(state_bin, item_bytes, opts)
+
+  @impl true
+  def mg_top_k(state_bin, limit, opts), do: Pure.mg_top_k(state_bin, limit, opts)
+
+  @impl true
+  def mg_count(state_bin, opts), do: Pure.mg_count(state_bin, opts)
+
+  @impl true
+  def mg_entry_count(state_bin, opts), do: Pure.mg_entry_count(state_bin, opts)
 
   # -- Bloom callbacks --
 

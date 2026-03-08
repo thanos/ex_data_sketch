@@ -123,6 +123,8 @@ defmodule ExDataSketch.MixProject do
           ExDataSketch.XorFilter,
           ExDataSketch.IBLT,
           ExDataSketch.FilterChain,
+          ExDataSketch.REQ,
+          ExDataSketch.MisraGries,
           ExDataSketch.Quantiles
         ],
         Infrastructure: [
