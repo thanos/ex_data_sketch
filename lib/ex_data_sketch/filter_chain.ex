@@ -461,8 +461,6 @@ defmodule ExDataSketch.FilterChain do
 
   defp module_for_sketch_id(id) do
     {:error,
-     Errors.DeserializationError.exception(
-       reason: "unknown sketch ID #{id} in FilterChain stage"
-     )}
+     Errors.DeserializationError.exception(reason: "unknown sketch ID #{id} in FilterChain stage")}
   end
 end
