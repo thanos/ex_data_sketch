@@ -148,7 +148,10 @@ mix docs
 | v0.3.0 | FrequentItems (SpaceSaving) | Released |
 | v0.4.0 | Bloom filter (membership testing) | Released |
 | v0.5.0 | Advanced membership filters (Cuckoo, Quotient, CQF, XorFilter, IBLT, FilterChain) | Released |
-| v0.6.0 | TBD | Planned |
+| v0.6.0 | Advanced Quantile Support (KLL / REQ), Include XXHash3 Integration | Planned |
+| v0.7.0 | ULL (UltraLogLog) - Rust NIF Parity | Planned |
+| v0.8.0 | Massive Static Data & Industry Interop  - Binary Fuse Filters, Ribbon Filter Implementation. Apache DataSketches Interop. | Planned |
+| v0.9.0 | dequantized HHL and Sphinx (Succinct Perfect Hash Index) | Planned |
 
 ## License
 
