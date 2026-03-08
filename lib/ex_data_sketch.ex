@@ -17,7 +17,11 @@ defmodule ExDataSketch do
   - `ExDataSketch.FrequentItems` -- SpaceSaving for approximate heavy-hitter detection.
   - `ExDataSketch.Bloom` -- Bloom filter for probabilistic membership testing.
   - `ExDataSketch.Cuckoo` -- Cuckoo filter for membership testing with deletion support.
+  - `ExDataSketch.Quotient` -- Quotient filter for membership testing with deletion and merge.
+  - `ExDataSketch.CQF` -- Counting Quotient Filter for multiset membership with approximate counting.
   - `ExDataSketch.XorFilter` -- Xor filter for static, immutable membership testing.
+  - `ExDataSketch.IBLT` -- Invertible Bloom Lookup Table for set reconciliation.
+  - `ExDataSketch.FilterChain` -- Capability-aware composition framework for membership filters.
   - `ExDataSketch.Quantiles` -- Facade for quantile sketch algorithms.
 
   ## Architecture

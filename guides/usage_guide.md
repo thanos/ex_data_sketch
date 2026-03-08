@@ -1136,7 +1136,8 @@ defmodule Membership.TieredFilter do
 
   def ingest(chain, items) do
     Enum.reduce(items, chain, fn item, acc ->
-      FilterChain.put(acc, item)
+      {:ok, updated} = FilterChain.put(acc, item)
+      updated
     end)
   end
 

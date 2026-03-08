@@ -242,7 +242,7 @@ defmodule ExDataSketch.Codec do
 
   ## Parameters
 
-  - `sketch_id` - sketch type identifier (1=HLL, 2=CMS, 3=Theta, 4=KLL, 5=DDSketch, 6=FrequentItems, 7=Bloom, 8=Cuckoo, 9=Quotient)
+  - `sketch_id` - sketch type identifier (1=HLL, 2=CMS, 3=Theta, 4=KLL, 5=DDSketch, 6=FrequentItems, 7=Bloom, 8=Cuckoo, 9=Quotient, 10=CQF, 11=XorFilter, 12=IBLT)
   - `version` - format version (use `Codec.version/0` for current)
   - `params_bin` - binary-encoded sketch parameters
   - `state_bin` - raw sketch state binary
