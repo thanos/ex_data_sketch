@@ -433,7 +433,7 @@ defmodule ExDataSketch.IBLTTest do
   end
 
   describe "property: count accuracy" do
-    property "count equals number of unique items inserted" do
+    property "count equals total number of insertions" do
       check all(
               items <-
                 list_of(string(:alphanumeric, min_length: 1), min_length: 1, max_length: 20)

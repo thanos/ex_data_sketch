@@ -442,23 +442,27 @@ defmodule ExDataSketch.FilterChain do
   defp deserialize_stage(
          <<"EXSK", _version::unsigned-8, sketch_id::unsigned-8, _rest::binary>> = exsk_bin
        ) do
-    module = module_for_sketch_id(sketch_id)
-    module.deserialize(exsk_bin)
+    case module_for_sketch_id(sketch_id) do
+      {:ok, module} -> module.deserialize(exsk_bin)
+      {:error, _} = err -> err
+    end
   end
 
   defp deserialize_stage(_bin) do
     {:error, Errors.DeserializationError.exception(reason: "stage binary is not valid EXSK")}
   end
 
-  defp module_for_sketch_id(7), do: Bloom
-  defp module_for_sketch_id(8), do: Cuckoo
-  defp module_for_sketch_id(9), do: Quotient
-  defp module_for_sketch_id(10), do: CQF
-  defp module_for_sketch_id(11), do: XorFilter
-  defp module_for_sketch_id(12), do: IBLT
+  defp module_for_sketch_id(7), do: {:ok, Bloom}
+  defp module_for_sketch_id(8), do: {:ok, Cuckoo}
+  defp module_for_sketch_id(9), do: {:ok, Quotient}
+  defp module_for_sketch_id(10), do: {:ok, CQF}
+  defp module_for_sketch_id(11), do: {:ok, XorFilter}
+  defp module_for_sketch_id(12), do: {:ok, IBLT}
 
   defp module_for_sketch_id(id) do
-    raise Errors.DeserializationError,
-      reason: "unknown sketch ID #{id} in FilterChain stage"
+    {:error,
+     Errors.DeserializationError.exception(
+       reason: "unknown sketch ID #{id} in FilterChain stage"
+     )}
   end
 end

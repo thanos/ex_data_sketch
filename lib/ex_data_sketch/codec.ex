@@ -36,6 +36,7 @@ defmodule ExDataSketch.Codec do
   - 9: Quotient
   - 10: CQF (Counting Quotient Filter)
   - 11: XorFilter
+  - 12: IBLT
 
   ## Versioning
 
