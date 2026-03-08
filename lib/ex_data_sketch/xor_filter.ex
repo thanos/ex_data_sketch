@@ -232,6 +232,16 @@ defmodule ExDataSketch.XorFilter do
     ])
   end
 
+  @doc """
+  Returns the byte size of the state binary.
+
+  ## Examples
+
+      iex> {:ok, xor} = ExDataSketch.XorFilter.build(["a", "b"])
+      iex> ExDataSketch.XorFilter.size_bytes(xor) > 0
+      true
+
+  """
   @spec size_bytes(t()) :: non_neg_integer()
   def size_bytes(%__MODULE__{state: state}), do: byte_size(state)
 

@@ -337,19 +337,59 @@ defmodule ExDataSketch.Quotient do
     ])
   end
 
+  @doc """
+  Returns the byte size of the state binary.
+
+  ## Examples
+
+      iex> qf = ExDataSketch.Quotient.new()
+      iex> ExDataSketch.Quotient.size_bytes(qf) > 0
+      true
+
+  """
   @spec size_bytes(t()) :: non_neg_integer()
   def size_bytes(%__MODULE__{state: state}), do: byte_size(state)
 
+  @doc """
+  Creates a Quotient filter from an enumerable of items.
+
+  Equivalent to `new(opts) |> put_many(enumerable)`.
+
+  ## Examples
+
+      iex> qf = ExDataSketch.Quotient.from_enumerable(["a", "b", "c"])
+      iex> ExDataSketch.Quotient.member?(qf, "a")
+      true
+
+  """
   @spec from_enumerable(Enumerable.t(), keyword()) :: t()
   def from_enumerable(enumerable, opts \\ []) do
     new(opts) |> put_many(enumerable)
   end
 
+  @doc """
+  Returns a 2-arity reducer function for use with `Enum.reduce/3`.
+
+  ## Examples
+
+      iex> is_function(ExDataSketch.Quotient.reducer(), 2)
+      true
+
+  """
   @spec reducer() :: (term(), t() -> t())
   def reducer do
     fn item, qf -> put(qf, item) end
   end
 
+  @doc """
+  Returns a 2-arity merge function for combining filters.
+
+  ## Examples
+
+      iex> is_function(ExDataSketch.Quotient.merger(), 2)
+      true
+
+  """
   @spec merger(keyword()) :: (t(), t() -> t())
   def merger(_opts \\ []) do
     fn a, b -> merge(a, b) end
