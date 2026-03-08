@@ -193,6 +193,119 @@ defmodule ExDataSketch.Backend do
   @doc "Return the number of distinct tracked entries from FrequentItems state."
   @callback fi_entry_count(state_bin(), opts()) :: non_neg_integer()
 
+  # -- Cuckoo callbacks --
+
+  @doc "Create a new Cuckoo filter state binary with the given options."
+  @callback cuckoo_new(opts()) :: state_bin()
+
+  @doc "Insert a single hash64 into Cuckoo state. Returns {:ok, state} or {:error, :full}."
+  @callback cuckoo_put(state_bin(), hash64(), opts()) :: {:ok, state_bin()} | {:error, :full}
+
+  @doc "Insert a list of hash64 values into Cuckoo state. Returns {:ok, state} or {:error, :full, state}."
+  @callback cuckoo_put_many(state_bin(), [hash64()], opts()) ::
+              {:ok, state_bin()} | {:error, :full, state_bin()}
+
+  @doc "Test membership of a single hash64 value in Cuckoo state."
+  @callback cuckoo_member?(state_bin(), hash64(), opts()) :: boolean()
+
+  @doc "Delete a single hash64 from Cuckoo state. Returns {:ok, state} or {:error, :not_found}."
+  @callback cuckoo_delete(state_bin(), hash64(), opts()) ::
+              {:ok, state_bin()} | {:error, :not_found}
+
+  @doc "Return the number of stored items from Cuckoo state."
+  @callback cuckoo_count(state_bin(), opts()) :: non_neg_integer()
+
+  # -- Quotient callbacks --
+
+  @doc "Create a new Quotient filter state binary with the given options."
+  @callback quotient_new(opts()) :: state_bin()
+
+  @doc "Insert a single hash64 into Quotient state."
+  @callback quotient_put(state_bin(), hash64(), opts()) :: state_bin()
+
+  @doc "Insert a list of hash64 values into Quotient state."
+  @callback quotient_put_many(state_bin(), [hash64()], opts()) :: state_bin()
+
+  @doc "Test membership of a single hash64 value in Quotient state."
+  @callback quotient_member?(state_bin(), hash64(), opts()) :: boolean()
+
+  @doc "Delete a single hash64 from Quotient state."
+  @callback quotient_delete(state_bin(), hash64(), opts()) :: state_bin()
+
+  @doc "Merge two Quotient state binaries."
+  @callback quotient_merge(state_bin(), state_bin(), opts()) :: state_bin()
+
+  @doc "Return the number of stored items from Quotient state."
+  @callback quotient_count(state_bin(), opts()) :: non_neg_integer()
+
+  # -- CQF (Counting Quotient Filter) callbacks --
+
+  @doc "Create a new CQF state binary with the given options."
+  @callback cqf_new(opts()) :: state_bin()
+
+  @doc "Insert a single hash64 into CQF state, incrementing its count."
+  @callback cqf_put(state_bin(), hash64(), opts()) :: state_bin()
+
+  @doc "Insert a list of hash64 values into CQF state."
+  @callback cqf_put_many(state_bin(), [hash64()], opts()) :: state_bin()
+
+  @doc "Test membership of a single hash64 value in CQF state."
+  @callback cqf_member?(state_bin(), hash64(), opts()) :: boolean()
+
+  @doc "Return the estimated count of a single hash64 in CQF state."
+  @callback cqf_estimate_count(state_bin(), hash64(), opts()) :: non_neg_integer()
+
+  @doc "Delete a single occurrence of hash64 from CQF state (decrement count)."
+  @callback cqf_delete(state_bin(), hash64(), opts()) :: state_bin()
+
+  @doc "Merge two CQF state binaries (multiset union: counts summed)."
+  @callback cqf_merge(state_bin(), state_bin(), opts()) :: state_bin()
+
+  @doc "Return the total count of all items from CQF state (sum of multiplicities)."
+  @callback cqf_count(state_bin(), opts()) :: non_neg_integer()
+
+  # -- XorFilter callbacks --
+
+  @doc "Build an XorFilter from a list of hash64 values. Returns {:ok, state} or {:error, :build_failed}."
+  @callback xor_build([hash64()], opts()) :: {:ok, state_bin()} | {:error, :build_failed}
+
+  @doc "Test membership of a single hash64 value in XorFilter state."
+  @callback xor_member?(state_bin(), hash64(), opts()) :: boolean()
+
+  @doc "Return the number of items the XorFilter was built from."
+  @callback xor_count(state_bin(), opts()) :: non_neg_integer()
+
+  # -- IBLT (Invertible Bloom Lookup Table) callbacks --
+
+  @doc "Create a new IBLT state binary with the given options."
+  @callback iblt_new(opts()) :: state_bin()
+
+  @doc "Insert a key_hash and value_hash into IBLT state."
+  @callback iblt_put(state_bin(), hash64(), hash64(), opts()) :: state_bin()
+
+  @doc "Insert a list of {key_hash, value_hash} pairs into IBLT state."
+  @callback iblt_put_many(state_bin(), [{hash64(), hash64()}], opts()) :: state_bin()
+
+  @doc "Test membership of a single key_hash in IBLT state."
+  @callback iblt_member?(state_bin(), hash64(), opts()) :: boolean()
+
+  @doc "Delete a key_hash and value_hash from IBLT state."
+  @callback iblt_delete(state_bin(), hash64(), hash64(), opts()) :: state_bin()
+
+  @doc "Subtract two IBLT state binaries cell-wise (set difference)."
+  @callback iblt_subtract(state_bin(), state_bin(), opts()) :: state_bin()
+
+  @doc "List entries by peeling the IBLT. Returns {:ok, entries} or {:error, :decode_failed}."
+  @callback iblt_list_entries(state_bin(), opts()) ::
+              {:ok, %{positive: [{hash64(), hash64()}], negative: [{hash64(), hash64()}]}}
+              | {:error, :decode_failed}
+
+  @doc "Return the item count from IBLT state."
+  @callback iblt_count(state_bin(), opts()) :: non_neg_integer()
+
+  @doc "Merge two IBLT state binaries cell-wise (set union)."
+  @callback iblt_merge(state_bin(), state_bin(), opts()) :: state_bin()
+
   @doc """
   Returns the default backend module.
 

@@ -19,7 +19,13 @@ scripts = [
   "bench/kll_bench.exs",
   "bench/ddsketch_bench.exs",
   "bench/frequent_items_bench.exs",
-  "bench/bloom_bench.exs"
+  "bench/bloom_bench.exs",
+  "bench/cuckoo_bench.exs",
+  "bench/quotient_bench.exs",
+  "bench/cqf_bench.exs",
+  "bench/xor_filter_bench.exs",
+  "bench/iblt_bench.exs",
+  "bench/filter_chain_bench.exs"
 ]
 
 for script <- scripts do

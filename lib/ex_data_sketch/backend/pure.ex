@@ -1626,6 +1626,304 @@ defmodule ExDataSketch.Backend.Pure do
   end
 
   # ============================================================
+  # Cuckoo Filter Implementation
+  # ============================================================
+  #
+  # Binary layout (CKO1):
+  #   HEADER (32 bytes, all little-endian):
+  #     0:4   magic              "CKO1"
+  #     4:1   version            u8 = 1
+  #     5:1   fingerprint_bits   u8 (f)
+  #     6:1   bucket_size        u8 (b)
+  #     7:1   flags              u8 = 0
+  #     8:4   bucket_count       u32 (m, power of 2)
+  #     12:4  item_count         u32
+  #     16:4  seed               u32
+  #     20:4  max_kicks           u32
+  #     24:8  reserved           must be 0
+  #
+  #   BODY (bucket_count * bucket_size * fp_bytes bytes):
+  #     Flat array of fingerprint entries, each ceil(f/8) bytes LE.
+  #     Empty slot = fingerprint value 0.
+
+  defmodule CkoCtx do
+    @moduledoc false
+    defstruct [
+      :fp_bits,
+      :bucket_size,
+      :bucket_count,
+      :item_count,
+      :seed,
+      :max_kicks,
+      :fp_bytes,
+      :body
+    ]
+  end
+
+  @cko_magic "CKO1"
+  @cko_version 1
+
+  @impl true
+  @spec cuckoo_new(keyword()) :: binary()
+  def cuckoo_new(opts) do
+    fp_bits = Keyword.fetch!(opts, :fingerprint_size)
+    bucket_size = Keyword.fetch!(opts, :bucket_size)
+    bucket_count = Keyword.fetch!(opts, :bucket_count)
+    seed = Keyword.get(opts, :seed, 0)
+    max_kicks = Keyword.get(opts, :max_kicks, 500)
+
+    fp_bytes = div(fp_bits + 7, 8)
+    body_size = bucket_count * bucket_size * fp_bytes
+    body = :binary.copy(<<0>>, body_size)
+
+    <<
+      @cko_magic::binary,
+      @cko_version::unsigned-8,
+      fp_bits::unsigned-8,
+      bucket_size::unsigned-8,
+      0::unsigned-8,
+      bucket_count::unsigned-little-32,
+      0::unsigned-little-32,
+      seed::unsigned-little-32,
+      max_kicks::unsigned-little-32,
+      0::unsigned-little-64,
+      body::binary
+    >>
+  end
+
+  @impl true
+  @spec cuckoo_put(binary(), non_neg_integer(), keyword()) ::
+          {:ok, binary()} | {:error, :full}
+  def cuckoo_put(state_bin, hash64, _opts) do
+    ctx = cko_decode_header(state_bin)
+    {i1, fp, i2} = cko_derive_indices(ctx, hash64)
+
+    case cko_find_empty_slot(ctx, i1) do
+      {:ok, slot} ->
+        ctx = cko_write_slot(ctx, i1, slot, fp)
+        {:ok, cko_encode(%{ctx | item_count: ctx.item_count + 1})}
+
+      :full ->
+        case cko_find_empty_slot(ctx, i2) do
+          {:ok, slot} ->
+            ctx = cko_write_slot(ctx, i2, slot, fp)
+            {:ok, cko_encode(%{ctx | item_count: ctx.item_count + 1})}
+
+          :full ->
+            cko_kick_insert(ctx, i1, i2, fp)
+        end
+    end
+  end
+
+  @impl true
+  @spec cuckoo_put_many(binary(), [non_neg_integer()], keyword()) ::
+          {:ok, binary()} | {:error, :full, binary()}
+  def cuckoo_put_many(state_bin, [], _opts), do: {:ok, state_bin}
+
+  def cuckoo_put_many(state_bin, hashes, opts) do
+    Enum.reduce_while(hashes, {:ok, state_bin}, fn hash, {:ok, state} ->
+      case cuckoo_put(state, hash, opts) do
+        {:ok, new_state} -> {:cont, {:ok, new_state}}
+        {:error, :full} -> {:halt, {:error, :full, state}}
+      end
+    end)
+  end
+
+  @impl true
+  @spec cuckoo_member?(binary(), non_neg_integer(), keyword()) :: boolean()
+  def cuckoo_member?(state_bin, hash64, _opts) do
+    ctx = cko_decode_header(state_bin)
+    {i1, fp, i2} = cko_derive_indices(ctx, hash64)
+
+    cko_bucket_contains?(ctx, i1, fp) or cko_bucket_contains?(ctx, i2, fp)
+  end
+
+  @impl true
+  @spec cuckoo_delete(binary(), non_neg_integer(), keyword()) ::
+          {:ok, binary()} | {:error, :not_found}
+  def cuckoo_delete(state_bin, hash64, _opts) do
+    ctx = cko_decode_header(state_bin)
+    {i1, fp, i2} = cko_derive_indices(ctx, hash64)
+
+    cond do
+      (slot = cko_find_fp_slot(ctx, i1, fp)) != nil ->
+        ctx = cko_write_slot(ctx, i1, slot, 0)
+        {:ok, cko_encode(%{ctx | item_count: ctx.item_count - 1})}
+
+      (slot = cko_find_fp_slot(ctx, i2, fp)) != nil ->
+        ctx = cko_write_slot(ctx, i2, slot, 0)
+        {:ok, cko_encode(%{ctx | item_count: ctx.item_count - 1})}
+
+      true ->
+        {:error, :not_found}
+    end
+  end
+
+  @impl true
+  @spec cuckoo_count(binary(), keyword()) :: non_neg_integer()
+  def cuckoo_count(state_bin, _opts) do
+    <<_magic::binary-size(4), _version::8, _fp::8, _bs::8, _flags::8, _bc::unsigned-little-32,
+      item_count::unsigned-little-32, _rest::binary>> = state_bin
+
+    item_count
+  end
+
+  # -- Cuckoo private helpers --
+
+  defp cko_decode_header(state_bin) do
+    <<
+      @cko_magic::binary,
+      @cko_version::unsigned-8,
+      fp_bits::unsigned-8,
+      bucket_size::unsigned-8,
+      _flags::unsigned-8,
+      bucket_count::unsigned-little-32,
+      item_count::unsigned-little-32,
+      seed::unsigned-little-32,
+      max_kicks::unsigned-little-32,
+      _reserved::binary-size(8),
+      body::binary
+    >> = state_bin
+
+    %CkoCtx{
+      fp_bits: fp_bits,
+      bucket_size: bucket_size,
+      bucket_count: bucket_count,
+      item_count: item_count,
+      seed: seed,
+      max_kicks: max_kicks,
+      fp_bytes: div(fp_bits + 7, 8),
+      body: body
+    }
+  end
+
+  defp cko_encode(%CkoCtx{} = ctx) do
+    <<
+      @cko_magic::binary,
+      @cko_version::unsigned-8,
+      ctx.fp_bits::unsigned-8,
+      ctx.bucket_size::unsigned-8,
+      0::unsigned-8,
+      ctx.bucket_count::unsigned-little-32,
+      ctx.item_count::unsigned-little-32,
+      ctx.seed::unsigned-little-32,
+      ctx.max_kicks::unsigned-little-32,
+      0::unsigned-little-64,
+      ctx.body::binary
+    >>
+  end
+
+  defp cko_derive_indices(%CkoCtx{} = ctx, hash64) do
+    fp_mask = (1 <<< ctx.fp_bits) - 1
+    i1 = hash64 &&& ctx.bucket_count - 1
+    fp = cko_ensure_nonzero(hash64 >>> 32 &&& fp_mask)
+    i2 = cko_alt_index(i1, fp, ctx.bucket_count)
+    {i1, fp, i2}
+  end
+
+  defp cko_ensure_nonzero(0), do: 1
+  defp cko_ensure_nonzero(fp), do: fp
+
+  defp cko_alt_index(index, fingerprint, bucket_count) do
+    bxor(index, cko_fp_hash(fingerprint)) &&& bucket_count - 1
+  end
+
+  defp cko_fp_hash(fingerprint) do
+    h = fingerprint * 0x5BD1E995 &&& 0xFFFFFFFF
+    h = bxor(h, h >>> 13) &&& 0xFFFFFFFF
+    h * 0x5BD1E995 &&& 0xFFFFFFFF
+  end
+
+  defp cko_slot_offset(%CkoCtx{} = ctx, bucket_idx, slot_idx) do
+    bucket_idx * ctx.bucket_size * ctx.fp_bytes + slot_idx * ctx.fp_bytes
+  end
+
+  defp cko_read_slot(%CkoCtx{} = ctx, bucket_idx, slot_idx) do
+    offset = cko_slot_offset(ctx, bucket_idx, slot_idx)
+
+    case ctx.fp_bytes do
+      1 ->
+        <<_::binary-size(^offset), val::unsigned-8, _::binary>> = ctx.body
+        val
+
+      2 ->
+        <<_::binary-size(^offset), val::unsigned-little-16, _::binary>> = ctx.body
+        val
+    end
+  end
+
+  defp cko_write_slot(%CkoCtx{} = ctx, bucket_idx, slot_idx, value) do
+    offset = cko_slot_offset(ctx, bucket_idx, slot_idx)
+
+    new_body =
+      case ctx.fp_bytes do
+        1 ->
+          <<before::binary-size(^offset), _::unsigned-8, rest::binary>> = ctx.body
+          <<before::binary, value::unsigned-8, rest::binary>>
+
+        2 ->
+          <<before::binary-size(^offset), _::unsigned-little-16, rest::binary>> = ctx.body
+          <<before::binary, value::unsigned-little-16, rest::binary>>
+      end
+
+    %{ctx | body: new_body}
+  end
+
+  defp cko_find_empty_slot(%CkoCtx{} = ctx, bucket_idx) do
+    Enum.reduce_while(0..(ctx.bucket_size - 1), :full, fn slot, _acc ->
+      if cko_read_slot(ctx, bucket_idx, slot) == 0 do
+        {:halt, {:ok, slot}}
+      else
+        {:cont, :full}
+      end
+    end)
+  end
+
+  defp cko_bucket_contains?(%CkoCtx{} = ctx, bucket_idx, fingerprint) do
+    Enum.any?(0..(ctx.bucket_size - 1), fn slot ->
+      cko_read_slot(ctx, bucket_idx, slot) == fingerprint
+    end)
+  end
+
+  defp cko_find_fp_slot(%CkoCtx{} = ctx, bucket_idx, fingerprint) do
+    Enum.reduce_while(0..(ctx.bucket_size - 1), nil, fn slot, _acc ->
+      if cko_read_slot(ctx, bucket_idx, slot) == fingerprint do
+        {:halt, slot}
+      else
+        {:cont, nil}
+      end
+    end)
+  end
+
+  defp cko_kick_insert(%CkoCtx{} = ctx, i1, i2, fp) do
+    evict_bucket = if rem(fp, 2) == 0, do: i1, else: i2
+    cko_kick_loop(ctx, evict_bucket, fp, 0)
+  end
+
+  defp cko_kick_loop(%CkoCtx{max_kicks: max_kicks}, _bucket, _fp, kick_count)
+       when kick_count >= max_kicks do
+    {:error, :full}
+  end
+
+  defp cko_kick_loop(%CkoCtx{} = ctx, bucket, fp, kick_count) do
+    evict_slot = rem(fp + kick_count, ctx.bucket_size)
+
+    old_fp = cko_read_slot(ctx, bucket, evict_slot)
+    ctx = cko_write_slot(ctx, bucket, evict_slot, fp)
+
+    alt_bucket = cko_alt_index(bucket, old_fp, ctx.bucket_count)
+
+    case cko_find_empty_slot(ctx, alt_bucket) do
+      {:ok, slot} ->
+        ctx = cko_write_slot(ctx, alt_bucket, slot, old_fp)
+        {:ok, cko_encode(%{ctx | item_count: ctx.item_count + 1})}
+
+      :full ->
+        cko_kick_loop(ctx, alt_bucket, old_fp, kick_count + 1)
+    end
+  end
+
+  # ============================================================
   # FrequentItems Implementation (SpaceSaving)
   # ============================================================
   #
@@ -1830,5 +2128,1779 @@ defmodule ExDataSketch.Backend.Pure do
         error::unsigned-little-64>>
     end)
     |> IO.iodata_to_binary()
+  end
+
+  # ============================================================
+  # Quotient Filter Implementation
+  # ============================================================
+  #
+  # Binary layout (QOT1):
+  #   HEADER (32 bytes, all little-endian):
+  #     0:4   magic         "QOT1"
+  #     4:1   version       u8 = 1
+  #     5:1   q             u8 (quotient bits)
+  #     6:1   r             u8 (remainder bits)
+  #     7:1   flags         u8 = 0 (reserved)
+  #     8:4   slot_count    u32 (= 2^q)
+  #     12:4  item_count    u32
+  #     16:4  seed          u32
+  #     20:12 reserved      must be 0
+  #
+  #   BODY (slot_count slots, each (3 + r) bits, byte-aligned):
+  #     Per slot: meta(3 bits) | remainder(r bits), packed into ceil((3+r)/8) bytes.
+  #     meta bit0 = is_occupied, bit1 = is_continuation, bit2 = is_shifted.
+
+  defmodule QotCtx do
+    @moduledoc false
+    defstruct [:q, :r, :slot_count, :item_count, :seed, :slot_bytes, :slots]
+  end
+
+  defmodule CqfCtx do
+    @moduledoc false
+    defstruct [:q, :r, :slot_count, :occupied_count, :total_count, :seed, :slot_bytes, :slots]
+  end
+
+  @qot_magic "QOT1"
+  @qot_version 1
+
+  @qot_occ 1
+  @qot_con 2
+  @qot_shi 4
+
+  @impl true
+  @spec quotient_new(keyword()) :: binary()
+  def quotient_new(opts) do
+    q = Keyword.fetch!(opts, :q)
+    r = Keyword.fetch!(opts, :r)
+    slot_count = Keyword.fetch!(opts, :slot_count)
+    seed = Keyword.get(opts, :seed, 0)
+
+    slot_bytes = div(3 + r + 7, 8)
+    body_size = slot_count * slot_bytes
+    body = :binary.copy(<<0>>, body_size)
+
+    <<
+      @qot_magic::binary,
+      @qot_version::unsigned-8,
+      q::unsigned-8,
+      r::unsigned-8,
+      0::unsigned-8,
+      slot_count::unsigned-little-32,
+      0::unsigned-little-32,
+      seed::unsigned-little-32,
+      0::unsigned-little-64,
+      0::unsigned-little-32,
+      body::binary
+    >>
+  end
+
+  @impl true
+  @spec quotient_put(binary(), non_neg_integer(), keyword()) :: binary()
+  def quotient_put(state_bin, hash64, _opts) do
+    ctx = qot_decode(state_bin)
+    {q, r} = qot_split_hash(ctx, hash64)
+
+    if qot_lookup?(ctx, q, r) do
+      qot_encode(ctx)
+    else
+      ctx = qot_do_insert(ctx, q, r)
+      qot_encode(%{ctx | item_count: ctx.item_count + 1})
+    end
+  end
+
+  @impl true
+  @spec quotient_put_many(binary(), [non_neg_integer()], keyword()) :: binary()
+  def quotient_put_many(state_bin, [], _opts), do: state_bin
+
+  def quotient_put_many(state_bin, hashes, _opts) do
+    ctx = qot_decode(state_bin)
+
+    ctx =
+      Enum.reduce(hashes, ctx, fn hash64, acc ->
+        {q, r} = qot_split_hash(acc, hash64)
+
+        if qot_lookup?(acc, q, r) do
+          acc
+        else
+          new_acc = qot_do_insert(acc, q, r)
+          %{new_acc | item_count: new_acc.item_count + 1}
+        end
+      end)
+
+    qot_encode(ctx)
+  end
+
+  @impl true
+  @spec quotient_member?(binary(), non_neg_integer(), keyword()) :: boolean()
+  def quotient_member?(state_bin, hash64, _opts) do
+    ctx = qot_decode(state_bin)
+    {q, r} = qot_split_hash(ctx, hash64)
+    qot_lookup?(ctx, q, r)
+  end
+
+  @impl true
+  @spec quotient_delete(binary(), non_neg_integer(), keyword()) :: binary()
+  def quotient_delete(state_bin, hash64, _opts) do
+    ctx = qot_decode(state_bin)
+    {q, r} = qot_split_hash(ctx, hash64)
+
+    case qot_find_slot(ctx, q, r) do
+      nil ->
+        qot_encode(ctx)
+
+      slot_idx ->
+        ctx = qot_do_delete(ctx, q, slot_idx)
+        qot_encode(%{ctx | item_count: max(ctx.item_count - 1, 0)})
+    end
+  end
+
+  @impl true
+  @spec quotient_merge(binary(), binary(), keyword()) :: binary()
+  def quotient_merge(state_a, state_b, _opts) do
+    ctx_a = qot_decode(state_a)
+    ctx_b = qot_decode(state_b)
+
+    fps_a = qot_extract_all(ctx_a)
+    fps_b = qot_extract_all(ctx_b)
+
+    all = merge_sorted_unique(fps_a, fps_b)
+
+    fresh =
+      qot_decode(
+        quotient_new(
+          q: ctx_a.q,
+          r: ctx_a.r,
+          slot_count: ctx_a.slot_count,
+          seed: ctx_a.seed
+        )
+      )
+
+    merged =
+      Enum.reduce(all, fresh, fn {fq, fr}, acc ->
+        acc = qot_do_insert(acc, fq, fr)
+        %{acc | item_count: acc.item_count + 1}
+      end)
+
+    qot_encode(merged)
+  end
+
+  @impl true
+  @spec quotient_count(binary(), keyword()) :: non_neg_integer()
+  def quotient_count(state_bin, _opts) do
+    <<_magic::binary-size(4), _version::8, _q::8, _r::8, _flags::8,
+      _slot_count::unsigned-little-32, item_count::unsigned-little-32, _rest::binary>> = state_bin
+
+    item_count
+  end
+
+  # -- Quotient: decode/encode --
+
+  defp qot_decode(state_bin) do
+    <<
+      @qot_magic::binary,
+      @qot_version::unsigned-8,
+      q::unsigned-8,
+      r::unsigned-8,
+      _flags::unsigned-8,
+      slot_count::unsigned-little-32,
+      item_count::unsigned-little-32,
+      seed::unsigned-little-32,
+      _reserved::binary-size(12),
+      body::binary
+    >> = state_bin
+
+    sb = div(3 + r + 7, 8)
+    slots = qot_body_to_tuple(body, sb, slot_count)
+
+    %QotCtx{
+      q: q,
+      r: r,
+      slot_count: slot_count,
+      item_count: item_count,
+      seed: seed,
+      slot_bytes: sb,
+      slots: slots
+    }
+  end
+
+  defp qot_body_to_tuple(body, sb, slot_count) do
+    qot_body_to_list(body, sb, slot_count, [])
+    |> :erlang.list_to_tuple()
+  end
+
+  defp qot_body_to_list(_body, _sb, 0, acc), do: Enum.reverse(acc)
+
+  defp qot_body_to_list(body, sb, remaining, acc) do
+    <<chunk::binary-size(^sb), rest::binary>> = body
+
+    raw =
+      chunk
+      |> :binary.bin_to_list()
+      |> Enum.with_index()
+      |> Enum.reduce(0, fn {byte, i}, a -> a ||| byte <<< (i * 8) end)
+
+    meta = raw &&& 0x7
+    remainder = raw >>> 3
+    qot_body_to_list(rest, sb, remaining - 1, [{meta, remainder} | acc])
+  end
+
+  defp qot_encode(%QotCtx{} = ctx) do
+    body = qot_tuple_to_body(ctx.slots, ctx.slot_bytes, ctx.slot_count)
+
+    <<
+      @qot_magic::binary,
+      @qot_version::unsigned-8,
+      ctx.q::unsigned-8,
+      ctx.r::unsigned-8,
+      0::unsigned-8,
+      ctx.slot_count::unsigned-little-32,
+      ctx.item_count::unsigned-little-32,
+      ctx.seed::unsigned-little-32,
+      0::unsigned-little-64,
+      0::unsigned-little-32,
+      body::binary
+    >>
+  end
+
+  defp qot_tuple_to_body(slots, sb, count) do
+    for i <- 0..(count - 1), into: <<>> do
+      {meta, remainder} = :erlang.element(i + 1, slots)
+      raw = (meta &&& 0x7) ||| remainder <<< 3
+
+      for j <- 0..(sb - 1), into: <<>> do
+        <<raw >>> (j * 8) &&& 0xFF::8>>
+      end
+    end
+  end
+
+  defp qot_split_hash(%QotCtx{q: q, r: r}, hash64) do
+    quotient = hash64 >>> (64 - q) &&& (1 <<< q) - 1
+    remainder = hash64 >>> (64 - q - r) &&& (1 <<< r) - 1
+    {quotient, remainder}
+  end
+
+  defp qot_split_hash(%CqfCtx{q: q, r: r}, hash64) do
+    quotient = hash64 >>> (64 - q) &&& (1 <<< q) - 1
+    remainder = hash64 >>> (64 - q - r) &&& (1 <<< r) - 1
+    {quotient, remainder}
+  end
+
+  # -- Quotient: slot access via tuple (O(1)) --
+
+  defp qot_get(ctx, i), do: :erlang.element(i + 1, ctx.slots)
+
+  defp qot_set(ctx, i, val) do
+    %{ctx | slots: :erlang.setelement(i + 1, ctx.slots, val)}
+  end
+
+  defp qot_meta(ctx, i) do
+    {m, _} = qot_get(ctx, i)
+    m
+  end
+
+  defp qot_rem(ctx, i) do
+    {_, r} = qot_get(ctx, i)
+    r
+  end
+
+  defp qot_occ?(ctx, i), do: (qot_meta(ctx, i) &&& @qot_occ) != 0
+  defp qot_con?(ctx, i), do: (qot_meta(ctx, i) &&& @qot_con) != 0
+  defp qot_shi?(ctx, i), do: (qot_meta(ctx, i) &&& @qot_shi) != 0
+
+  defp qot_nxt(ctx, i), do: rem(i + 1, ctx.slot_count)
+  defp qot_prv(ctx, i), do: rem(i - 1 + ctx.slot_count, ctx.slot_count)
+
+  defp qot_set_meta_bit(ctx, i, bit) do
+    {m, r} = qot_get(ctx, i)
+    qot_set(ctx, i, {m ||| bit, r})
+  end
+
+  defp qot_clr_meta_bit(ctx, i, bit) do
+    {m, r} = qot_get(ctx, i)
+    qot_set(ctx, i, {m &&& bnot(bit), r})
+  end
+
+  # -- Quotient: find run start --
+  # Given a quotient fq whose is_occupied bit is set, find the physical
+  # slot where fq's run begins.
+  #
+  # Algorithm:
+  #   1. Walk backward from fq to find the cluster start (first non-shifted slot).
+  #   2. Count occupied canonical slots in [cluster_start, fq) -- these are the
+  #      runs that precede fq's run in the cluster.
+  #   3. Walk forward from cluster_start, skipping that many runs.
+
+  defp qot_find_run_start(ctx, fq) do
+    if qot_shi?(ctx, fq) do
+      cs = qot_walk_back(ctx, fq)
+      n = qot_count_occupied_range(ctx, cs, fq)
+      qot_skip_runs_fwd(ctx, cs, n)
+    else
+      fq
+    end
+  end
+
+  defp qot_walk_back(ctx, i) do
+    p = qot_prv(ctx, i)
+    if qot_shi?(ctx, p), do: qot_walk_back(ctx, p), else: p
+  end
+
+  # Count occupied canonical slots in [from, to) with wraparound.
+  defp qot_count_occupied_range(_ctx, from, to) when from == to, do: 0
+
+  defp qot_count_occupied_range(ctx, from, to) do
+    add = if qot_occ?(ctx, from), do: 1, else: 0
+    add + qot_count_occupied_range(ctx, qot_nxt(ctx, from), to)
+  end
+
+  # Skip n runs forward from pos. Each run ends when the next entry
+  # does not have is_continuation set.
+  defp qot_skip_runs_fwd(_ctx, pos, 0), do: pos
+
+  defp qot_skip_runs_fwd(ctx, pos, n) do
+    nxt = qot_nxt(ctx, pos)
+    nxt = qot_skip_continuations(ctx, nxt)
+    qot_skip_runs_fwd(ctx, nxt, n - 1)
+  end
+
+  defp qot_skip_continuations(ctx, pos) do
+    if qot_con?(ctx, pos), do: qot_skip_continuations(ctx, qot_nxt(ctx, pos)), else: pos
+  end
+
+  # -- Quotient: lookup --
+
+  defp qot_lookup?(ctx, fq, fr) do
+    if qot_occ?(ctx, fq) do
+      rs = qot_find_run_start(ctx, fq)
+      qot_scan_run(ctx, rs, fr)
+    else
+      false
+    end
+  end
+
+  defp qot_scan_run(ctx, pos, fr) do
+    r = qot_rem(ctx, pos)
+
+    cond do
+      r == fr ->
+        true
+
+      r > fr ->
+        false
+
+      true ->
+        nxt = qot_nxt(ctx, pos)
+        if qot_con?(ctx, nxt), do: qot_scan_run(ctx, nxt, fr), else: false
+    end
+  end
+
+  # Find the slot index of fr in fq's run, or nil.
+  defp qot_find_slot(ctx, fq, fr) do
+    if qot_occ?(ctx, fq) do
+      rs = qot_find_run_start(ctx, fq)
+      qot_scan_run_idx(ctx, rs, fr)
+    else
+      nil
+    end
+  end
+
+  defp qot_scan_run_idx(ctx, pos, fr) do
+    r = qot_rem(ctx, pos)
+
+    cond do
+      r == fr ->
+        pos
+
+      r > fr ->
+        nil
+
+      true ->
+        nxt = qot_nxt(ctx, pos)
+        if qot_con?(ctx, nxt), do: qot_scan_run_idx(ctx, nxt, fr), else: nil
+    end
+  end
+
+  # -- Quotient: insert --
+  # Key invariant: is_occupied belongs to the POSITION, not the entry.
+  # During shift-right, is_occupied stays at each position while the
+  # entry (is_continuation, is_shifted, remainder) moves.
+
+  defp qot_do_insert(ctx, fq, fr) do
+    was_occ = qot_occ?(ctx, fq)
+    had_entry = qot_meta(ctx, fq) != 0
+
+    # Mark canonical slot as occupied
+    ctx = qot_set_meta_bit(ctx, fq, @qot_occ)
+
+    cond do
+      not was_occ and not had_entry ->
+        # Fast path: canonical slot was completely empty
+        qot_set(ctx, fq, {@qot_occ, fr})
+
+      was_occ ->
+        run_start = qot_find_run_start(ctx, fq)
+        qot_insert_into_run(ctx, fq, run_start, fr)
+
+      true ->
+        # New run: insert first entry at run_start
+        run_start = qot_find_run_start(ctx, fq)
+        meta = if run_start == fq, do: 0, else: @qot_shi
+        qot_shift_right(ctx, run_start, meta, fr)
+    end
+  end
+
+  defp qot_insert_into_run(ctx, fq, run_start, fr) do
+    {pos, at_start} = qot_sorted_pos(ctx, run_start, fr)
+
+    if at_start do
+      # Inserting before the current first element of the run.
+      # The old first element becomes a continuation.
+      ctx = qot_set_meta_bit(ctx, run_start, @qot_con)
+      meta = if pos == fq, do: 0, else: @qot_shi
+      qot_shift_right(ctx, pos, meta, fr)
+    else
+      # Inserting in the middle or after the end of the run.
+      meta = @qot_con ||| if(pos == fq, do: 0, else: @qot_shi)
+      qot_shift_right(ctx, pos, meta, fr)
+    end
+  end
+
+  # Find where to insert fr in a run. Returns {position, at_start?}.
+  defp qot_sorted_pos(ctx, run_start, fr) do
+    if fr < qot_rem(ctx, run_start) do
+      {run_start, true}
+    else
+      qot_sorted_pos_cont(ctx, run_start, fr)
+    end
+  end
+
+  defp qot_sorted_pos_cont(ctx, pos, fr) do
+    nxt = qot_nxt(ctx, pos)
+
+    if qot_con?(ctx, nxt) do
+      if fr < qot_rem(ctx, nxt),
+        do: {nxt, false},
+        else: qot_sorted_pos_cont(ctx, nxt, fr)
+    else
+      {nxt, false}
+    end
+  end
+
+  # Shift right: insert {new_meta, new_rem} at pos, pushing existing
+  # entries rightward. is_occupied at each position is preserved.
+  defp qot_shift_right(ctx, pos, new_meta, new_rem) do
+    {old_meta, old_rem} = qot_get(ctx, pos)
+    occ_here = old_meta &&& @qot_occ
+    ctx = qot_set(ctx, pos, {new_meta ||| occ_here, new_rem})
+
+    if old_meta == 0 do
+      ctx
+    else
+      # Strip is_occupied (stays at position), set is_shifted
+      entry_meta = (old_meta &&& bnot(@qot_occ)) ||| @qot_shi
+      qot_shift_chain(ctx, qot_nxt(ctx, pos), entry_meta, old_rem)
+    end
+  end
+
+  defp qot_shift_chain(ctx, pos, meta, remainder) do
+    {old_meta, old_rem} = qot_get(ctx, pos)
+    occ_here = old_meta &&& @qot_occ
+    ctx = qot_set(ctx, pos, {meta ||| occ_here, remainder})
+
+    if old_meta == 0 do
+      ctx
+    else
+      entry_meta = (old_meta &&& bnot(@qot_occ)) ||| @qot_shi
+      qot_shift_chain(ctx, qot_nxt(ctx, pos), entry_meta, old_rem)
+    end
+  end
+
+  # -- Quotient: delete --
+
+  defp qot_do_delete(ctx, fq, slot_idx) do
+    run_start = qot_find_run_start(ctx, fq)
+    nxt = qot_nxt(ctx, slot_idx)
+    is_first = slot_idx == run_start
+    nxt_is_con = qot_con?(ctx, nxt)
+    is_only = is_first and not nxt_is_con
+
+    # If removing the only entry in the run, clear is_occupied
+    ctx = if is_only, do: qot_clr_meta_bit(ctx, fq, @qot_occ), else: ctx
+
+    # If removing the first entry but not the only, next becomes first (clear continuation)
+    ctx = if is_first and nxt_is_con, do: qot_clr_meta_bit(ctx, nxt, @qot_con), else: ctx
+
+    # Shift left to fill the gap
+    qot_shift_left(ctx, slot_idx)
+  end
+
+  # Shift left from pos: move shifted entries leftward to fill gap.
+  # is_occupied at each position is preserved.
+  defp qot_shift_left(ctx, pos) do
+    nxt = qot_nxt(ctx, pos)
+    nxt_meta = qot_meta(ctx, nxt)
+    occ_here = qot_meta(ctx, pos) &&& @qot_occ
+
+    cond do
+      nxt_meta == 0 ->
+        # Next slot is empty. Clear this slot (preserve is_occupied).
+        qot_set(ctx, pos, {occ_here, 0})
+
+      (nxt_meta &&& @qot_shi) == 0 ->
+        # Next entry is not shifted (at its canonical position). Stop.
+        qot_set(ctx, pos, {occ_here, 0})
+
+      true ->
+        # Move next entry here, preserving is_occupied at pos
+        entry_meta = nxt_meta &&& bnot(@qot_occ)
+        nxt_rem = qot_rem(ctx, nxt)
+        ctx = qot_set(ctx, pos, {occ_here ||| entry_meta, nxt_rem})
+        qot_shift_left(ctx, nxt)
+    end
+  end
+
+  # -- Quotient: extract all fingerprints (for merge) --
+
+  defp qot_extract_all(ctx) do
+    {fps, _} =
+      Enum.reduce(0..(ctx.slot_count - 1), {[], nil}, fn i, {acc, cur_q} ->
+        qot_extract_slot(ctx, i, acc, cur_q)
+      end)
+
+    fps |> Enum.reverse() |> Enum.sort() |> Enum.uniq()
+  end
+
+  defp qot_extract_slot(ctx, i, acc, cur_q) do
+    m = qot_meta(ctx, i)
+
+    if m == 0 do
+      {acc, nil}
+    else
+      q = qot_resolve_quotient(ctx, i, m, cur_q)
+      {[{q, qot_rem(ctx, i)} | acc], q}
+    end
+  end
+
+  defp qot_resolve_quotient(ctx, i, m, cur_q) do
+    is_con = (m &&& @qot_con) != 0
+    is_shi = (m &&& @qot_shi) != 0
+
+    cond do
+      is_con -> cur_q
+      not is_shi -> i
+      true -> qot_trace_quotient_for(ctx, i)
+    end
+  end
+
+  # Determine which quotient the entry at slot_idx belongs to.
+  # The entry is the first of its run (not continuation) but is shifted.
+  defp qot_trace_quotient_for(ctx, slot_idx) do
+    cs = qot_walk_back_to_start(ctx, slot_idx)
+    qot_trace_walk(ctx, cs, cs, slot_idx)
+  end
+
+  defp qot_walk_back_to_start(ctx, i) do
+    if qot_shi?(ctx, i), do: qot_walk_back_to_start(ctx, qot_prv(ctx, i)), else: i
+  end
+
+  defp qot_trace_walk(_ctx, pos, cur_q, target) when pos == target, do: cur_q
+
+  defp qot_trace_walk(ctx, pos, cur_q, target) do
+    nxt = qot_nxt(ctx, pos)
+
+    new_q =
+      if qot_con?(ctx, nxt),
+        do: cur_q,
+        else: qot_next_occ_canonical(ctx, cur_q)
+
+    qot_trace_walk(ctx, nxt, new_q, target)
+  end
+
+  defp qot_next_occ_canonical(ctx, cur_q) do
+    qot_find_occ(ctx, qot_nxt(ctx, cur_q), ctx.slot_count)
+  end
+
+  defp qot_find_occ(_ctx, _pos, 0), do: 0
+
+  defp qot_find_occ(ctx, pos, remaining) do
+    if qot_occ?(ctx, pos), do: pos, else: qot_find_occ(ctx, qot_nxt(ctx, pos), remaining - 1)
+  end
+
+  # ============================================================
+  # CQF (Counting Quotient Filter)
+  # ============================================================
+  #
+  # CQF extends Quotient with unary counter encoding.
+  # Same slot layout (3 meta bits + r remainder bits per slot).
+  # Within a run, each distinct remainder's count is stored as
+  # N consecutive copies of that remainder value:
+  #
+  #   count=1: [r]             (one slot)
+  #   count=2: [r, r]          (two consecutive identical slots)
+  #   count=N: [r, r, ..., r]  (N consecutive identical slots)
+  #
+  # This is unambiguous because remainders within a run are stored
+  # in strictly increasing order -- consecutive identical values
+  # can only mean a counter.
+  #
+  # The CQF1 binary format uses a 40-byte header (vs 32 for QOT1)
+  # to accommodate a 64-bit total_count field.
+  #
+  #   HEADER (40 bytes, little-endian):
+  #     0:4   magic         "CQF1"
+  #     4:1   version       u8 = 1
+  #     5:1   q_bits        u8
+  #     6:1   r_bits        u8
+  #     7:1   flags         u8 = 0
+  #     8:4   slot_count    u32
+  #     12:4  occupied_cnt  u32 (distinct fingerprints)
+  #     16:8  total_count   u64 (sum of multiplicities)
+  #     24:4  seed          u32
+  #     28:12 reserved      zeroed
+  #
+  #   BODY: slot_count * slot_bytes (same packing as QOT1)
+
+  @cqf_magic "CQF1"
+  @cqf_version 1
+
+  @impl true
+  @spec cqf_new(keyword()) :: binary()
+  def cqf_new(opts) do
+    q = Keyword.fetch!(opts, :q)
+    r = Keyword.fetch!(opts, :r)
+    slot_count = Keyword.fetch!(opts, :slot_count)
+    seed = Keyword.get(opts, :seed, 0)
+
+    slot_bytes = div(3 + r + 7, 8)
+    body_size = slot_count * slot_bytes
+    body = :binary.copy(<<0>>, body_size)
+
+    <<
+      @cqf_magic::binary,
+      @cqf_version::unsigned-8,
+      q::unsigned-8,
+      r::unsigned-8,
+      0::unsigned-8,
+      slot_count::unsigned-little-32,
+      0::unsigned-little-32,
+      0::unsigned-little-64,
+      seed::unsigned-little-32,
+      0::96,
+      body::binary
+    >>
+  end
+
+  @impl true
+  @spec cqf_put(binary(), non_neg_integer(), keyword()) :: binary()
+  def cqf_put(state_bin, hash64, _opts) do
+    ctx = cqf_decode(state_bin)
+    {fq, fr} = qot_split_hash(ctx, hash64)
+    ctx = cqf_do_insert(ctx, fq, fr)
+    cqf_encode(ctx)
+  end
+
+  @impl true
+  @spec cqf_put_many(binary(), [non_neg_integer()], keyword()) :: binary()
+  def cqf_put_many(state_bin, [], _opts), do: state_bin
+
+  def cqf_put_many(state_bin, hashes, _opts) do
+    ctx = cqf_decode(state_bin)
+
+    ctx =
+      Enum.reduce(hashes, ctx, fn hash64, acc ->
+        {fq, fr} = qot_split_hash(acc, hash64)
+        cqf_do_insert(acc, fq, fr)
+      end)
+
+    cqf_encode(ctx)
+  end
+
+  @impl true
+  @spec cqf_member?(binary(), non_neg_integer(), keyword()) :: boolean()
+  def cqf_member?(state_bin, hash64, _opts) do
+    ctx = cqf_decode(state_bin)
+    {fq, fr} = qot_split_hash(ctx, hash64)
+    cqf_estimate(ctx, fq, fr) > 0
+  end
+
+  @impl true
+  @spec cqf_estimate_count(binary(), non_neg_integer(), keyword()) :: non_neg_integer()
+  def cqf_estimate_count(state_bin, hash64, _opts) do
+    ctx = cqf_decode(state_bin)
+    {fq, fr} = qot_split_hash(ctx, hash64)
+    cqf_estimate(ctx, fq, fr)
+  end
+
+  @impl true
+  @spec cqf_delete(binary(), non_neg_integer(), keyword()) :: binary()
+  def cqf_delete(state_bin, hash64, _opts) do
+    ctx = cqf_decode(state_bin)
+    {fq, fr} = qot_split_hash(ctx, hash64)
+
+    case cqf_estimate(ctx, fq, fr) do
+      0 ->
+        cqf_encode(ctx)
+
+      _count ->
+        ctx = cqf_do_delete(ctx, fq, fr)
+        cqf_encode(ctx)
+    end
+  end
+
+  @impl true
+  @spec cqf_merge(binary(), binary(), keyword()) :: binary()
+  def cqf_merge(state_a, state_b, _opts) do
+    ctx_a = cqf_decode(state_a)
+    ctx_b = cqf_decode(state_b)
+
+    triples_a = cqf_extract_all_counted(ctx_a)
+    triples_b = cqf_extract_all_counted(ctx_b)
+
+    all = cqf_merge_counted(triples_a, triples_b)
+
+    fresh =
+      cqf_decode(
+        cqf_new(
+          q: ctx_a.q,
+          r: ctx_a.r,
+          slot_count: ctx_a.slot_count,
+          seed: ctx_a.seed
+        )
+      )
+
+    merged =
+      Enum.reduce(all, fresh, fn {fq, fr, count}, acc ->
+        cqf_insert_with_count(acc, fq, fr, count)
+      end)
+
+    cqf_encode(merged)
+  end
+
+  @impl true
+  @spec cqf_count(binary(), keyword()) :: non_neg_integer()
+  def cqf_count(state_bin, _opts) do
+    <<_magic::binary-size(4), _version::8, _q::8, _r::8, _flags::8,
+      _slot_count::unsigned-little-32, _occupied::unsigned-little-32,
+      total_count::unsigned-little-64, _rest::binary>> = state_bin
+
+    total_count
+  end
+
+  # -- CQF: decode/encode --
+
+  defp cqf_decode(state_bin) do
+    <<
+      @cqf_magic::binary,
+      @cqf_version::unsigned-8,
+      q::unsigned-8,
+      r::unsigned-8,
+      _flags::unsigned-8,
+      slot_count::unsigned-little-32,
+      occupied_count::unsigned-little-32,
+      total_count::unsigned-little-64,
+      seed::unsigned-little-32,
+      _reserved::binary-size(12),
+      body::binary
+    >> = state_bin
+
+    sb = div(3 + r + 7, 8)
+    slots = qot_body_to_tuple(body, sb, slot_count)
+
+    %CqfCtx{
+      q: q,
+      r: r,
+      slot_count: slot_count,
+      occupied_count: occupied_count,
+      total_count: total_count,
+      seed: seed,
+      slot_bytes: sb,
+      slots: slots
+    }
+  end
+
+  defp cqf_encode(%CqfCtx{} = ctx) do
+    body = qot_tuple_to_body(ctx.slots, ctx.slot_bytes, ctx.slot_count)
+
+    <<
+      @cqf_magic::binary,
+      @cqf_version::unsigned-8,
+      ctx.q::unsigned-8,
+      ctx.r::unsigned-8,
+      0::unsigned-8,
+      ctx.slot_count::unsigned-little-32,
+      ctx.occupied_count::unsigned-little-32,
+      ctx.total_count::unsigned-little-64,
+      ctx.seed::unsigned-little-32,
+      0::96,
+      body::binary
+    >>
+  end
+
+  # -- CQF: insert (always increments count) --
+
+  defp cqf_do_insert(ctx, fq, fr) do
+    if qot_occ?(ctx, fq) do
+      # Existing quotient -- find remainder in run and increment, or insert new
+      cqf_do_insert_existing(ctx, fq, fr)
+    else
+      # New fingerprint -- insert remainder with count 1
+      cqf_do_insert_new(ctx, fq, fr)
+    end
+  end
+
+  defp cqf_do_insert_new(ctx, fq, fr) do
+    ctx = qot_set_meta_bit(ctx, fq, @qot_occ)
+    had_entry = qot_meta(ctx, fq) != @qot_occ
+
+    ctx =
+      if had_entry do
+        run_start = qot_find_run_start(ctx, fq)
+        meta = if run_start == fq, do: 0, else: @qot_shi
+        qot_shift_right(ctx, run_start, meta, fr)
+      else
+        qot_set(ctx, fq, {@qot_occ, fr})
+      end
+
+    %{ctx | occupied_count: ctx.occupied_count + 1, total_count: ctx.total_count + 1}
+  end
+
+  defp cqf_do_insert_existing(ctx, fq, fr) do
+    run_start = qot_find_run_start(ctx, fq)
+
+    case cqf_find_remainder_in_run(ctx, run_start, fr) do
+      nil ->
+        ctx = qot_insert_into_run(ctx, fq, run_start, fr)
+        %{ctx | occupied_count: ctx.occupied_count + 1, total_count: ctx.total_count + 1}
+
+      pos ->
+        last = cqf_last_copy(ctx, pos, fr)
+        nxt = qot_nxt(ctx, last)
+        ctx = qot_shift_right(ctx, nxt, @qot_con ||| @qot_shi, fr)
+        %{ctx | total_count: ctx.total_count + 1}
+    end
+  end
+
+  # Insert a fingerprint with a specific count (used by merge).
+  # Inserts the remainder once, then adds (count-1) duplicate copies.
+  defp cqf_insert_with_count(ctx, fq, fr, count) do
+    was_occ = qot_occ?(ctx, fq)
+    had_entry = qot_meta(ctx, fq) != 0
+
+    ctx = qot_set_meta_bit(ctx, fq, @qot_occ)
+
+    ctx =
+      cond do
+        not was_occ and not had_entry ->
+          qot_set(ctx, fq, {@qot_occ, fr})
+
+        was_occ ->
+          run_start = qot_find_run_start(ctx, fq)
+          qot_insert_into_run(ctx, fq, run_start, fr)
+
+        true ->
+          run_start = qot_find_run_start(ctx, fq)
+          meta = if run_start == fq, do: 0, else: @qot_shi
+          qot_shift_right(ctx, run_start, meta, fr)
+      end
+
+    ctx = %{ctx | occupied_count: ctx.occupied_count + 1, total_count: ctx.total_count + count}
+
+    # Add (count-1) duplicate copies after the remainder
+    if count <= 1 do
+      ctx
+    else
+      run_start = qot_find_run_start(ctx, fq)
+      pos = cqf_find_remainder_in_run(ctx, run_start, fr)
+
+      Enum.reduce(1..(count - 1), ctx, fn _i, acc ->
+        last = cqf_last_copy(acc, pos, fr)
+        nxt = qot_nxt(acc, last)
+        qot_shift_right(acc, nxt, @qot_con ||| @qot_shi, fr)
+      end)
+    end
+  end
+
+  # -- CQF: find remainder in run (returns position or nil) --
+
+  # Scan through a run, skipping counter duplicates, looking for a remainder.
+  defp cqf_find_remainder_in_run(ctx, run_start, target_fr) do
+    cqf_scan_run(ctx, run_start, target_fr)
+  end
+
+  defp cqf_scan_run(ctx, pos, target_fr) do
+    r = qot_rem(ctx, pos)
+
+    cond do
+      r == target_fr ->
+        pos
+
+      r > target_fr ->
+        nil
+
+      true ->
+        # Skip past all duplicate copies of this remainder
+        next_pos = cqf_skip_duplicates(ctx, pos, r)
+
+        if qot_con?(ctx, next_pos) do
+          cqf_scan_run(ctx, next_pos, target_fr)
+        else
+          nil
+        end
+    end
+  end
+
+  # Skip past all consecutive copies of remainder_val.
+  # Returns the position of the first slot that is NOT a copy.
+  defp cqf_skip_duplicates(ctx, pos, remainder_val) do
+    nxt = qot_nxt(ctx, pos)
+
+    if qot_con?(ctx, nxt) and qot_rem(ctx, nxt) == remainder_val do
+      cqf_skip_duplicates(ctx, nxt, remainder_val)
+    else
+      nxt
+    end
+  end
+
+  # Find the last consecutive copy of remainder_val starting from pos.
+  defp cqf_last_copy(ctx, pos, remainder_val) do
+    nxt = qot_nxt(ctx, pos)
+
+    if qot_con?(ctx, nxt) and qot_rem(ctx, nxt) == remainder_val do
+      cqf_last_copy(ctx, nxt, remainder_val)
+    else
+      pos
+    end
+  end
+
+  # -- CQF: read counter (count consecutive copies) --
+
+  defp cqf_read_counter(ctx, pos, remainder_val) do
+    nxt = qot_nxt(ctx, pos)
+
+    if qot_con?(ctx, nxt) and qot_rem(ctx, nxt) == remainder_val do
+      1 + cqf_read_counter(ctx, nxt, remainder_val)
+    else
+      1
+    end
+  end
+
+  # -- CQF: estimate count for a fingerprint --
+
+  defp cqf_estimate(ctx, fq, fr) do
+    if qot_occ?(ctx, fq) do
+      run_start = qot_find_run_start(ctx, fq)
+
+      case cqf_find_remainder_in_run(ctx, run_start, fr) do
+        nil -> 0
+        pos -> cqf_read_counter(ctx, pos, fr)
+      end
+    else
+      0
+    end
+  end
+
+  # -- CQF: delete (remove one duplicate copy) --
+
+  defp cqf_do_delete(ctx, fq, fr) do
+    run_start = qot_find_run_start(ctx, fq)
+    pos = cqf_find_remainder_in_run(ctx, run_start, fr)
+
+    if pos == nil do
+      ctx
+    else
+      count = cqf_read_counter(ctx, pos, fr)
+
+      if count == 1 do
+        # Remove the remainder entirely (like QOT delete)
+        ctx = qot_do_delete(ctx, fq, pos)
+
+        %{
+          ctx
+          | occupied_count: max(ctx.occupied_count - 1, 0),
+            total_count: max(ctx.total_count - 1, 0)
+        }
+      else
+        # Remove one duplicate copy (the last one)
+        last = cqf_last_copy(ctx, pos, fr)
+        ctx = qot_shift_left(ctx, last)
+        %{ctx | total_count: max(ctx.total_count - 1, 0)}
+      end
+    end
+  end
+
+  # -- CQF: extract all counted fingerprints (for merge) --
+
+  # Iterate over all occupied quotients and extract {q, r, count} triples.
+  defp cqf_extract_all_counted(ctx) do
+    Enum.reduce(0..(ctx.slot_count - 1), [], fn i, acc ->
+      if qot_occ?(ctx, i) do
+        run_start = qot_find_run_start(ctx, i)
+        run_triples = cqf_extract_run_counted(ctx, run_start, i)
+        run_triples ++ acc
+      else
+        acc
+      end
+    end)
+    |> Enum.reverse()
+    |> Enum.sort()
+  end
+
+  defp cqf_extract_run_counted(ctx, pos, quotient) do
+    cqf_extract_run_loop(ctx, pos, quotient, [])
+  end
+
+  defp cqf_extract_run_loop(ctx, pos, quotient, acc) do
+    fr = qot_rem(ctx, pos)
+    count = cqf_read_counter(ctx, pos, fr)
+    acc = [{quotient, fr, count} | acc]
+
+    next_pos = cqf_skip_duplicates(ctx, pos, fr)
+
+    if qot_con?(ctx, next_pos) do
+      cqf_extract_run_loop(ctx, next_pos, quotient, acc)
+    else
+      Enum.reverse(acc)
+    end
+  end
+
+  # Merge two sorted lists of {quotient, remainder, count} triples, summing counts
+  defp cqf_merge_counted([], b), do: b
+  defp cqf_merge_counted(a, []), do: a
+
+  defp cqf_merge_counted([{qa, ra, ca} = ha | ta], [{qb, rb, cb} = hb | tb]) do
+    cond do
+      {qa, ra} < {qb, rb} -> [ha | cqf_merge_counted(ta, [hb | tb])]
+      {qa, ra} > {qb, rb} -> [hb | cqf_merge_counted([ha | ta], tb)]
+      true -> [{qa, ra, ca + cb} | cqf_merge_counted(ta, tb)]
+    end
+  end
+
+  # Merge two sorted lists of {quotient, remainder} tuples, removing duplicates
+  defp merge_sorted_unique([], b), do: b
+  defp merge_sorted_unique(a, []), do: a
+
+  defp merge_sorted_unique([ha | ta], [hb | tb]) do
+    cond do
+      ha < hb -> [ha | merge_sorted_unique(ta, [hb | tb])]
+      ha > hb -> [hb | merge_sorted_unique([ha | ta], tb)]
+      true -> [ha | merge_sorted_unique(ta, tb)]
+    end
+  end
+
+  # ============================================================
+  # XorFilter Implementation
+  # ============================================================
+  #
+  # XOR1 Binary Format (32-byte header + fingerprint array):
+  #
+  #   Offset  Size  Field
+  #   0       4     magic            "XOR1"
+  #   4       1     version          u8 = 1
+  #   5       1     fingerprint_bits u8 (8 or 16)
+  #   6       1     variant          u8 (0=xor8, 1=xor16)
+  #   7       1     flags            u8, reserved = 0
+  #   8       4     item_count       u32-LE
+  #   12      4     segment_size     u32-LE
+  #   16      4     seed             u32-LE
+  #   20      4     array_length     u32-LE (3 * segment_size)
+  #   24      8     reserved         zeroed
+  #
+  #   Body: fingerprint array (1 byte per entry for xor8, 2 bytes LE for xor16)
+  # ============================================================
+
+  @xor1_magic "XOR1"
+  @xor1_version 1
+  @xor_max_retries 100
+
+  @impl true
+  @spec xor_build([non_neg_integer()], keyword()) ::
+          {:ok, binary()} | {:error, :build_failed}
+  def xor_build(hashes, opts) do
+    fingerprint_bits = Keyword.get(opts, :fingerprint_bits, 8)
+    seed = Keyword.get(opts, :seed, 0)
+    variant = if fingerprint_bits == 16, do: 1, else: 0
+
+    unique_hashes = Enum.uniq(hashes)
+    n = length(unique_hashes)
+
+    if n == 0 do
+      segment_size = 1
+      array_length = 3
+
+      empty_body =
+        case fingerprint_bits do
+          8 -> :binary.copy(<<0>>, array_length)
+          16 -> :binary.copy(<<0, 0>>, array_length)
+        end
+
+      {:ok,
+       xor_encode_state(
+         0,
+         segment_size,
+         array_length,
+         seed,
+         fingerprint_bits,
+         variant,
+         empty_body
+       )}
+    else
+      # Standard xor filter sizing: capacity = ceil(1.23 * n) + 32, then divide by 3
+      # The 1.23 factor ensures the random 3-partite hypergraph is peelable w.h.p.
+      capacity = ceil(1.23 * n) + 32
+      segment_size = max(div(capacity + 2, 3), 1)
+      array_length = 3 * segment_size
+
+      case xor_try_build(unique_hashes, n, segment_size, array_length, fingerprint_bits, seed, 0) do
+        {:ok, fingerprint_array, final_seed} ->
+          body = xor_encode_body(fingerprint_array, array_length, fingerprint_bits)
+
+          {:ok,
+           xor_encode_state(
+             n,
+             segment_size,
+             array_length,
+             final_seed,
+             fingerprint_bits,
+             variant,
+             body
+           )}
+
+        :error ->
+          {:error, :build_failed}
+      end
+    end
+  end
+
+  @impl true
+  @spec xor_member?(binary(), non_neg_integer(), keyword()) :: boolean()
+  def xor_member?(state_bin, hash64, _opts) do
+    <<@xor1_magic, @xor1_version::unsigned-8, fp_bits::unsigned-8, _variant::unsigned-8,
+      _flags::unsigned-8, _item_count::unsigned-little-32, segment_size::unsigned-little-32,
+      seed::unsigned-little-32, _array_length::unsigned-little-32, _reserved::binary-size(8),
+      body::binary>> = state_bin
+
+    {h0, h1, h2} = xor_hash_positions(hash64, seed, segment_size)
+    fp = xor_fingerprint(hash64, fp_bits)
+
+    f0 = xor_read_fp(body, h0, fp_bits)
+    f1 = xor_read_fp(body, h1, fp_bits)
+    f2 = xor_read_fp(body, h2, fp_bits)
+
+    bxor(bxor(f0, f1), f2) == fp
+  end
+
+  @impl true
+  @spec xor_count(binary(), keyword()) :: non_neg_integer()
+  def xor_count(state_bin, _opts) do
+    <<@xor1_magic, @xor1_version::unsigned-8, _fp_bits::unsigned-8, _variant::unsigned-8,
+      _flags::unsigned-8, item_count::unsigned-little-32, _rest::binary>> = state_bin
+
+    item_count
+  end
+
+  # -- XorFilter private helpers --
+
+  defp xor_try_build(_hashes, _n, _seg_size, _arr_len, _fp_bits, _seed, retry)
+       when retry >= @xor_max_retries,
+       do: :error
+
+  defp xor_try_build(hashes, n, seg_size, arr_len, fp_bits, seed, retry) do
+    current_seed = seed + retry
+
+    # Build degree counts and sets for each position
+    {degrees, sets} = xor_build_graph(hashes, current_seed, seg_size, arr_len)
+
+    # Peel the hypergraph
+    case xor_peel(hashes, degrees, sets, n, current_seed, seg_size) do
+      {:ok, stack} ->
+        # Assign fingerprints
+        fingerprint_array = xor_assign(stack, arr_len, fp_bits, current_seed, seg_size)
+        {:ok, fingerprint_array, current_seed}
+
+      :retry ->
+        xor_try_build(hashes, n, seg_size, arr_len, fp_bits, seed, retry + 1)
+    end
+  end
+
+  defp xor_build_graph(hashes, seed, seg_size, arr_len) do
+    # degrees: tuple of arr_len integers tracking how many hashes map to each position
+    # sets: tuple of arr_len MapSets tracking which hashes map to each position
+    degrees = :erlang.make_tuple(arr_len, 0)
+    sets = :erlang.make_tuple(arr_len, MapSet.new())
+
+    Enum.reduce(hashes, {degrees, sets}, fn hash, {deg, s} ->
+      {h0, h1, h2} = xor_hash_positions(hash, seed, seg_size)
+
+      deg =
+        deg
+        |> put_elem(h0, elem(deg, h0) + 1)
+        |> put_elem(h1, elem(deg, h1) + 1)
+        |> put_elem(h2, elem(deg, h2) + 1)
+
+      s =
+        s
+        |> put_elem(h0, MapSet.put(elem(s, h0), hash))
+        |> put_elem(h1, MapSet.put(elem(s, h1), hash))
+        |> put_elem(h2, MapSet.put(elem(s, h2), hash))
+
+      {deg, s}
+    end)
+  end
+
+  defp xor_peel(_hashes, degrees, sets, n, seed, seg_size) do
+    arr_len = tuple_size(degrees)
+
+    # Find initial queue of degree-1 positions
+    queue =
+      for i <- 0..(arr_len - 1), elem(degrees, i) == 1, do: i
+
+    xor_peel_loop(queue, degrees, sets, [], 0, n, seed, seg_size)
+  end
+
+  defp xor_peel_loop([], _degrees, _sets, stack, peeled, n, _seed, _seg_size) do
+    if peeled == n, do: {:ok, Enum.reverse(stack)}, else: :retry
+  end
+
+  defp xor_peel_loop([pos | rest], degrees, sets, stack, peeled, n, seed, seg_size) do
+    if elem(degrees, pos) != 1 do
+      # Position is no longer degree-1, skip it
+      xor_peel_loop(rest, degrees, sets, stack, peeled, n, seed, seg_size)
+    else
+      # Get the single hash at this position
+      hash_set = elem(sets, pos)
+      hash = MapSet.to_list(hash_set) |> hd()
+
+      # Get all 3 positions for this hash
+      {h0, h1, h2} = xor_hash_positions(hash, seed, seg_size)
+
+      # Push to stack and remove hash from all 3 positions
+      stack = [{hash, pos} | stack]
+
+      {degrees, sets, new_queue} =
+        Enum.reduce([h0, h1, h2], {degrees, sets, rest}, fn p, acc ->
+          xor_remove_edge(acc, p, pos, hash)
+        end)
+
+      xor_peel_loop(new_queue, degrees, sets, stack, peeled + 1, n, seed, seg_size)
+    end
+  end
+
+  defp xor_remove_edge({deg, s, q}, p, peel_pos, hash) do
+    new_set = MapSet.delete(elem(s, p), hash)
+    new_deg = elem(deg, p) - 1
+    deg = put_elem(deg, p, new_deg)
+    s = put_elem(s, p, new_set)
+    q = if new_deg == 1 and p != peel_pos, do: [p | q], else: q
+    {deg, s, q}
+  end
+
+  defp xor_assign(stack, arr_len, fp_bits, seed, seg_size) do
+    # Process stack in reverse (it was already reversed in peel)
+    # stack is in peel order, we need reverse order
+    b = :erlang.make_tuple(arr_len, 0)
+
+    Enum.reduce(Enum.reverse(stack), b, fn {hash, peel_pos}, b ->
+      {h0, h1, h2} = xor_hash_positions(hash, seed, seg_size)
+      fp = xor_fingerprint(hash, fp_bits)
+
+      # Get the other two positions
+      [other1, other2] = Enum.reject([h0, h1, h2], &(&1 == peel_pos))
+
+      value = bxor(bxor(fp, elem(b, other1)), elem(b, other2))
+      put_elem(b, peel_pos, value)
+    end)
+  end
+
+  defp xor_fingerprint(hash64, fp_bits) do
+    fp_mask = (1 <<< fp_bits) - 1
+    fp = hash64 &&& fp_mask
+    # Ensure non-zero fingerprint
+    if fp == 0, do: 1, else: fp
+  end
+
+  defp xor_hash_positions(hash64, seed, seg_size) do
+    # Remix hash with seed via splitmix64 for full independence per seed
+    h = xor_splitmix64(hash64 + seed * 0x9E3779B97F4A7C15 &&& @mask64)
+
+    # Use 64-bit rotation to derive 3 independent positions
+    # Fastrange maps each rotated hash to [0, seg_size)
+    h0 = xor_fastrange(h, seg_size)
+    h1 = xor_fastrange(xor_rotl64(h, 21), seg_size) + seg_size
+    h2 = xor_fastrange(xor_rotl64(h, 42), seg_size) + seg_size * 2
+
+    {h0, h1, h2}
+  end
+
+  # splitmix64 finalizer: strong bijective 64-bit -> 64-bit mix
+  defp xor_splitmix64(x) do
+    x = bxor(x, x >>> 30) * 0xBF58476D1CE4E5B9 &&& @mask64
+    x = bxor(x, x >>> 27) * 0x94D049BB133111EB &&& @mask64
+    bxor(x, x >>> 31) &&& @mask64
+  end
+
+  # 64-bit left rotation
+  defp xor_rotl64(x, r) do
+    (x <<< r ||| x >>> (64 - r)) &&& @mask64
+  end
+
+  # Fastrange: maps a 64-bit hash to [0, range) via multiply-shift
+  # Equivalent to (uint128_t(hash) * range) >> 64
+  defp xor_fastrange(hash, range) do
+    (hash * range) >>> 64
+  end
+
+  defp xor_read_fp(body, index, 8) do
+    <<_before::binary-size(^index), fp::unsigned-8, _rest::binary>> = body
+    fp
+  end
+
+  defp xor_read_fp(body, index, 16) do
+    byte_offset = index * 2
+    <<_before::binary-size(^byte_offset), fp::unsigned-little-16, _rest::binary>> = body
+    fp
+  end
+
+  defp xor_encode_body(fingerprint_tuple, arr_len, fp_bits) do
+    entries = for i <- 0..(arr_len - 1), do: elem(fingerprint_tuple, i)
+
+    case fp_bits do
+      8 ->
+        entries |> Enum.map(fn v -> <<v::unsigned-8>> end) |> IO.iodata_to_binary()
+
+      16 ->
+        entries |> Enum.map(fn v -> <<v::unsigned-little-16>> end) |> IO.iodata_to_binary()
+    end
+  end
+
+  defp xor_encode_state(item_count, segment_size, array_length, seed, fp_bits, variant, body) do
+    <<
+      @xor1_magic::binary,
+      @xor1_version::unsigned-8,
+      fp_bits::unsigned-8,
+      variant::unsigned-8,
+      0::unsigned-8,
+      item_count::unsigned-little-32,
+      segment_size::unsigned-little-32,
+      seed::unsigned-little-32,
+      array_length::unsigned-little-32,
+      0::unsigned-64,
+      body::binary
+    >>
+  end
+
+  # ============================================================
+  # IBLT (Invertible Bloom Lookup Table) Implementation
+  # ============================================================
+
+  @iblt_magic "IBL1"
+  @iblt_version 1
+  @iblt_header_size 24
+  @iblt_cell_size 24
+
+  @impl true
+  @spec iblt_new(keyword()) :: binary()
+  def iblt_new(opts) do
+    cell_count = Keyword.get(opts, :cell_count, 1000)
+    hash_count = Keyword.get(opts, :hash_count, 3)
+    seed = Keyword.get(opts, :seed, 0)
+
+    body = :binary.copy(<<0::size(@iblt_cell_size * 8)>>, cell_count)
+
+    <<
+      @iblt_magic::binary,
+      @iblt_version::unsigned-8,
+      hash_count::unsigned-8,
+      0::unsigned-16,
+      cell_count::unsigned-little-32,
+      0::unsigned-little-32,
+      seed::unsigned-little-32,
+      0::unsigned-little-32,
+      body::binary
+    >>
+  end
+
+  @impl true
+  @spec iblt_put(binary(), non_neg_integer(), non_neg_integer(), keyword()) :: binary()
+  def iblt_put(state_bin, key_hash, value_hash, _opts) do
+    <<header::binary-size(@iblt_header_size), body::binary>> = state_bin
+
+    <<
+      @iblt_magic::binary,
+      version::unsigned-8,
+      hash_count::unsigned-8,
+      reserved1::unsigned-16,
+      cell_count::unsigned-little-32,
+      item_count::unsigned-little-32,
+      seed::unsigned-little-32,
+      reserved2::unsigned-little-32
+    >> = header
+
+    check = iblt_check_hash(key_hash)
+    positions = iblt_positions(key_hash, seed, hash_count, cell_count)
+
+    new_body =
+      Enum.reduce(positions, body, fn pos, acc ->
+        iblt_update_cell(acc, pos, 1, key_hash, value_hash, check)
+      end)
+
+    <<
+      @iblt_magic::binary,
+      version::unsigned-8,
+      hash_count::unsigned-8,
+      reserved1::unsigned-16,
+      cell_count::unsigned-little-32,
+      item_count + 1::unsigned-little-32,
+      seed::unsigned-little-32,
+      reserved2::unsigned-little-32,
+      new_body::binary
+    >>
+  end
+
+  @impl true
+  @spec iblt_put_many(binary(), [{non_neg_integer(), non_neg_integer()}], keyword()) :: binary()
+  def iblt_put_many(state_bin, pairs, _opts) do
+    Enum.reduce(pairs, state_bin, fn {key_hash, value_hash}, acc ->
+      iblt_put(acc, key_hash, value_hash, [])
+    end)
+  end
+
+  @impl true
+  @spec iblt_member?(binary(), non_neg_integer(), keyword()) :: boolean()
+  def iblt_member?(state_bin, key_hash, _opts) do
+    <<_header::binary-size(@iblt_header_size), body::binary>> = state_bin
+
+    <<
+      _magic::binary-size(4),
+      _version::unsigned-8,
+      hash_count::unsigned-8,
+      _reserved::unsigned-16,
+      cell_count::unsigned-little-32,
+      _item_count::unsigned-little-32,
+      seed::unsigned-little-32,
+      _reserved2::unsigned-little-32
+    >> = binary_part(state_bin, 0, @iblt_header_size)
+
+    positions = iblt_positions(key_hash, seed, hash_count, cell_count)
+
+    Enum.all?(positions, fn pos ->
+      offset = pos * @iblt_cell_size
+      <<_before::binary-size(^offset), count::signed-little-32, _rest::binary>> = body
+      count != 0
+    end)
+  end
+
+  @impl true
+  @spec iblt_delete(binary(), non_neg_integer(), non_neg_integer(), keyword()) :: binary()
+  def iblt_delete(state_bin, key_hash, value_hash, _opts) do
+    <<header::binary-size(@iblt_header_size), body::binary>> = state_bin
+
+    <<
+      @iblt_magic::binary,
+      version::unsigned-8,
+      hash_count::unsigned-8,
+      reserved1::unsigned-16,
+      cell_count::unsigned-little-32,
+      item_count::unsigned-little-32,
+      seed::unsigned-little-32,
+      reserved2::unsigned-little-32
+    >> = header
+
+    check = iblt_check_hash(key_hash)
+    positions = iblt_positions(key_hash, seed, hash_count, cell_count)
+
+    new_body =
+      Enum.reduce(positions, body, fn pos, acc ->
+        iblt_update_cell(acc, pos, -1, key_hash, value_hash, check)
+      end)
+
+    new_item_count = if item_count > 0, do: item_count - 1, else: 0
+
+    <<
+      @iblt_magic::binary,
+      version::unsigned-8,
+      hash_count::unsigned-8,
+      reserved1::unsigned-16,
+      cell_count::unsigned-little-32,
+      new_item_count::unsigned-little-32,
+      seed::unsigned-little-32,
+      reserved2::unsigned-little-32,
+      new_body::binary
+    >>
+  end
+
+  @impl true
+  @spec iblt_subtract(binary(), binary(), keyword()) :: binary()
+  def iblt_subtract(state_a, state_b, _opts) do
+    <<header_a::binary-size(@iblt_header_size), body_a::binary>> = state_a
+    <<_header_b::binary-size(@iblt_header_size), body_b::binary>> = state_b
+
+    <<
+      @iblt_magic::binary,
+      version::unsigned-8,
+      hash_count::unsigned-8,
+      reserved1::unsigned-16,
+      cell_count::unsigned-little-32,
+      item_count_a::unsigned-little-32,
+      seed::unsigned-little-32,
+      reserved2::unsigned-little-32
+    >> = header_a
+
+    <<
+      @iblt_magic::binary,
+      _::unsigned-8,
+      _::unsigned-8,
+      _::unsigned-16,
+      _::unsigned-little-32,
+      item_count_b::unsigned-little-32,
+      _::unsigned-little-32,
+      _::unsigned-little-32
+    >> = binary_part(state_b, 0, @iblt_header_size)
+
+    new_body = iblt_cellwise_op(body_a, body_b, cell_count, :subtract)
+
+    diff = abs(item_count_a - item_count_b)
+
+    <<
+      @iblt_magic::binary,
+      version::unsigned-8,
+      hash_count::unsigned-8,
+      reserved1::unsigned-16,
+      cell_count::unsigned-little-32,
+      diff::unsigned-little-32,
+      seed::unsigned-little-32,
+      reserved2::unsigned-little-32,
+      new_body::binary
+    >>
+  end
+
+  @impl true
+  @spec iblt_list_entries(binary(), keyword()) ::
+          {:ok, %{positive: list(), negative: list()}} | {:error, :decode_failed}
+  def iblt_list_entries(state_bin, _opts) do
+    <<_header::binary-size(@iblt_header_size), body::binary>> = state_bin
+
+    <<
+      @iblt_magic::binary,
+      _version::unsigned-8,
+      hash_count::unsigned-8,
+      _reserved::unsigned-16,
+      cell_count::unsigned-little-32,
+      _item_count::unsigned-little-32,
+      seed::unsigned-little-32,
+      _reserved2::unsigned-little-32
+    >> = binary_part(state_bin, 0, @iblt_header_size)
+
+    cells = iblt_decode_cells(body, cell_count)
+    iblt_peel(cells, hash_count, seed, cell_count)
+  end
+
+  @impl true
+  @spec iblt_count(binary(), keyword()) :: non_neg_integer()
+  def iblt_count(state_bin, _opts) do
+    <<_magic::binary-size(4), _version::unsigned-8, _hc::unsigned-8, _r::unsigned-16,
+      _cc::unsigned-little-32, item_count::unsigned-little-32, _rest::binary>> = state_bin
+
+    item_count
+  end
+
+  @impl true
+  @spec iblt_merge(binary(), binary(), keyword()) :: binary()
+  def iblt_merge(state_a, state_b, _opts) do
+    <<header_a::binary-size(@iblt_header_size), body_a::binary>> = state_a
+    <<_header_b::binary-size(@iblt_header_size), body_b::binary>> = state_b
+
+    <<
+      @iblt_magic::binary,
+      version::unsigned-8,
+      hash_count::unsigned-8,
+      reserved1::unsigned-16,
+      cell_count::unsigned-little-32,
+      item_count_a::unsigned-little-32,
+      seed::unsigned-little-32,
+      reserved2::unsigned-little-32
+    >> = header_a
+
+    <<
+      @iblt_magic::binary,
+      _::unsigned-8,
+      _::unsigned-8,
+      _::unsigned-16,
+      _::unsigned-little-32,
+      item_count_b::unsigned-little-32,
+      _::unsigned-little-32,
+      _::unsigned-little-32
+    >> = binary_part(state_b, 0, @iblt_header_size)
+
+    new_body = iblt_cellwise_op(body_a, body_b, cell_count, :merge)
+
+    <<
+      @iblt_magic::binary,
+      version::unsigned-8,
+      hash_count::unsigned-8,
+      reserved1::unsigned-16,
+      cell_count::unsigned-little-32,
+      item_count_a + item_count_b::unsigned-little-32,
+      seed::unsigned-little-32,
+      reserved2::unsigned-little-32,
+      new_body::binary
+    >>
+  end
+
+  # -- IBLT private helpers --
+
+  defp iblt_check_hash(key_hash) do
+    mixed = iblt_splitmix64(key_hash * 0x517CC1B727220A95 &&& @mask64)
+    mixed >>> 32 &&& 0xFFFFFFFF
+  end
+
+  defp iblt_splitmix64(x) do
+    x = bxor(x, x >>> 30) * 0xBF58476D1CE4E5B9 &&& @mask64
+    x = bxor(x, x >>> 27) * 0x94D049BB133111EB &&& @mask64
+    bxor(x, x >>> 31) &&& @mask64
+  end
+
+  defp iblt_positions(key_hash, seed, hash_count, cell_count) do
+    positions =
+      Enum.reduce(0..(hash_count - 1), [], fn i, acc ->
+        input = key_hash + (seed + i) * 0x9E3779B97F4A7C15 &&& @mask64
+        h = iblt_splitmix64(input)
+        pos = rem(h, cell_count)
+
+        # Ensure distinct positions
+        pos = iblt_resolve_collision(pos, acc, h, cell_count, 1)
+        [pos | acc]
+      end)
+
+    Enum.reverse(positions)
+  end
+
+  defp iblt_resolve_collision(pos, existing, _h, cell_count, attempt)
+       when attempt > cell_count do
+    # Fallback: find first unused position
+    all = MapSet.new(existing)
+
+    Enum.find(0..(cell_count - 1), pos, fn p ->
+      not MapSet.member?(all, p)
+    end)
+  end
+
+  defp iblt_resolve_collision(pos, existing, h, cell_count, attempt) do
+    if pos in existing do
+      new_h = iblt_splitmix64(h + attempt &&& @mask64)
+      new_pos = rem(new_h, cell_count)
+      iblt_resolve_collision(new_pos, existing, new_h, cell_count, attempt + 1)
+    else
+      pos
+    end
+  end
+
+  defp iblt_update_cell(body, pos, count_delta, key_hash, value_hash, check_hash) do
+    offset = pos * @iblt_cell_size
+
+    <<before::binary-size(^offset), count::signed-little-32, key_sum::unsigned-little-64,
+      value_sum::unsigned-little-64, check_sum::unsigned-little-32, rest::binary>> = body
+
+    <<before::binary, count + count_delta::signed-little-32,
+      bxor(key_sum, key_hash)::unsigned-little-64,
+      bxor(value_sum, value_hash)::unsigned-little-64,
+      bxor(check_sum, check_hash)::unsigned-little-32, rest::binary>>
+  end
+
+  defp iblt_cellwise_op(body_a, body_b, cell_count, op) do
+    Enum.reduce(0..(cell_count - 1), <<>>, fn i, acc ->
+      offset = i * @iblt_cell_size
+
+      <<_::binary-size(^offset), ca::signed-little-32, ksa::unsigned-little-64,
+        vsa::unsigned-little-64, csa::unsigned-little-32, _::binary>> = body_a
+
+      <<_::binary-size(^offset), cb::signed-little-32, ksb::unsigned-little-64,
+        vsb::unsigned-little-64, csb::unsigned-little-32, _::binary>> = body_b
+
+      new_count =
+        case op do
+          :subtract -> ca - cb
+          :merge -> ca + cb
+        end
+
+      <<acc::binary, new_count::signed-little-32, bxor(ksa, ksb)::unsigned-little-64,
+        bxor(vsa, vsb)::unsigned-little-64, bxor(csa, csb)::unsigned-little-32>>
+    end)
+  end
+
+  defp iblt_decode_cells(body, cell_count) do
+    for i <- 0..(cell_count - 1) do
+      offset = i * @iblt_cell_size
+
+      <<_::binary-size(^offset), count::signed-little-32, key_sum::unsigned-little-64,
+        value_sum::unsigned-little-64, check_sum::unsigned-little-32, _::binary>> = body
+
+      {count, key_sum, value_sum, check_sum}
+    end
+    |> :erlang.list_to_tuple()
+  end
+
+  defp iblt_peel(cells, hash_count, seed, cell_count) do
+    iblt_peel_loop(cells, hash_count, seed, cell_count, [], [])
+  end
+
+  defp iblt_peel_loop(cells, hash_count, seed, cell_count, pos_acc, neg_acc) do
+    # Find pure cells
+    pure_cells =
+      for i <- 0..(cell_count - 1),
+          {count, key_sum, _value_sum, check_sum} = elem(cells, i),
+          abs(count) == 1,
+          iblt_check_hash(key_sum) == check_sum do
+        i
+      end
+
+    if pure_cells == [] do
+      # Check if all done
+      all_zero =
+        Enum.all?(0..(cell_count - 1), fn i ->
+          {count, _, _, _} = elem(cells, i)
+          count == 0
+        end)
+
+      if all_zero do
+        {:ok, %{positive: Enum.reverse(pos_acc), negative: Enum.reverse(neg_acc)}}
+      else
+        {:error, :decode_failed}
+      end
+    else
+      {new_cells, new_pos, new_neg} =
+        Enum.reduce(pure_cells, {cells, pos_acc, neg_acc}, fn i, {c_acc, p_acc, n_acc} ->
+          iblt_peel_one(c_acc, i, p_acc, n_acc, hash_count, seed, cell_count)
+        end)
+
+      iblt_peel_loop(new_cells, hash_count, seed, cell_count, new_pos, new_neg)
+    end
+  end
+
+  defp iblt_peel_one(c_acc, i, p_acc, n_acc, hash_count, seed, cell_count) do
+    {count, key_sum, value_sum, check_sum} = elem(c_acc, i)
+
+    # Only process if still pure (may have been modified by earlier peel in this batch)
+    if abs(count) == 1 and iblt_check_hash(key_sum) == check_sum do
+      entry = {key_sum, value_sum}
+
+      {p_acc, n_acc} =
+        if count == 1, do: {[entry | p_acc], n_acc}, else: {p_acc, [entry | n_acc]}
+
+      c_acc = iblt_remove_entry(c_acc, key_sum, value_sum, count, hash_count, seed, cell_count)
+      {c_acc, p_acc, n_acc}
+    else
+      {c_acc, p_acc, n_acc}
+    end
+  end
+
+  defp iblt_remove_entry(cells, key_sum, value_sum, count, hash_count, seed, cell_count) do
+    positions = iblt_positions(key_sum, seed, hash_count, cell_count)
+    check = iblt_check_hash(key_sum)
+
+    Enum.reduce(positions, cells, fn pos, ca ->
+      {pc, pk, pv, pck} = elem(ca, pos)
+      new_cell = {pc - count, bxor(pk, key_sum), bxor(pv, value_sum), bxor(pck, check)}
+      put_elem(ca, pos, new_cell)
+    end)
   end
 end

@@ -364,6 +364,26 @@ defmodule ExDataSketch.Backend.Rust do
   @impl true
   def bloom_count(state_bin, opts), do: Pure.bloom_count(state_bin, opts)
 
+  # -- Cuckoo callbacks --
+
+  @impl true
+  def cuckoo_new(opts), do: Pure.cuckoo_new(opts)
+
+  @impl true
+  def cuckoo_put(state_bin, hash64, opts), do: Pure.cuckoo_put(state_bin, hash64, opts)
+
+  @impl true
+  def cuckoo_put_many(state_bin, hashes, opts), do: Pure.cuckoo_put_many(state_bin, hashes, opts)
+
+  @impl true
+  def cuckoo_member?(state_bin, hash64, opts), do: Pure.cuckoo_member?(state_bin, hash64, opts)
+
+  @impl true
+  def cuckoo_delete(state_bin, hash64, opts), do: Pure.cuckoo_delete(state_bin, hash64, opts)
+
+  @impl true
+  def cuckoo_count(state_bin, opts), do: Pure.cuckoo_count(state_bin, opts)
+
   # -- FrequentItems callbacks --
 
   @impl true
@@ -438,6 +458,100 @@ defmodule ExDataSketch.Backend.Rust do
 
   @impl true
   def fi_entry_count(state_bin, opts), do: Pure.fi_entry_count(state_bin, opts)
+
+  # -- Quotient callbacks --
+
+  @impl true
+  def quotient_new(opts), do: Pure.quotient_new(opts)
+
+  @impl true
+  def quotient_put(state_bin, hash64, opts), do: Pure.quotient_put(state_bin, hash64, opts)
+
+  @impl true
+  def quotient_put_many(state_bin, hashes, opts),
+    do: Pure.quotient_put_many(state_bin, hashes, opts)
+
+  @impl true
+  def quotient_member?(state_bin, hash64, opts),
+    do: Pure.quotient_member?(state_bin, hash64, opts)
+
+  @impl true
+  def quotient_delete(state_bin, hash64, opts), do: Pure.quotient_delete(state_bin, hash64, opts)
+
+  @impl true
+  def quotient_merge(state_a, state_b, opts), do: Pure.quotient_merge(state_a, state_b, opts)
+
+  @impl true
+  def quotient_count(state_bin, opts), do: Pure.quotient_count(state_bin, opts)
+
+  # -- CQF callbacks --
+
+  @impl true
+  def cqf_new(opts), do: Pure.cqf_new(opts)
+
+  @impl true
+  def cqf_put(state_bin, hash64, opts), do: Pure.cqf_put(state_bin, hash64, opts)
+
+  @impl true
+  def cqf_put_many(state_bin, hashes, opts), do: Pure.cqf_put_many(state_bin, hashes, opts)
+
+  @impl true
+  def cqf_member?(state_bin, hash64, opts), do: Pure.cqf_member?(state_bin, hash64, opts)
+
+  @impl true
+  def cqf_estimate_count(state_bin, hash64, opts),
+    do: Pure.cqf_estimate_count(state_bin, hash64, opts)
+
+  @impl true
+  def cqf_delete(state_bin, hash64, opts), do: Pure.cqf_delete(state_bin, hash64, opts)
+
+  @impl true
+  def cqf_merge(state_a, state_b, opts), do: Pure.cqf_merge(state_a, state_b, opts)
+
+  @impl true
+  def cqf_count(state_bin, opts), do: Pure.cqf_count(state_bin, opts)
+
+  # -- XorFilter callbacks --
+
+  @impl true
+  def xor_build(hashes, opts), do: Pure.xor_build(hashes, opts)
+
+  @impl true
+  def xor_member?(state_bin, hash64, opts), do: Pure.xor_member?(state_bin, hash64, opts)
+
+  @impl true
+  def xor_count(state_bin, opts), do: Pure.xor_count(state_bin, opts)
+
+  # -- IBLT callbacks --
+
+  @impl true
+  def iblt_new(opts), do: Pure.iblt_new(opts)
+
+  @impl true
+  def iblt_put(state_bin, key_hash, value_hash, opts),
+    do: Pure.iblt_put(state_bin, key_hash, value_hash, opts)
+
+  @impl true
+  def iblt_put_many(state_bin, pairs, opts), do: Pure.iblt_put_many(state_bin, pairs, opts)
+
+  @impl true
+  def iblt_member?(state_bin, key_hash, opts), do: Pure.iblt_member?(state_bin, key_hash, opts)
+
+  @impl true
+  def iblt_delete(state_bin, key_hash, value_hash, opts),
+    do: Pure.iblt_delete(state_bin, key_hash, value_hash, opts)
+
+  @impl true
+  def iblt_subtract(state_a, state_b, opts), do: Pure.iblt_subtract(state_a, state_b, opts)
+
+  @impl true
+  def iblt_list_entries(state_bin, opts), do: Pure.iblt_list_entries(state_bin, opts)
+
+  @impl true
+  def iblt_count(state_bin, opts), do: Pure.iblt_count(state_bin, opts)
+
+  @impl true
+  def iblt_merge(state_a, state_b, opts), do: Pure.iblt_merge(state_a, state_b, opts)
 
   # -- Private helpers --
 

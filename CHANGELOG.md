@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-03-10
+
+### Added
+
+- Cuckoo filter (`ExDataSketch.Cuckoo`) with Pure Elixir backend. CKO1 binary state format. Partial-key cuckoo hashing with configurable fingerprint size, bucket size, and max kicks. Supports insertion, safe deletion, and membership testing. EXSK serialization (sketch ID 8).
+- Quotient filter (`ExDataSketch.Quotient`) with Pure Elixir backend. QOT1 binary state format. Quotient/remainder fingerprint splitting with linear probing and metadata bits (is_occupied, is_continuation, is_shifted). Supports insertion, safe deletion, merge, and membership testing. EXSK serialization (sketch ID 9).
+- Counting Quotient Filter (`ExDataSketch.CQF`) with Pure Elixir backend. CQF1 binary state format. Extends quotient filter with variable-length counter encoding for multiset membership and approximate counting via `estimate_count/2`. Supports insertion, deletion, merge. EXSK serialization (sketch ID 10).
+- XorFilter (`ExDataSketch.XorFilter`) with Pure Elixir backend. XOR1 binary state format. Static build-once immutable filter constructed via `build/2` with 8-bit or 16-bit fingerprints. Supports membership testing only. EXSK serialization (sketch ID 11).
+- IBLT (`ExDataSketch.IBLT`) with Pure Elixir backend. IBL1 binary state format. Invertible Bloom Lookup Table for set reconciliation via `subtract/2` and `list_entries/1`. Supports set mode and key-value mode, insertion, deletion, merge. EXSK serialization (sketch ID 12).
+- FilterChain (`ExDataSketch.FilterChain`) for capability-aware membership filter composition. FCN1 binary state format. Lifecycle-tier patterns (hot/warm/cold) with stage position enforcement. Supports `add_stage/2`, `put/2`, `member?/2`, `delete/2`. Serializes all stages in order.
+- Benchmark suites for Cuckoo, Quotient, CQF, XorFilter, IBLT, and FilterChain (`bench/*.exs`).
+- `UnsupportedOperationError` for operations not supported by a structure (used by FilterChain).
+- `InvalidChainCompositionError` for invalid FilterChain stage composition.
+- `capabilities/0` function on Bloom, Cuckoo, Quotient, CQF, XorFilter, IBLT, and FilterChain modules.
+- Cuckoo, Quotient, CQF, XorFilter, IBLT, and FilterChain backend callbacks on `ExDataSketch.Backend`.
+
 ## [0.4.0] - 2026-03-06
 
 ### Added

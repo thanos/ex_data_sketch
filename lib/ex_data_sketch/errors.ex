@@ -12,6 +12,8 @@ defmodule ExDataSketch.Errors do
   - `InvalidOptionError` -- an option value is out of range or of wrong type.
   - `DeserializationError` -- binary data could not be decoded.
   - `IncompatibleSketchesError` -- sketches cannot be merged due to parameter mismatch.
+  - `UnsupportedOperationError` -- operation not supported by a structure.
+  - `InvalidChainCompositionError` -- invalid FilterChain stage composition.
   """
 
   defmodule NotImplementedError do
@@ -73,6 +75,41 @@ defmodule ExDataSketch.Errors do
     def exception(opts) do
       reason = Keyword.get(opts, :reason, "parameter mismatch")
       %__MODULE__{message: "cannot merge sketches: #{reason}"}
+    end
+  end
+
+  defmodule UnsupportedOperationError do
+    @moduledoc """
+    Raised when an operation is not supported by a structure.
+    """
+    defexception [:message]
+
+    @impl true
+    def exception(opts) do
+      operation = Keyword.get(opts, :operation, "unknown")
+      structure = Keyword.get(opts, :structure, "unknown")
+
+      message =
+        Keyword.get(
+          opts,
+          :message,
+          "#{structure} does not support #{operation}"
+        )
+
+      %__MODULE__{message: message}
+    end
+  end
+
+  defmodule InvalidChainCompositionError do
+    @moduledoc """
+    Raised when a FilterChain stage composition is invalid.
+    """
+    defexception [:message]
+
+    @impl true
+    def exception(opts) do
+      reason = Keyword.get(opts, :reason, "invalid composition")
+      %__MODULE__{message: "invalid chain composition: #{reason}"}
     end
   end
 

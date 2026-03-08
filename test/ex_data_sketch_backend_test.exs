@@ -42,6 +42,12 @@ defmodule ExDataSketch.BackendTest.StubBackend do
   def bloom_member?(_s, _h, _o), do: false
   def bloom_merge(s, _b, _o), do: s
   def bloom_count(_s, _o), do: 0
+  def cuckoo_new(_opts), do: <<>>
+  def cuckoo_put(s, _h, _o), do: {:ok, s}
+  def cuckoo_put_many(s, _h, _o), do: {:ok, s}
+  def cuckoo_member?(_s, _h, _o), do: false
+  def cuckoo_delete(_s, _h, _o), do: {:error, :not_found}
+  def cuckoo_count(_s, _o), do: 0
   def fi_new(_opts), do: <<>>
   def fi_update(s, _ib, _o), do: s
   def fi_update_many(s, _items, _o), do: s
@@ -50,6 +56,33 @@ defmodule ExDataSketch.BackendTest.StubBackend do
   def fi_top_k(_s, _l, _o), do: []
   def fi_count(_s, _o), do: 0
   def fi_entry_count(_s, _o), do: 0
+  def quotient_new(_opts), do: <<>>
+  def quotient_put(s, _h, _o), do: s
+  def quotient_put_many(s, _h, _o), do: s
+  def quotient_member?(_s, _h, _o), do: false
+  def quotient_delete(s, _h, _o), do: s
+  def quotient_merge(s, _b, _o), do: s
+  def quotient_count(_s, _o), do: 0
+  def cqf_new(_opts), do: <<>>
+  def cqf_put(s, _h, _o), do: s
+  def cqf_put_many(s, _h, _o), do: s
+  def cqf_member?(_s, _h, _o), do: false
+  def cqf_estimate_count(_s, _h, _o), do: 0
+  def cqf_delete(s, _h, _o), do: s
+  def cqf_merge(s, _b, _o), do: s
+  def cqf_count(_s, _o), do: 0
+  def xor_build(_hashes, _o), do: {:ok, <<>>}
+  def xor_member?(_s, _h, _o), do: false
+  def xor_count(_s, _o), do: 0
+  def iblt_new(_opts), do: <<>>
+  def iblt_put(s, _kh, _vh, _o), do: s
+  def iblt_put_many(s, _pairs, _o), do: s
+  def iblt_member?(_s, _kh, _o), do: false
+  def iblt_delete(s, _kh, _vh, _o), do: s
+  def iblt_subtract(s, _b, _o), do: s
+  def iblt_list_entries(_s, _o), do: {:ok, %{positive: [], negative: []}}
+  def iblt_count(_s, _o), do: 0
+  def iblt_merge(s, _b, _o), do: s
 end
 
 defmodule ExDataSketch.BackendTest do

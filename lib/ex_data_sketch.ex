@@ -16,6 +16,12 @@ defmodule ExDataSketch do
   - `ExDataSketch.DDSketch` -- DDSketch for value-relative-accuracy quantile estimation.
   - `ExDataSketch.FrequentItems` -- SpaceSaving for approximate heavy-hitter detection.
   - `ExDataSketch.Bloom` -- Bloom filter for probabilistic membership testing.
+  - `ExDataSketch.Cuckoo` -- Cuckoo filter for membership testing with deletion support.
+  - `ExDataSketch.Quotient` -- Quotient filter for membership testing with deletion and merge.
+  - `ExDataSketch.CQF` -- Counting Quotient Filter for multiset membership with approximate counting.
+  - `ExDataSketch.XorFilter` -- Xor filter for static, immutable membership testing.
+  - `ExDataSketch.IBLT` -- Invertible Bloom Lookup Table for set reconciliation.
+  - `ExDataSketch.FilterChain` -- Capability-aware composition framework for membership filters.
   - `ExDataSketch.Quantiles` -- Facade for quantile sketch algorithms.
 
   ## Architecture
@@ -57,7 +63,19 @@ defmodule ExDataSketch do
   See the [Quick Start guide](quick_start.md) for more examples.
   """
 
-  alias ExDataSketch.{Bloom, CMS, DDSketch, FrequentItems, HLL, KLL, Theta}
+  alias ExDataSketch.{
+    Bloom,
+    CMS,
+    CQF,
+    Cuckoo,
+    DDSketch,
+    FrequentItems,
+    HLL,
+    IBLT,
+    KLL,
+    Quotient,
+    Theta
+  }
 
   @doc """
   Updates a sketch with multiple items in a single pass.
@@ -74,10 +92,37 @@ defmodule ExDataSketch do
 
   """
   @spec update_many(
-          HLL.t() | CMS.t() | Theta.t() | KLL.t() | DDSketch.t() | FrequentItems.t() | Bloom.t(),
+          HLL.t()
+          | CMS.t()
+          | Theta.t()
+          | KLL.t()
+          | DDSketch.t()
+          | FrequentItems.t()
+          | Bloom.t()
+          | Cuckoo.t()
+          | Quotient.t()
+          | CQF.t()
+          | IBLT.t(),
           Enumerable.t()
         ) ::
-          HLL.t() | CMS.t() | Theta.t() | KLL.t() | DDSketch.t() | FrequentItems.t() | Bloom.t()
+          HLL.t()
+          | CMS.t()
+          | Theta.t()
+          | KLL.t()
+          | DDSketch.t()
+          | FrequentItems.t()
+          | Bloom.t()
+          | Cuckoo.t()
+          | Quotient.t()
+          | CQF.t()
+          | IBLT.t()
+  def update_many(%Cuckoo{} = sketch, items) do
+    case Cuckoo.put_many(sketch, items) do
+      {:ok, updated} -> updated
+      {:error, :full, partial} -> partial
+    end
+  end
+
   def update_many(%Bloom{} = sketch, items), do: Bloom.put_many(sketch, items)
   def update_many(%HLL{} = sketch, items), do: HLL.update_many(sketch, items)
   def update_many(%CMS{} = sketch, items), do: CMS.update_many(sketch, items)
@@ -87,4 +132,8 @@ defmodule ExDataSketch do
 
   def update_many(%FrequentItems{} = sketch, items),
     do: FrequentItems.update_many(sketch, items)
+
+  def update_many(%Quotient{} = sketch, items), do: Quotient.put_many(sketch, items)
+  def update_many(%CQF{} = sketch, items), do: CQF.put_many(sketch, items)
+  def update_many(%IBLT{} = sketch, items), do: IBLT.put_many(sketch, items)
 end
