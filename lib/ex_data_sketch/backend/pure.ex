@@ -2331,7 +2331,7 @@ defmodule ExDataSketch.Backend.Pure do
   defp qot_body_to_list(_body, _sb, 0, acc), do: Enum.reverse(acc)
 
   defp qot_body_to_list(body, sb, remaining, acc) do
-    <<chunk::binary-size(sb), rest::binary>> = body
+    <<chunk::binary-size(^sb), rest::binary>> = body
 
     raw =
       chunk
@@ -3450,13 +3450,13 @@ defmodule ExDataSketch.Backend.Pure do
   end
 
   defp xor_read_fp(body, index, 8) do
-    <<_before::binary-size(index), fp::unsigned-8, _rest::binary>> = body
+    <<_before::binary-size(^index), fp::unsigned-8, _rest::binary>> = body
     fp
   end
 
   defp xor_read_fp(body, index, 16) do
     byte_offset = index * 2
-    <<_before::binary-size(byte_offset), fp::unsigned-little-16, _rest::binary>> = body
+    <<_before::binary-size(^byte_offset), fp::unsigned-little-16, _rest::binary>> = body
     fp
   end
 
@@ -3584,7 +3584,7 @@ defmodule ExDataSketch.Backend.Pure do
 
     Enum.all?(positions, fn pos ->
       offset = pos * @iblt_cell_size
-      <<_before::binary-size(offset), count::signed-little-32, _rest::binary>> = body
+      <<_before::binary-size(^offset), count::signed-little-32, _rest::binary>> = body
       count != 0
     end)
   end
@@ -3797,7 +3797,7 @@ defmodule ExDataSketch.Backend.Pure do
   defp iblt_update_cell(body, pos, count_delta, key_hash, value_hash, check_hash) do
     offset = pos * @iblt_cell_size
 
-    <<before::binary-size(offset), count::signed-little-32, key_sum::unsigned-little-64,
+    <<before::binary-size(^offset), count::signed-little-32, key_sum::unsigned-little-64,
       value_sum::unsigned-little-64, check_sum::unsigned-little-32, rest::binary>> = body
 
     <<before::binary, count + count_delta::signed-little-32,
@@ -3810,10 +3810,10 @@ defmodule ExDataSketch.Backend.Pure do
     Enum.reduce(0..(cell_count - 1), <<>>, fn i, acc ->
       offset = i * @iblt_cell_size
 
-      <<_::binary-size(offset), ca::signed-little-32, ksa::unsigned-little-64,
+      <<_::binary-size(^offset), ca::signed-little-32, ksa::unsigned-little-64,
         vsa::unsigned-little-64, csa::unsigned-little-32, _::binary>> = body_a
 
-      <<_::binary-size(offset), cb::signed-little-32, ksb::unsigned-little-64,
+      <<_::binary-size(^offset), cb::signed-little-32, ksb::unsigned-little-64,
         vsb::unsigned-little-64, csb::unsigned-little-32, _::binary>> = body_b
 
       new_count =
@@ -3831,7 +3831,7 @@ defmodule ExDataSketch.Backend.Pure do
     for i <- 0..(cell_count - 1) do
       offset = i * @iblt_cell_size
 
-      <<_::binary-size(offset), count::signed-little-32, key_sum::unsigned-little-64,
+      <<_::binary-size(^offset), count::signed-little-32, key_sum::unsigned-little-64,
         value_sum::unsigned-little-64, check_sum::unsigned-little-32, _::binary>> = body
 
       {count, key_sum, value_sum, check_sum}
