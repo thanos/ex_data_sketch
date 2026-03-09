@@ -164,6 +164,10 @@ defmodule ExDataSketch.Quantiles do
   def cdf(%KLL{} = sketch, split_points), do: KLL.cdf(sketch, split_points)
   def cdf(%REQ{} = sketch, split_points), do: REQ.cdf(sketch, split_points)
 
+  def cdf(%DDSketch{}, _split_points) do
+    raise ArgumentError, "cdf/2 is not supported for DDSketch"
+  end
+
   @doc """
   Returns the PMF at the given split points.
 
@@ -181,6 +185,10 @@ defmodule ExDataSketch.Quantiles do
   @spec pmf(sketch(), [number()]) :: [float()] | nil
   def pmf(%KLL{} = sketch, split_points), do: KLL.pmf(sketch, split_points)
   def pmf(%REQ{} = sketch, split_points), do: REQ.pmf(sketch, split_points)
+
+  def pmf(%DDSketch{}, _split_points) do
+    raise ArgumentError, "pmf/2 is not supported for DDSketch"
+  end
 
   @doc """
   Returns the total number of items inserted into the sketch.

@@ -163,11 +163,11 @@ defmodule ExDataSketch.Hash do
 
   """
   @spec xxhash3_64(binary(), non_neg_integer()) :: hash64()
-  def xxhash3_64(data, seed) when is_binary(data) and is_integer(seed) do
+  def xxhash3_64(data, seed) when is_binary(data) and is_integer(seed) and seed >= 0 do
     ExDataSketch.Nif.xxhash3_64_seeded_nif(data, seed)
   rescue
-    _ ->
-      # Fallback to phash2-based hash
+    ErlangError ->
+      # Fallback to phash2-based hash when NIF is not loaded
       mix64(:erlang.phash2(data, 1 <<< 32), seed)
   end
 

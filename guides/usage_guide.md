@@ -312,14 +312,14 @@ an item is not tracked, returning 0 instead.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `k` | integer | 10 | Number of counters. Detects items with frequency > n/(k+1) |
+| `k` | integer | 10 | Number of counters. Detects items with frequency > n/k |
 | `backend` | module | configured | Backend module |
 
 ```elixir
 sketch = ExDataSketch.MisraGries.new(k: 10)
 sketch = ExDataSketch.MisraGries.update_many(sketch, items)
 ExDataSketch.MisraGries.estimate(sketch, "frequent_item")
-ExDataSketch.MisraGries.top_k(sketch)
+ExDataSketch.MisraGries.top_k(sketch, 10)
 ```
 
 ### XXHash3
@@ -330,7 +330,7 @@ also available directly.
 
 ```elixir
 ExDataSketch.Hash.xxhash3_64("some data")
-ExDataSketch.Hash.xxhash3_64("some data", seed: 42)
+ExDataSketch.Hash.xxhash3_64("some data", 42)
 ```
 
 ### KLL vs DDSketch

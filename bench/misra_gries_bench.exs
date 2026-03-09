@@ -58,7 +58,7 @@ benches =
       {"mg_update_many 10k [#{name}]", fn -> MisraGries.update_many(s.sketch_k10, items_10k) end},
       {"mg_merge k=10 [#{name}]", fn -> MisraGries.merge(s.merge_a, s.merge_b) end},
       {"mg_estimate [#{name}]", fn -> MisraGries.estimate(s.sketch_populated, "a") end},
-      {"mg_top_k [#{name}]", fn -> MisraGries.top_k(s.sketch_populated) end},
+      {"mg_top_k [#{name}]", fn -> MisraGries.top_k(s.sketch_populated, 10) end},
       {"mg_serialize [#{name}]", fn -> MisraGries.serialize(s.sketch_populated) end}
     ]
   end)
