@@ -258,6 +258,10 @@ fn cqf_put_many_impl<'a>(
     q: u8,
     r: u8,
 ) -> Term<'a> {
+    if state_bin.len() < CQF_HEADER_SIZE {
+        return error::error_string(env, "CQF state too short for header");
+    }
+
     let slot_bytes = ((3 + r as usize) + 7) / 8;
     let state = state_bin.as_slice();
 
@@ -305,6 +309,10 @@ fn cqf_merge_impl<'a>(
     q: u8,
     r: u8,
 ) -> Term<'a> {
+    if a_bin.len() < CQF_HEADER_SIZE || b_bin.len() < CQF_HEADER_SIZE {
+        return error::error_string(env, "CQF state too short for header");
+    }
+
     let slot_bytes = ((3 + r as usize) + 7) / 8;
     let a = a_bin.as_slice();
     let b = b_bin.as_slice();
