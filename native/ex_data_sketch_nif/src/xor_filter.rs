@@ -1,0 +1,230 @@
+use rustler::{Binary, Env, Term};
+use std::collections::HashSet;
+
+use crate::error;
+
+const XOR_HEADER_SIZE: usize = 32;
+const XOR_MAX_RETRIES: u32 = 100;
+
+fn xor_splitmix64(mut x: u64) -> u64 {
+    x ^= x >> 30;
+    x = x.wrapping_mul(0xBF58476D1CE4E5B9);
+    x ^= x >> 27;
+    x = x.wrapping_mul(0x94D049BB133111EB);
+    x ^= x >> 31;
+    x
+}
+
+fn xor_rotl64(x: u64, r: u32) -> u64 {
+    (x << r) | (x >> (64 - r))
+}
+
+fn xor_fastrange(hash: u64, range: u32) -> u32 {
+    ((hash as u128 * range as u128) >> 64) as u32
+}
+
+fn xor_hash_positions(hash64: u64, seed: u32, seg_size: u32) -> (u32, u32, u32) {
+    let h = xor_splitmix64(hash64.wrapping_add((seed as u64).wrapping_mul(0x9E3779B97F4A7C15)));
+
+    let h0 = xor_fastrange(h, seg_size);
+    let h1 = xor_fastrange(xor_rotl64(h, 21), seg_size) + seg_size;
+    let h2 = xor_fastrange(xor_rotl64(h, 42), seg_size) + seg_size * 2;
+
+    (h0, h1, h2)
+}
+
+fn xor_fingerprint(hash64: u64, fp_bits: u8) -> u64 {
+    let fp_mask = (1u64 << fp_bits) - 1;
+    let fp = hash64 & fp_mask;
+    if fp == 0 { 1 } else { fp }
+}
+
+fn xor_build_impl<'a>(
+    env: Env<'a>,
+    hashes_bin: Binary,
+    fp_bits: u8,
+    seed: u32,
+) -> Term<'a> {
+    if hashes_bin.len() % 8 != 0 {
+        return error::error_string(env, "hashes_bin length must be a multiple of 8");
+    }
+
+    let raw = hashes_bin.as_slice();
+    let hash_count = raw.len() / 8;
+
+    // Deduplicate
+    let mut unique_set = HashSet::with_capacity(hash_count);
+    for i in 0..hash_count {
+        let off = i * 8;
+        let h = u64::from_le_bytes(raw[off..off + 8].try_into().unwrap());
+        unique_set.insert(h);
+    }
+
+    let unique_hashes: Vec<u64> = unique_set.into_iter().collect();
+    let n = unique_hashes.len() as u32;
+
+    let variant: u8 = if fp_bits == 16 { 1 } else { 0 };
+
+    if n == 0 {
+        let seg_size: u32 = 1;
+        let arr_len: u32 = 3;
+        let fp_bytes = if fp_bits == 16 { 2 } else { 1 };
+        let body = vec![0u8; arr_len as usize * fp_bytes];
+        let result = xor_encode_state(0, seg_size, arr_len, seed, fp_bits, variant, &body);
+        return error::ok_binary(env, &result);
+    }
+
+    let capacity = ((1.23 * n as f64).ceil() as u32) + 32;
+    let seg_size = std::cmp::max((capacity + 2) / 3, 1);
+    let arr_len = 3 * seg_size;
+
+    for retry in 0..XOR_MAX_RETRIES {
+        let current_seed = seed + retry;
+
+        if let Some((fingerprint_array, final_seed)) =
+            xor_try_build(&unique_hashes, n, seg_size, arr_len, fp_bits, current_seed)
+        {
+            let body = xor_encode_body(&fingerprint_array, arr_len, fp_bits);
+            let result = xor_encode_state(n, seg_size, arr_len, final_seed, fp_bits, variant, &body);
+            return error::ok_binary(env, &result);
+        }
+    }
+
+    error::error_string(env, "build_failed")
+}
+
+fn xor_try_build(
+    hashes: &[u64],
+    n: u32,
+    seg_size: u32,
+    arr_len: u32,
+    fp_bits: u8,
+    seed: u32,
+) -> Option<(Vec<u64>, u32)> {
+    // Build degree counts and sets for each position
+    let al = arr_len as usize;
+    let mut degrees = vec![0u32; al];
+    let mut sets: Vec<HashSet<u64>> = (0..al).map(|_| HashSet::new()).collect();
+
+    for &hash in hashes {
+        let (h0, h1, h2) = xor_hash_positions(hash, seed, seg_size);
+        degrees[h0 as usize] += 1;
+        degrees[h1 as usize] += 1;
+        degrees[h2 as usize] += 1;
+        sets[h0 as usize].insert(hash);
+        sets[h1 as usize].insert(hash);
+        sets[h2 as usize].insert(hash);
+    }
+
+    // Peel: find degree-1 positions
+    let mut queue: Vec<u32> = Vec::new();
+    for i in 0..al {
+        if degrees[i] == 1 {
+            queue.push(i as u32);
+        }
+    }
+
+    let mut stack: Vec<(u64, u32)> = Vec::with_capacity(n as usize);
+    let mut peeled: u32 = 0;
+
+    while let Some(pos) = queue.pop() {
+        if degrees[pos as usize] != 1 {
+            continue;
+        }
+
+        let hash = *sets[pos as usize].iter().next().unwrap();
+        stack.push((hash, pos));
+        peeled += 1;
+
+        let (h0, h1, h2) = xor_hash_positions(hash, seed, seg_size);
+        for &p in &[h0, h1, h2] {
+            sets[p as usize].remove(&hash);
+            degrees[p as usize] -= 1;
+            if degrees[p as usize] == 1 && p != pos {
+                queue.push(p);
+            }
+        }
+    }
+
+    if peeled != n {
+        return None;
+    }
+
+    // Assign fingerprints (process stack in reverse)
+    let mut b = vec![0u64; al];
+
+    for &(hash, peel_pos) in stack.iter().rev() {
+        let (h0, h1, h2) = xor_hash_positions(hash, seed, seg_size);
+        let fp = xor_fingerprint(hash, fp_bits);
+
+        let others: Vec<u32> = [h0, h1, h2].iter().copied().filter(|&p| p != peel_pos).collect();
+        let value = fp ^ b[others[0] as usize] ^ b[others[1] as usize];
+        b[peel_pos as usize] = value;
+    }
+
+    Some((b, seed))
+}
+
+fn xor_encode_body(fingerprint_array: &[u64], arr_len: u32, fp_bits: u8) -> Vec<u8> {
+    match fp_bits {
+        8 => {
+            let mut body = Vec::with_capacity(arr_len as usize);
+            for i in 0..arr_len as usize {
+                body.push(fingerprint_array[i] as u8);
+            }
+            body
+        }
+        16 => {
+            let mut body = Vec::with_capacity(arr_len as usize * 2);
+            for i in 0..arr_len as usize {
+                body.extend_from_slice(&(fingerprint_array[i] as u16).to_le_bytes());
+            }
+            body
+        }
+        _ => unreachable!(),
+    }
+}
+
+fn xor_encode_state(
+    item_count: u32,
+    segment_size: u32,
+    array_length: u32,
+    seed: u32,
+    fp_bits: u8,
+    variant: u8,
+    body: &[u8],
+) -> Vec<u8> {
+    let mut result = Vec::with_capacity(XOR_HEADER_SIZE + body.len());
+    result.extend_from_slice(b"XOR1");
+    result.push(1); // version
+    result.push(fp_bits);
+    result.push(variant);
+    result.push(0); // flags
+    result.extend_from_slice(&item_count.to_le_bytes());
+    result.extend_from_slice(&segment_size.to_le_bytes());
+    result.extend_from_slice(&seed.to_le_bytes());
+    result.extend_from_slice(&array_length.to_le_bytes());
+    result.extend_from_slice(&[0u8; 8]); // reserved
+    result.extend_from_slice(body);
+    result
+}
+
+#[rustler::nif]
+fn xor_build_nif<'a>(
+    env: Env<'a>,
+    hashes_bin: Binary,
+    fp_bits: u8,
+    seed: u32,
+) -> Term<'a> {
+    xor_build_impl(env, hashes_bin, fp_bits, seed)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn xor_build_dirty_nif<'a>(
+    env: Env<'a>,
+    hashes_bin: Binary,
+    fp_bits: u8,
+    seed: u32,
+) -> Term<'a> {
+    xor_build_impl(env, hashes_bin, fp_bits, seed)
+}

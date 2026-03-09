@@ -24,12 +24,14 @@ serialization, distribution, and persistence.
 | KLL Quantiles | Rank and quantile estimation | Implemented (Pure + Rust) |
 | DDSketch | Relative-error quantile estimation | Implemented (Pure + Rust) |
 | FrequentItems (SpaceSaving) | Heavy-hitter / top-k detection | Implemented (Pure + Rust) |
-| Bloom Filter | Probabilistic membership testing | Implemented (Pure) |
-| Cuckoo Filter | Membership testing with deletion | Implemented (Pure) |
-| Quotient Filter | Membership with deletion and merge | Implemented (Pure) |
-| CQF (Counting Quotient) | Multiset membership with counting | Implemented (Pure) |
-| XorFilter | Static immutable membership testing | Implemented (Pure) |
-| IBLT | Set reconciliation | Implemented (Pure) |
+| Bloom Filter | Probabilistic membership testing | Implemented (Pure + Rust) |
+| Cuckoo Filter | Membership testing with deletion | Implemented (Pure + Rust) |
+| Quotient Filter | Membership with deletion and merge | Implemented (Pure + Rust) |
+| CQF (Counting Quotient) | Multiset membership with counting | Implemented (Pure + Rust) |
+| XorFilter | Static immutable membership testing | Implemented (Pure + Rust) |
+| IBLT | Set reconciliation | Implemented (Pure + Rust) |
+| REQ Sketch | Relative-error quantile estimation | Implemented (Pure) |
+| Misra-Gries | Deterministic heavy-hitter detection | Implemented (Pure) |
 
 ### Capability Matrix
 

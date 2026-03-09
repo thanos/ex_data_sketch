@@ -25,7 +25,10 @@ scripts = [
   "bench/cqf_bench.exs",
   "bench/xor_filter_bench.exs",
   "bench/iblt_bench.exs",
-  "bench/filter_chain_bench.exs"
+  "bench/filter_chain_bench.exs",
+  "bench/req_bench.exs",
+  "bench/misra_gries_bench.exs",
+  "bench/xxhash3_bench.exs"
 ]
 
 for script <- scripts do

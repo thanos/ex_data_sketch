@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-03-08
+
+### Added
+
+- Rust NIF acceleration for all membership filters: Bloom, Cuckoo, Quotient, CQF, XorFilter, and IBLT. Batch operations (`put_many`, `merge`, `build`) automatically use compiled Rust NIFs when available, with dirty scheduler thresholds for large inputs.
+- Parity tests verifying byte-identical serialization between Pure Elixir and Rust NIF backends for all 12 sketch algorithms (33 parity tests total).
+- Benchmark suites for REQ sketch, Misra-Gries, and XXHash3 NIF throughput (`bench/req_bench.exs`, `bench/misra_gries_bench.exs`, `bench/xxhash3_bench.exs`).
+- Existing membership filter benchmarks automatically show Pure vs Rust comparison when NIF is available.
+
 ## [0.5.0] - 2026-03-10
 
 ### Added
