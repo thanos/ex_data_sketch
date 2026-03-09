@@ -93,37 +93,40 @@ pub fn find_run_start(slots: &[Slot], fq: u32, sc: u32) -> u32 {
 }
 
 fn walk_back(slots: &[Slot], i: u32, sc: u32) -> u32 {
-    let p = prv(i, sc);
-    if shi(slots, p) {
-        walk_back(slots, p, sc)
-    } else {
-        p
+    let mut pos = prv(i, sc);
+    while shi(slots, pos) {
+        pos = prv(pos, sc);
     }
+    pos
 }
 
 fn count_occupied_range(slots: &[Slot], from: u32, to: u32, sc: u32) -> u32 {
-    if from == to {
-        return 0;
+    let mut count = 0;
+    let mut pos = from;
+    while pos != to {
+        if occ(slots, pos) {
+            count += 1;
+        }
+        pos = nxt(pos, sc);
     }
-    let add = if occ(slots, from) { 1 } else { 0 };
-    add + count_occupied_range(slots, nxt(from, sc), to, sc)
+    count
 }
 
 fn skip_runs_fwd(slots: &[Slot], pos: u32, n: u32, sc: u32) -> u32 {
-    if n == 0 {
-        return pos;
+    let mut p = pos;
+    for _ in 0..n {
+        p = nxt(p, sc);
+        p = skip_continuations(slots, p, sc);
     }
-    let mut p = nxt(pos, sc);
-    p = skip_continuations(slots, p, sc);
-    skip_runs_fwd(slots, p, n - 1, sc)
+    p
 }
 
 fn skip_continuations(slots: &[Slot], pos: u32, sc: u32) -> u32 {
-    if con(slots, pos) {
-        skip_continuations(slots, nxt(pos, sc), sc)
-    } else {
-        pos
+    let mut p = pos;
+    while con(slots, p) {
+        p = nxt(p, sc);
     }
+    p
 }
 
 pub fn lookup(slots: &[Slot], fq: u32, fr: u64, sc: u32) -> bool {
@@ -135,17 +138,20 @@ pub fn lookup(slots: &[Slot], fq: u32, fr: u64, sc: u32) -> bool {
 }
 
 fn scan_run(slots: &[Slot], pos: u32, fr: u64, sc: u32) -> bool {
-    let r = rem_val(slots, pos);
-    if r == fr {
-        true
-    } else if r > fr {
-        false
-    } else {
-        let n = nxt(pos, sc);
+    let mut p = pos;
+    loop {
+        let r = rem_val(slots, p);
+        if r == fr {
+            return true;
+        }
+        if r > fr {
+            return false;
+        }
+        let n = nxt(p, sc);
         if con(slots, n) {
-            scan_run(slots, n, fr, sc)
+            p = n;
         } else {
-            false
+            return false;
         }
     }
 }
@@ -185,22 +191,19 @@ fn insert_into_run(slots: &mut [Slot], fq: u32, run_start: u32, fr: u64, sc: u32
 
 fn sorted_pos(slots: &[Slot], run_start: u32, fr: u64, sc: u32) -> (u32, bool) {
     if fr < rem_val(slots, run_start) {
-        (run_start, true)
-    } else {
-        sorted_pos_cont(slots, run_start, fr, sc)
+        return (run_start, true);
     }
-}
-
-fn sorted_pos_cont(slots: &[Slot], pos: u32, fr: u64, sc: u32) -> (u32, bool) {
-    let n = nxt(pos, sc);
-    if con(slots, n) {
-        if fr < rem_val(slots, n) {
-            (n, false)
+    let mut pos = run_start;
+    loop {
+        let n = nxt(pos, sc);
+        if con(slots, n) {
+            if fr < rem_val(slots, n) {
+                return (n, false);
+            }
+            pos = n;
         } else {
-            sorted_pos_cont(slots, n, fr, sc)
+            return (n, false);
         }
-    } else {
-        (n, false)
     }
 }
 
@@ -213,21 +216,24 @@ pub fn shift_right(slots: &mut [Slot], pos: u32, new_meta: u8, new_rem: u64, sc:
         return;
     }
 
-    let entry_meta = (old_meta & !QOT_OCC) | QOT_SHI;
-    shift_chain(slots, nxt(pos, sc), entry_meta, old_rem, sc);
-}
+    // Iterative shift chain
+    let mut cur_meta = (old_meta & !QOT_OCC) | QOT_SHI;
+    let mut cur_rem = old_rem;
+    let mut p = nxt(pos, sc);
 
-fn shift_chain(slots: &mut [Slot], pos: u32, m: u8, remainder: u64, sc: u32) {
-    let (old_meta, old_rem) = slots[pos as usize];
-    let occ_here = old_meta & QOT_OCC;
-    slots[pos as usize] = (m | occ_here, remainder);
+    loop {
+        let (om, or) = slots[p as usize];
+        let oh = om & QOT_OCC;
+        slots[p as usize] = (cur_meta | oh, cur_rem);
 
-    if old_meta == 0 {
-        return;
+        if om == 0 {
+            break;
+        }
+
+        cur_meta = (om & !QOT_OCC) | QOT_SHI;
+        cur_rem = or;
+        p = nxt(p, sc);
     }
-
-    let entry_meta = (old_meta & !QOT_OCC) | QOT_SHI;
-    shift_chain(slots, nxt(pos, sc), entry_meta, old_rem, sc);
 }
 
 pub fn extract_all(slots: &[Slot], sc: u32) -> Vec<(u32, u64)> {
@@ -264,44 +270,34 @@ fn resolve_quotient(slots: &[Slot], i: u32, m: u8, cur_q: Option<u32>, sc: u32) 
 }
 
 fn trace_quotient_for(slots: &[Slot], slot_idx: u32, sc: u32) -> u32 {
-    let cs = walk_back_to_start(slots, slot_idx, sc);
-    trace_walk(slots, cs, cs, slot_idx, sc)
+    // Walk back to the cluster start (iterative)
+    let mut cs = slot_idx;
+    while shi(slots, cs) {
+        cs = prv(cs, sc);
+    }
+
+    // Trace forward from cluster start to slot_idx, tracking the current quotient
+    let mut pos = cs;
+    let mut cur_q = cs;
+    while pos != slot_idx {
+        let n = nxt(pos, sc);
+        if !con(slots, n) {
+            cur_q = find_occ(slots, nxt(cur_q, sc), sc);
+        }
+        pos = n;
+    }
+    cur_q
 }
 
-fn walk_back_to_start(slots: &[Slot], i: u32, sc: u32) -> u32 {
-    if shi(slots, i) {
-        walk_back_to_start(slots, prv(i, sc), sc)
-    } else {
-        i
+fn find_occ(slots: &[Slot], start: u32, sc: u32) -> u32 {
+    let mut pos = start;
+    for _ in 0..sc {
+        if occ(slots, pos) {
+            return pos;
+        }
+        pos = nxt(pos, sc);
     }
-}
-
-fn trace_walk(slots: &[Slot], pos: u32, cur_q: u32, target: u32, sc: u32) -> u32 {
-    if pos == target {
-        return cur_q;
-    }
-    let n = nxt(pos, sc);
-    let new_q = if con(slots, n) {
-        cur_q
-    } else {
-        next_occ_canonical(slots, cur_q, sc)
-    };
-    trace_walk(slots, n, new_q, target, sc)
-}
-
-fn next_occ_canonical(slots: &[Slot], cur_q: u32, sc: u32) -> u32 {
-    find_occ(slots, nxt(cur_q, sc), sc, sc)
-}
-
-fn find_occ(slots: &[Slot], pos: u32, sc: u32, remaining: u32) -> u32 {
-    if remaining == 0 {
-        return 0;
-    }
-    if occ(slots, pos) {
-        pos
-    } else {
-        find_occ(slots, nxt(pos, sc), sc, remaining - 1)
-    }
+    0
 }
 
 // -- Delete support (needed for CQF merge) --
@@ -325,19 +321,21 @@ pub fn do_delete(slots: &mut [Slot], fq: u32, slot_idx: u32, sc: u32) {
 }
 
 fn shift_left(slots: &mut [Slot], pos: u32, sc: u32) {
-    let n = nxt(pos, sc);
-    let nxt_meta = meta(slots, n);
-    let occ_here = meta(slots, pos) & QOT_OCC;
+    let mut p = pos;
+    loop {
+        let n = nxt(p, sc);
+        let nxt_meta = meta(slots, n);
+        let occ_here = meta(slots, p) & QOT_OCC;
 
-    if nxt_meta == 0 {
-        slots[pos as usize] = (occ_here, 0);
-    } else if nxt_meta & QOT_SHI == 0 {
-        slots[pos as usize] = (occ_here, 0);
-    } else {
+        if nxt_meta == 0 || nxt_meta & QOT_SHI == 0 {
+            slots[p as usize] = (occ_here, 0);
+            break;
+        }
+
         let entry_meta = nxt_meta & !QOT_OCC;
         let nxt_rem = rem_val(slots, n);
-        slots[pos as usize] = (occ_here | entry_meta, nxt_rem);
-        shift_left(slots, n, sc);
+        slots[p as usize] = (occ_here | entry_meta, nxt_rem);
+        p = n;
     }
 }
 
@@ -352,17 +350,20 @@ pub fn find_slot(slots: &[Slot], fq: u32, fr: u64, sc: u32) -> Option<u32> {
 }
 
 fn scan_run_idx(slots: &[Slot], pos: u32, fr: u64, sc: u32) -> Option<u32> {
-    let r = rem_val(slots, pos);
-    if r == fr {
-        Some(pos)
-    } else if r > fr {
-        None
-    } else {
-        let n = nxt(pos, sc);
+    let mut p = pos;
+    loop {
+        let r = rem_val(slots, p);
+        if r == fr {
+            return Some(p);
+        }
+        if r > fr {
+            return None;
+        }
+        let n = nxt(p, sc);
         if con(slots, n) {
-            scan_run_idx(slots, n, fr, sc)
+            p = n;
         } else {
-            None
+            return None;
         }
     }
 }

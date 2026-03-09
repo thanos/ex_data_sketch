@@ -312,14 +312,28 @@ an item is not tracked, returning 0 instead.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `k` | integer | 10 | Number of counters. Detects items with frequency > n/k |
-| `backend` | module | configured | Backend module |
+| `:k` | integer | 10 | Number of counters. Detects items with frequency > n/k. |
+| `:key_encoding` | atom/tuple | `:binary` | Key encoding policy: `:binary` (raw binaries), `:int` (signed 64-bit LE integers), or `{:term, :external}` (Erlang external term format). |
+| `:backend` | module | configured | Backend module. |
 
 ```elixir
+# Default binary keys
 sketch = ExDataSketch.MisraGries.new(k: 10)
 sketch = ExDataSketch.MisraGries.update_many(sketch, items)
 ExDataSketch.MisraGries.estimate(sketch, "frequent_item")
 ExDataSketch.MisraGries.top_k(sketch, 10)
+
+# Integer keys
+sketch = ExDataSketch.MisraGries.new(k: 10, key_encoding: :int)
+sketch = ExDataSketch.MisraGries.update_many(sketch, [100, 200, 100, 300, 100])
+ExDataSketch.MisraGries.top_k(sketch, 3)
+# => [{100, 3}, {200, 1}, {300, 1}]
+
+# Arbitrary Erlang terms
+sketch = ExDataSketch.MisraGries.new(k: 10, key_encoding: {:term, :external})
+sketch = ExDataSketch.MisraGries.update_many(sketch, [{:user, 1}, {:user, 2}, {:user, 1}])
+ExDataSketch.MisraGries.estimate(sketch, {:user, 1})
+# => 2
 ```
 
 ### XXHash3

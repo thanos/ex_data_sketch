@@ -149,6 +149,11 @@ fn iblt_merge_impl<'a>(env: Env<'a>, a_bin: Binary, b_bin: Binary) -> Term<'a> {
     let cell_count =
         u32::from_le_bytes(a[8..12].try_into().unwrap()) as usize;
 
+    let expected_len = IBLT_HEADER_SIZE + cell_count * IBLT_CELL_SIZE;
+    if a_bin.len() != expected_len {
+        return error::error_string(env, "IBLT state length does not match cell_count");
+    }
+
     // Sum item_counts
     let item_count_a = u32::from_le_bytes(a[12..16].try_into().unwrap());
     let item_count_b = u32::from_le_bytes(b[12..16].try_into().unwrap());

@@ -519,6 +519,7 @@ defmodule ExDataSketch.Backend.Rust do
     case result do
       {:ok, bin} -> {:ok, bin}
       {:error, "full", bin} -> {:error, :full, bin}
+      {:error, reason} -> raise "Rust NIF error: #{reason}"
     end
   end
 
@@ -738,6 +739,7 @@ defmodule ExDataSketch.Backend.Rust do
     case result do
       {:ok, bin} -> {:ok, bin}
       {:error, "build_failed"} -> {:error, :build_failed}
+      {:error, reason} -> raise "Rust NIF error: #{reason}"
     end
   end
 

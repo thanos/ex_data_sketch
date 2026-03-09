@@ -34,6 +34,7 @@ fn xor_hash_positions(hash64: u64, seed: u32, seg_size: u32) -> (u32, u32, u32) 
 }
 
 fn xor_fingerprint(hash64: u64, fp_bits: u8) -> u64 {
+    // fp_bits is validated to be 8 or 16 before reaching here
     let fp_mask = (1u64 << fp_bits) - 1;
     let fp = hash64 & fp_mask;
     if fp == 0 { 1 } else { fp }
@@ -45,6 +46,9 @@ fn xor_build_impl<'a>(
     fp_bits: u8,
     seed: u32,
 ) -> Term<'a> {
+    if fp_bits != 8 && fp_bits != 16 {
+        return error::error_string(env, "fp_bits must be 8 or 16");
+    }
     if hashes_bin.len() % 8 != 0 {
         return error::error_string(env, "hashes_bin length must be a multiple of 8");
     }
@@ -101,19 +105,23 @@ fn xor_try_build(
     fp_bits: u8,
     seed: u32,
 ) -> Option<(Vec<u64>, u32)> {
-    // Build degree counts and sets for each position
     let al = arr_len as usize;
+
+    // Degree-count + XOR-sum representation:
+    // degree[i] = number of hashes mapped to position i
+    // xor_set[i] = XOR of all hash values mapped to position i
+    // When degree[i] == 1, xor_set[i] is the sole hash at that position.
     let mut degrees = vec![0u32; al];
-    let mut sets: Vec<HashSet<u64>> = (0..al).map(|_| HashSet::new()).collect();
+    let mut xor_set = vec![0u64; al];
 
     for &hash in hashes {
         let (h0, h1, h2) = xor_hash_positions(hash, seed, seg_size);
         degrees[h0 as usize] += 1;
         degrees[h1 as usize] += 1;
         degrees[h2 as usize] += 1;
-        sets[h0 as usize].insert(hash);
-        sets[h1 as usize].insert(hash);
-        sets[h2 as usize].insert(hash);
+        xor_set[h0 as usize] ^= hash;
+        xor_set[h1 as usize] ^= hash;
+        xor_set[h2 as usize] ^= hash;
     }
 
     // Peel: find degree-1 positions
@@ -132,14 +140,16 @@ fn xor_try_build(
             continue;
         }
 
-        let hash = *sets[pos as usize].iter().next().unwrap();
+        // The sole hash at this position is recovered from xor_set
+        let hash = xor_set[pos as usize];
         stack.push((hash, pos));
         peeled += 1;
 
+        // Remove this hash from all three of its positions
         let (h0, h1, h2) = xor_hash_positions(hash, seed, seg_size);
         for &p in &[h0, h1, h2] {
-            sets[p as usize].remove(&hash);
             degrees[p as usize] -= 1;
+            xor_set[p as usize] ^= hash;
             if degrees[p as usize] == 1 && p != pos {
                 queue.push(p);
             }
@@ -157,8 +167,11 @@ fn xor_try_build(
         let (h0, h1, h2) = xor_hash_positions(hash, seed, seg_size);
         let fp = xor_fingerprint(hash, fp_bits);
 
-        let others: Vec<u32> = [h0, h1, h2].iter().copied().filter(|&p| p != peel_pos).collect();
-        let value = fp ^ b[others[0] as usize] ^ b[others[1] as usize];
+        let value = match peel_pos {
+            p if p == h0 => fp ^ b[h1 as usize] ^ b[h2 as usize],
+            p if p == h1 => fp ^ b[h0 as usize] ^ b[h2 as usize],
+            _ => fp ^ b[h0 as usize] ^ b[h1 as usize],
+        };
         b[peel_pos as usize] = value;
     }
 

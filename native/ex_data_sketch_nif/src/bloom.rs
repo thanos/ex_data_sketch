@@ -11,6 +11,13 @@ fn bloom_put_many_impl<'a>(
     hash_count: u16,
     bit_count: u32,
 ) -> Term<'a> {
+    if bit_count == 0 {
+        return error::error_string(env, "bit_count must be > 0");
+    }
+    if hash_count == 0 {
+        return error::error_string(env, "hash_count must be > 0");
+    }
+
     let bitset_len = ((bit_count as usize) + 7) / 8;
     let expected_len = BLM_HEADER_SIZE + bitset_len;
 

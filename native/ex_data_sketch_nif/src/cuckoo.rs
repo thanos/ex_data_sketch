@@ -56,6 +56,13 @@ fn cuckoo_put_many_impl<'a>(
     max_kicks: u32,
     _seed: u32,
 ) -> Term<'a> {
+    if bucket_count == 0 {
+        return error::error_string(env, "bucket_count must be > 0");
+    }
+    if fp_bits == 0 || fp_bits > 32 {
+        return error::error_string(env, "fp_bits must be 1..32");
+    }
+
     let fp_bytes = (fp_bits as usize + 7) / 8;
     let expected_len = CKO_HEADER_SIZE + (bucket_count as usize) * (bucket_size as usize) * fp_bytes;
 
