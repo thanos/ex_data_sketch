@@ -51,10 +51,6 @@ pub fn set_meta_bit(slots: &mut [Slot], i: u32, bit: u8) {
     slots[i as usize].0 |= bit;
 }
 
-pub fn clr_meta_bit(slots: &mut [Slot], i: u32, bit: u8) {
-    slots[i as usize].0 &= !bit;
-}
-
 pub fn decode_slots(body: &[u8], slot_bytes: usize, slot_count: u32) -> Vec<Slot> {
     let mut slots = Vec::with_capacity(slot_count as usize);
     for i in 0..slot_count as usize {
@@ -216,18 +212,19 @@ pub fn shift_right(slots: &mut [Slot], pos: u32, new_meta: u8, new_rem: u64, sc:
         return;
     }
 
-    // Iterative shift chain
+    // Iterative shift chain, bounded to sc steps to prevent infinite loops
+    // on full/corrupt filters.
     let mut cur_meta = (old_meta & !QOT_OCC) | QOT_SHI;
     let mut cur_rem = old_rem;
     let mut p = nxt(pos, sc);
 
-    loop {
+    for _ in 0..sc {
         let (om, or) = slots[p as usize];
         let oh = om & QOT_OCC;
         slots[p as usize] = (cur_meta | oh, cur_rem);
 
         if om == 0 {
-            break;
+            return;
         }
 
         cur_meta = (om & !QOT_OCC) | QOT_SHI;
@@ -298,45 +295,6 @@ fn find_occ(slots: &[Slot], start: u32, sc: u32) -> u32 {
         pos = nxt(pos, sc);
     }
     0
-}
-
-// -- Delete support (needed for CQF merge) --
-
-pub fn do_delete(slots: &mut [Slot], fq: u32, slot_idx: u32, sc: u32) {
-    let run_start = find_run_start(slots, fq, sc);
-    let n = nxt(slot_idx, sc);
-    let is_first = slot_idx == run_start;
-    let nxt_is_con = con(slots, n);
-    let is_only = is_first && !nxt_is_con;
-
-    if is_only {
-        clr_meta_bit(slots, fq, QOT_OCC);
-    }
-
-    if is_first && nxt_is_con {
-        clr_meta_bit(slots, n, QOT_CON);
-    }
-
-    shift_left(slots, slot_idx, sc);
-}
-
-fn shift_left(slots: &mut [Slot], pos: u32, sc: u32) {
-    let mut p = pos;
-    loop {
-        let n = nxt(p, sc);
-        let nxt_meta = meta(slots, n);
-        let occ_here = meta(slots, p) & QOT_OCC;
-
-        if nxt_meta == 0 || nxt_meta & QOT_SHI == 0 {
-            slots[p as usize] = (occ_here, 0);
-            break;
-        }
-
-        let entry_meta = nxt_meta & !QOT_OCC;
-        let nxt_rem = rem_val(slots, n);
-        slots[p as usize] = (occ_here | entry_meta, nxt_rem);
-        p = n;
-    }
 }
 
 // Find the slot index of fr in fq's run, or None.

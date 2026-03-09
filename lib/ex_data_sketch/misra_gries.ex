@@ -332,7 +332,8 @@ defmodule ExDataSketch.MisraGries do
   def deserialize(binary) when is_binary(binary) do
     with {:ok, decoded} <- Codec.decode(binary),
          :ok <- validate_sketch_id(decoded.sketch_id),
-         {:ok, opts} <- decode_params(decoded.params) do
+         {:ok, opts} <- decode_params(decoded.params),
+         :ok <- validate_state_header(decoded.state) do
       backend = Backend.default()
 
       {:ok,
@@ -422,7 +423,7 @@ defmodule ExDataSketch.MisraGries do
 
   defp decode_key(bytes, :binary), do: bytes
   defp decode_key(<<val::signed-little-64>>, :int), do: val
-  defp decode_key(bytes, {:term, :external}), do: :erlang.binary_to_term(bytes)
+  defp decode_key(bytes, {:term, :external}), do: :erlang.binary_to_term(bytes, [:safe])
 
   defp encode_key_encoding(:binary), do: 0
   defp encode_key_encoding(:int), do: 1
@@ -431,4 +432,14 @@ defmodule ExDataSketch.MisraGries do
   defp decode_key_encoding(0), do: :binary
   defp decode_key_encoding(1), do: :int
   defp decode_key_encoding(2), do: {:term, :external}
+
+  defp validate_state_header(<<"MG01", 1::unsigned-8, _rest::binary>>), do: :ok
+
+  defp validate_state_header(<<"MG01", _::binary>>) do
+    {:error, Errors.DeserializationError.exception(reason: "unsupported MG01 version")}
+  end
+
+  defp validate_state_header(_state) do
+    {:error, Errors.DeserializationError.exception(reason: "invalid MG01 state header")}
+  end
 end

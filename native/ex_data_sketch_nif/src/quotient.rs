@@ -63,7 +63,7 @@ fn quotient_merge_impl<'a>(
     env: Env<'a>,
     a_bin: Binary,
     b_bin: Binary,
-    q: u8,
+    _q: u8,
     r: u8,
 ) -> Term<'a> {
     if a_bin.len() < QOT_HEADER_SIZE || b_bin.len() < QOT_HEADER_SIZE {

@@ -365,7 +365,8 @@ defmodule ExDataSketch.REQ do
   def deserialize(binary) when is_binary(binary) do
     with {:ok, decoded} <- Codec.decode(binary),
          :ok <- validate_sketch_id(decoded.sketch_id),
-         {:ok, opts} <- decode_params(decoded.params) do
+         {:ok, opts} <- decode_params(decoded.params),
+         :ok <- validate_state_header(decoded.state) do
       backend = Backend.default()
 
       {:ok,
@@ -445,5 +446,15 @@ defmodule ExDataSketch.REQ do
 
   defp decode_params(_other) do
     {:error, Errors.DeserializationError.exception(reason: "invalid REQ params binary")}
+  end
+
+  defp validate_state_header(<<"REQ1", 1::unsigned-8, _rest::binary>>), do: :ok
+
+  defp validate_state_header(<<"REQ1", _::binary>>) do
+    {:error, Errors.DeserializationError.exception(reason: "unsupported REQ1 version")}
+  end
+
+  defp validate_state_header(_state) do
+    {:error, Errors.DeserializationError.exception(reason: "invalid REQ1 state header")}
   end
 end

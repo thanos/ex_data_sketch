@@ -11,45 +11,60 @@ fn cqf_find_remainder_in_run(slots: &[Slot], run_start: u32, target_fr: u64, sc:
 }
 
 fn cqf_scan_run(slots: &[Slot], pos: u32, target_fr: u64, sc: u32) -> Option<u32> {
-    let r = qc::rem_val(slots, pos);
-    if r == target_fr {
-        Some(pos)
-    } else if r > target_fr {
-        None
-    } else {
-        let next_pos = cqf_skip_duplicates(slots, pos, r, sc);
+    let mut p = pos;
+    for _ in 0..sc {
+        let r = qc::rem_val(slots, p);
+        if r == target_fr {
+            return Some(p);
+        }
+        if r > target_fr {
+            return None;
+        }
+        let next_pos = cqf_skip_duplicates(slots, p, r, sc);
         if qc::con(slots, next_pos) {
-            cqf_scan_run(slots, next_pos, target_fr, sc)
+            p = next_pos;
         } else {
-            None
+            return None;
+        }
+    }
+    None
+}
+
+fn cqf_skip_duplicates(slots: &[Slot], pos: u32, remainder_val: u64, sc: u32) -> u32 {
+    let mut p = pos;
+    loop {
+        let n = qc::nxt(p, sc);
+        if qc::con(slots, n) && qc::rem_val(slots, n) == remainder_val {
+            p = n;
+        } else {
+            return n;
         }
     }
 }
 
-fn cqf_skip_duplicates(slots: &[Slot], pos: u32, remainder_val: u64, sc: u32) -> u32 {
-    let n = qc::nxt(pos, sc);
-    if qc::con(slots, n) && qc::rem_val(slots, n) == remainder_val {
-        cqf_skip_duplicates(slots, n, remainder_val, sc)
-    } else {
-        n
-    }
-}
-
 fn cqf_last_copy(slots: &[Slot], pos: u32, remainder_val: u64, sc: u32) -> u32 {
-    let n = qc::nxt(pos, sc);
-    if qc::con(slots, n) && qc::rem_val(slots, n) == remainder_val {
-        cqf_last_copy(slots, n, remainder_val, sc)
-    } else {
-        pos
+    let mut p = pos;
+    loop {
+        let n = qc::nxt(p, sc);
+        if qc::con(slots, n) && qc::rem_val(slots, n) == remainder_val {
+            p = n;
+        } else {
+            return p;
+        }
     }
 }
 
 fn cqf_read_counter(slots: &[Slot], pos: u32, remainder_val: u64, sc: u32) -> u64 {
-    let n = qc::nxt(pos, sc);
-    if qc::con(slots, n) && qc::rem_val(slots, n) == remainder_val {
-        1 + cqf_read_counter(slots, n, remainder_val, sc)
-    } else {
-        1
+    let mut count: u64 = 1;
+    let mut p = pos;
+    loop {
+        let n = qc::nxt(p, sc);
+        if qc::con(slots, n) && qc::rem_val(slots, n) == remainder_val {
+            count += 1;
+            p = n;
+        } else {
+            return count;
+        }
     }
 }
 
@@ -123,22 +138,19 @@ fn insert_into_run(slots: &mut [Slot], fq: u32, run_start: u32, fr: u64, sc: u32
 
 fn sorted_pos(slots: &[Slot], run_start: u32, fr: u64, sc: u32) -> (u32, bool) {
     if fr < qc::rem_val(slots, run_start) {
-        (run_start, true)
-    } else {
-        sorted_pos_cont(slots, run_start, fr, sc)
+        return (run_start, true);
     }
-}
-
-fn sorted_pos_cont(slots: &[Slot], pos: u32, fr: u64, sc: u32) -> (u32, bool) {
-    let n = qc::nxt(pos, sc);
-    if qc::con(slots, n) {
-        if fr < qc::rem_val(slots, n) {
-            (n, false)
+    let mut pos = run_start;
+    loop {
+        let n = qc::nxt(pos, sc);
+        if qc::con(slots, n) {
+            if fr < qc::rem_val(slots, n) {
+                return (n, false);
+            }
+            pos = n;
         } else {
-            sorted_pos_cont(slots, n, fr, sc)
+            return (n, false);
         }
-    } else {
-        (n, false)
     }
 }
 
@@ -306,7 +318,7 @@ fn cqf_merge_impl<'a>(
     env: Env<'a>,
     a_bin: Binary,
     b_bin: Binary,
-    q: u8,
+    _q: u8,
     r: u8,
 ) -> Term<'a> {
     if a_bin.len() < CQF_HEADER_SIZE || b_bin.len() < CQF_HEADER_SIZE {
