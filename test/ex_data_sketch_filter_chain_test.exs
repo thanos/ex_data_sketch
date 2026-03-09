@@ -456,6 +456,311 @@ defmodule ExDataSketch.FilterChainTest do
     end
   end
 
+  # -- deserialize error paths --
+
+  describe "deserialize/1 error paths" do
+    test "truncated stage data returns error" do
+      # FCN1 header says 1 stage but body is too short
+      binary = <<"FCN1", 1, 1, 0, 0, 0::unsigned-little-32>>
+
+      assert {:error, %ExDataSketch.Errors.DeserializationError{}} =
+               FilterChain.deserialize(binary)
+    end
+
+    test "unknown sketch ID returns error" do
+      # Craft an EXSK stage with an invalid sketch_id (255)
+      fake_exsk = <<"EXSK", 1, 255, 0::unsigned-8, "garbage">>
+      stage_len = byte_size(fake_exsk)
+      binary = <<"FCN1", 1, 1, 0, 0, stage_len::unsigned-little-32, fake_exsk::binary>>
+      assert {:error, _} = FilterChain.deserialize(binary)
+    end
+
+    test "non-EXSK stage binary returns error" do
+      fake_stage = <<"ZZZZ", "not_exsk">>
+      stage_len = byte_size(fake_stage)
+      binary = <<"FCN1", 1, 1, 0, 0, stage_len::unsigned-little-32, fake_stage::binary>>
+
+      assert {:error, %ExDataSketch.Errors.DeserializationError{}} =
+               FilterChain.deserialize(binary)
+    end
+
+    test "trailing data after all stages returns error" do
+      # Serialize an empty chain, then append garbage
+      binary = FilterChain.serialize(FilterChain.new())
+      binary_with_trailing = binary <> "extra_bytes"
+
+      assert {:error, %ExDataSketch.Errors.DeserializationError{}} =
+               FilterChain.deserialize(binary_with_trailing)
+    end
+
+    test "completely invalid binary returns error" do
+      assert {:error, %ExDataSketch.Errors.DeserializationError{}} =
+               FilterChain.deserialize(<<"not_fcn1">>)
+    end
+  end
+
+  # -- member? with diverse stage types --
+
+  describe "member?/2 with diverse stage types" do
+    test "Quotient stage works" do
+      qot = Quotient.new(q: 10, r: 8) |> Quotient.put("hello")
+      chain = FilterChain.new() |> FilterChain.add_stage(qot)
+      assert FilterChain.member?(chain, "hello")
+      refute FilterChain.member?(chain, "world")
+    end
+
+    test "CQF stage works" do
+      cqf = CQF.new(q: 10, r: 8) |> CQF.put("hello")
+      chain = FilterChain.new() |> FilterChain.add_stage(cqf)
+      assert FilterChain.member?(chain, "hello")
+      refute FilterChain.member?(chain, "world")
+    end
+
+    test "3-stage chain: Bloom + Cuckoo + Quotient" do
+      bloom = Bloom.new(capacity: 100) |> Bloom.put("shared")
+      {:ok, cuckoo} = Cuckoo.new() |> Cuckoo.put("shared")
+      qot = Quotient.new(q: 10, r: 8) |> Quotient.put("shared")
+
+      chain =
+        FilterChain.new()
+        |> FilterChain.add_stage(bloom)
+        |> FilterChain.add_stage(cuckoo)
+        |> FilterChain.add_stage(qot)
+
+      assert FilterChain.member?(chain, "shared")
+      refute FilterChain.member?(chain, "not_in_all")
+    end
+
+    test "Bloom + XorFilter multi-stage" do
+      items = ["x", "y", "z"]
+      bloom = Bloom.from_enumerable(items, capacity: 100)
+      {:ok, xor} = XorFilter.build(items)
+
+      chain =
+        FilterChain.new()
+        |> FilterChain.add_stage(bloom)
+        |> FilterChain.add_stage(xor)
+
+      assert FilterChain.member?(chain, "x")
+      refute FilterChain.member?(chain, "not_here")
+    end
+  end
+
+  # -- put/2 with diverse stage types --
+
+  describe "put/2 with diverse stage types" do
+    test "inserts into Quotient stage" do
+      chain = FilterChain.new() |> FilterChain.add_stage(Quotient.new(q: 10, r: 8))
+      {:ok, chain} = FilterChain.put(chain, "hello")
+      assert FilterChain.member?(chain, "hello")
+    end
+
+    test "inserts into CQF stage" do
+      chain = FilterChain.new() |> FilterChain.add_stage(CQF.new(q: 10, r: 8))
+      {:ok, chain} = FilterChain.put(chain, "hello")
+      assert FilterChain.member?(chain, "hello")
+    end
+
+    test "multi-stage with Bloom + Quotient + CQF" do
+      chain =
+        FilterChain.new()
+        |> FilterChain.add_stage(Bloom.new(capacity: 100))
+        |> FilterChain.add_stage(Quotient.new(q: 10, r: 8))
+        |> FilterChain.add_stage(CQF.new(q: 10, r: 8))
+
+      {:ok, chain} = FilterChain.put(chain, "test")
+      assert FilterChain.member?(chain, "test")
+      assert length(FilterChain.stages(chain)) == 3
+    end
+  end
+
+  # -- delete/2 with diverse stage types --
+
+  describe "delete/2 with diverse stage types" do
+    test "deletes from Quotient stage" do
+      qot = Quotient.new(q: 10, r: 8) |> Quotient.put("hello")
+      chain = FilterChain.new() |> FilterChain.add_stage(qot)
+      {:ok, chain} = FilterChain.delete(chain, "hello")
+      refute FilterChain.member?(chain, "hello")
+    end
+
+    test "deletes from mixed deletable stages: Cuckoo + Quotient + CQF" do
+      {:ok, cuckoo} = Cuckoo.new() |> Cuckoo.put("hello")
+      qot = Quotient.new(q: 10, r: 8) |> Quotient.put("hello")
+      cqf = CQF.new(q: 10, r: 8) |> CQF.put("hello")
+
+      chain =
+        FilterChain.new()
+        |> FilterChain.add_stage(cuckoo)
+        |> FilterChain.add_stage(qot)
+        |> FilterChain.add_stage(cqf)
+
+      {:ok, chain} = FilterChain.delete(chain, "hello")
+      refute FilterChain.member?(chain, "hello")
+    end
+
+    test "cuckoo delete not-found leaves stage unchanged" do
+      {:ok, cuckoo} = Cuckoo.new() |> Cuckoo.put("keep_me")
+      chain = FilterChain.new() |> FilterChain.add_stage(cuckoo)
+      {:ok, chain} = FilterChain.delete(chain, "not_present")
+      assert FilterChain.member?(chain, "keep_me")
+    end
+
+    test "raises UnsupportedOperationError for mixed Bloom + Cuckoo" do
+      bloom = Bloom.new(capacity: 100)
+      {:ok, cuckoo} = Cuckoo.new() |> Cuckoo.put("hello")
+
+      chain =
+        FilterChain.new()
+        |> FilterChain.add_stage(bloom)
+        |> FilterChain.add_stage(cuckoo)
+
+      assert_raise ExDataSketch.Errors.UnsupportedOperationError, fn ->
+        FilterChain.delete(chain, "hello")
+      end
+    end
+  end
+
+  # -- count/1 with diverse stage types --
+
+  describe "count/1 with diverse stage types" do
+    test "sums across Cuckoo + Quotient + CQF" do
+      {:ok, cuckoo} = Cuckoo.new() |> Cuckoo.put("a")
+      qot = Quotient.new(q: 10, r: 8) |> Quotient.put("b")
+      cqf = CQF.new(q: 10, r: 8) |> CQF.put("c")
+
+      chain =
+        FilterChain.new()
+        |> FilterChain.add_stage(cuckoo)
+        |> FilterChain.add_stage(qot)
+        |> FilterChain.add_stage(cqf)
+
+      assert FilterChain.count(chain) == 3
+    end
+
+    test "includes XorFilter count" do
+      {:ok, xor} = XorFilter.build(["a", "b", "c"])
+      chain = FilterChain.new() |> FilterChain.add_stage(xor)
+      assert FilterChain.count(chain) == 3
+    end
+  end
+
+  # -- size_bytes/1 edge cases --
+
+  describe "size_bytes/1 edge cases" do
+    test "includes adjunct IBLT bytes" do
+      iblt = IBLT.new(cell_count: 64) |> IBLT.put("item")
+
+      chain =
+        FilterChain.new()
+        |> FilterChain.add_stage(Bloom.new(capacity: 100))
+        |> FilterChain.add_stage(iblt)
+
+      bytes = FilterChain.size_bytes(chain)
+      bloom_only = Bloom.size_bytes(Bloom.new(capacity: 100))
+      assert bytes > bloom_only
+    end
+
+    test "all stage types contribute" do
+      {:ok, cuckoo} = Cuckoo.new() |> Cuckoo.put("a")
+      qot = Quotient.new(q: 8, r: 5) |> Quotient.put("b")
+      cqf = CQF.new(q: 8, r: 5) |> CQF.put("c")
+      {:ok, xor} = XorFilter.build(["x", "y"])
+      iblt = IBLT.new() |> IBLT.put("z")
+
+      chain =
+        FilterChain.new()
+        |> FilterChain.add_stage(cuckoo)
+        |> FilterChain.add_stage(qot)
+        |> FilterChain.add_stage(cqf)
+        |> FilterChain.add_stage(xor)
+        |> FilterChain.add_stage(iblt)
+
+      bytes = FilterChain.size_bytes(chain)
+
+      expected =
+        Cuckoo.size_bytes(cuckoo) +
+          Quotient.size_bytes(qot) +
+          CQF.size_bytes(cqf) +
+          XorFilter.size_bytes(xor) +
+          IBLT.size_bytes(iblt)
+
+      assert bytes == expected
+    end
+  end
+
+  # -- serialize/deserialize with diverse types --
+
+  describe "serialize/deserialize with diverse types" do
+    test "round-trip with Quotient stage" do
+      qot = Quotient.new(q: 10, r: 8) |> Quotient.put("hello")
+      chain = FilterChain.new() |> FilterChain.add_stage(qot)
+      binary = FilterChain.serialize(chain)
+      {:ok, recovered} = FilterChain.deserialize(binary)
+      assert length(FilterChain.stages(recovered)) == 1
+      assert FilterChain.member?(recovered, "hello")
+    end
+
+    test "round-trip with CQF stage" do
+      cqf = CQF.new(q: 10, r: 8) |> CQF.put("hello")
+      chain = FilterChain.new() |> FilterChain.add_stage(cqf)
+      binary = FilterChain.serialize(chain)
+      {:ok, recovered} = FilterChain.deserialize(binary)
+      assert length(FilterChain.stages(recovered)) == 1
+      assert FilterChain.member?(recovered, "hello")
+    end
+
+    test "round-trip with Cuckoo stage" do
+      {:ok, cuckoo} = Cuckoo.new() |> Cuckoo.put("hello")
+      chain = FilterChain.new() |> FilterChain.add_stage(cuckoo)
+      binary = FilterChain.serialize(chain)
+      {:ok, recovered} = FilterChain.deserialize(binary)
+      assert length(FilterChain.stages(recovered)) == 1
+      assert FilterChain.member?(recovered, "hello")
+    end
+
+    test "round-trip with all dynamic stages + adjunct" do
+      bloom = Bloom.new(capacity: 100) |> Bloom.put("shared")
+      {:ok, cuckoo} = Cuckoo.new() |> Cuckoo.put("shared")
+      qot = Quotient.new(q: 10, r: 8) |> Quotient.put("shared")
+      cqf = CQF.new(q: 10, r: 8) |> CQF.put("shared")
+      iblt = IBLT.new() |> IBLT.put("reconcile")
+
+      chain =
+        FilterChain.new()
+        |> FilterChain.add_stage(bloom)
+        |> FilterChain.add_stage(cuckoo)
+        |> FilterChain.add_stage(qot)
+        |> FilterChain.add_stage(cqf)
+        |> FilterChain.add_stage(iblt)
+
+      binary = FilterChain.serialize(chain)
+      {:ok, recovered} = FilterChain.deserialize(binary)
+      assert length(FilterChain.stages(recovered)) == 4
+      assert length(FilterChain.adjuncts(recovered)) == 1
+      assert FilterChain.member?(recovered, "shared")
+    end
+
+    test "round-trip with Bloom + XorFilter + IBLT" do
+      items = ["a", "b", "c"]
+      bloom = Bloom.from_enumerable(items, capacity: 100)
+      {:ok, xor} = XorFilter.build(items)
+      iblt = IBLT.new() |> IBLT.put("reconcile")
+
+      chain =
+        FilterChain.new()
+        |> FilterChain.add_stage(bloom)
+        |> FilterChain.add_stage(xor)
+        |> FilterChain.add_stage(iblt)
+
+      binary = FilterChain.serialize(chain)
+      {:ok, recovered} = FilterChain.deserialize(binary)
+      assert length(FilterChain.stages(recovered)) == 2
+      assert length(FilterChain.adjuncts(recovered)) == 1
+      assert FilterChain.member?(recovered, "a")
+    end
+  end
+
   describe "property: serialize/deserialize round-trip" do
     property "round-trip preserves membership" do
       check all(

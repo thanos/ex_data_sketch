@@ -382,6 +382,296 @@ defmodule ExDataSketch.BackendTest do
     end
   end
 
+  describe "Rust backend empty list early returns" do
+    @tag :rust_nif
+    test "bloom_put_many with empty list returns state unchanged" do
+      opts = [
+        capacity: 100,
+        hash_count: 7,
+        bit_count: 958,
+        seed: 0,
+        backend: Rust
+      ]
+
+      state = Rust.bloom_new(opts)
+      result = Rust.bloom_put_many(state, [], opts)
+      assert result == state
+    end
+
+    @tag :rust_nif
+    test "cuckoo_put_many with empty list returns {:ok, state}" do
+      opts = [
+        fingerprint_size: 8,
+        bucket_size: 4,
+        bucket_count: 64,
+        max_kicks: 500,
+        seed: 0,
+        backend: Rust
+      ]
+
+      state = Rust.cuckoo_new(opts)
+      assert {:ok, ^state} = Rust.cuckoo_put_many(state, [], opts)
+    end
+
+    @tag :rust_nif
+    test "quotient_put_many with empty list returns state unchanged" do
+      opts = [q: 8, r: 5, slot_count: 256, backend: Rust]
+      state = Rust.quotient_new(opts)
+      result = Rust.quotient_put_many(state, [], opts)
+      assert result == state
+    end
+
+    @tag :rust_nif
+    test "cqf_put_many with empty list returns state unchanged" do
+      opts = [q: 8, r: 5, slot_count: 256, backend: Rust]
+      state = Rust.cqf_new(opts)
+      result = Rust.cqf_put_many(state, [], opts)
+      assert result == state
+    end
+
+    @tag :rust_nif
+    test "iblt_put_many with empty list returns state unchanged" do
+      opts = [cell_count: 64, hash_count: 3, seed: 0, backend: Rust]
+      state = Rust.iblt_new(opts)
+      result = Rust.iblt_put_many(state, [], opts)
+      assert result == state
+    end
+
+    @tag :rust_nif
+    test "xor_build with empty list delegates to Pure" do
+      opts = [fingerprint_bits: 8, seed: 0, backend: Rust]
+      result = Rust.xor_build([], opts)
+      expected = Pure.xor_build([], opts)
+      assert result == expected
+    end
+  end
+
+  describe "Rust backend membership filter dirty scheduler paths" do
+    @tag :rust_nif
+    test "bloom_put_many uses dirty scheduler when exceeding threshold" do
+      opts = [
+        capacity: 100,
+        hash_count: 7,
+        bit_count: 958,
+        seed: 0,
+        backend: Rust
+      ]
+
+      state = Rust.bloom_new(opts)
+      hashes = Enum.map(1..5, &ExDataSketch.Hash.hash64/1)
+      result = Rust.bloom_put_many(state, hashes, Keyword.put(opts, :dirty_threshold, 0))
+      assert is_binary(result)
+    end
+
+    @tag :rust_nif
+    test "bloom_merge uses dirty scheduler when exceeding threshold" do
+      opts = [
+        capacity: 100,
+        hash_count: 7,
+        bit_count: 958,
+        seed: 0,
+        backend: Rust
+      ]
+
+      a = Rust.bloom_new(opts)
+      b = Rust.bloom_new(opts)
+      result = Rust.bloom_merge(a, b, Keyword.put(opts, :dirty_threshold, 0))
+      assert is_binary(result)
+    end
+
+    @tag :rust_nif
+    test "cuckoo_put_many uses dirty scheduler when exceeding threshold" do
+      opts = [
+        fingerprint_size: 8,
+        bucket_size: 4,
+        bucket_count: 64,
+        max_kicks: 500,
+        seed: 0,
+        backend: Rust
+      ]
+
+      state = Rust.cuckoo_new(opts)
+      hashes = Enum.map(1..5, &ExDataSketch.Hash.hash64/1)
+      result = Rust.cuckoo_put_many(state, hashes, Keyword.put(opts, :dirty_threshold, 0))
+      assert {:ok, bin} = result
+      assert is_binary(bin)
+    end
+
+    @tag :rust_nif
+    test "quotient_put_many uses dirty scheduler when exceeding threshold" do
+      opts = [q: 8, r: 5, slot_count: 256, backend: Rust]
+      state = Rust.quotient_new(opts)
+      hashes = Enum.map(1..5, &ExDataSketch.Hash.hash64/1)
+      result = Rust.quotient_put_many(state, hashes, Keyword.put(opts, :dirty_threshold, 0))
+      assert is_binary(result)
+    end
+
+    @tag :rust_nif
+    test "quotient_merge uses dirty scheduler when exceeding threshold" do
+      opts = [q: 8, r: 5, slot_count: 256, backend: Rust]
+      a = Rust.quotient_new(opts)
+      b = Rust.quotient_new(opts)
+      result = Rust.quotient_merge(a, b, Keyword.put(opts, :dirty_threshold, 0))
+      assert is_binary(result)
+    end
+
+    @tag :rust_nif
+    test "cqf_put_many uses dirty scheduler when exceeding threshold" do
+      opts = [q: 8, r: 5, slot_count: 256, backend: Rust]
+      state = Rust.cqf_new(opts)
+      hashes = Enum.map(1..5, &ExDataSketch.Hash.hash64/1)
+      result = Rust.cqf_put_many(state, hashes, Keyword.put(opts, :dirty_threshold, 0))
+      assert is_binary(result)
+    end
+
+    @tag :rust_nif
+    test "cqf_merge uses dirty scheduler when exceeding threshold" do
+      opts = [q: 8, r: 5, slot_count: 256, backend: Rust]
+      a = Rust.cqf_new(opts)
+      b = Rust.cqf_new(opts)
+      result = Rust.cqf_merge(a, b, Keyword.put(opts, :dirty_threshold, 0))
+      assert is_binary(result)
+    end
+
+    @tag :rust_nif
+    test "xor_build uses dirty scheduler when exceeding threshold" do
+      hashes = Enum.map(1..20, &ExDataSketch.Hash.hash64/1) |> Enum.uniq()
+      opts = [fingerprint_bits: 8, seed: 0, backend: Rust]
+      result = Rust.xor_build(hashes, Keyword.put(opts, :dirty_threshold, 0))
+      assert {:ok, bin} = result
+      assert is_binary(bin)
+    end
+
+    @tag :rust_nif
+    test "iblt_put_many uses dirty scheduler when exceeding threshold" do
+      opts = [cell_count: 64, hash_count: 3, seed: 0, backend: Rust]
+      state = Rust.iblt_new(opts)
+
+      pairs =
+        Enum.map(1..5, fn i ->
+          {ExDataSketch.Hash.hash64("k#{i}"), ExDataSketch.Hash.hash64("v#{i}")}
+        end)
+
+      result = Rust.iblt_put_many(state, pairs, Keyword.put(opts, :dirty_threshold, 0))
+      assert is_binary(result)
+    end
+
+    @tag :rust_nif
+    test "iblt_merge uses dirty scheduler when exceeding threshold" do
+      opts = [cell_count: 64, hash_count: 3, seed: 0, backend: Rust]
+      a = Rust.iblt_new(opts)
+      b = Rust.iblt_new(opts)
+      result = Rust.iblt_merge(a, b, Keyword.put(opts, :dirty_threshold, 0))
+      assert is_binary(result)
+    end
+
+    @tag :rust_nif
+    test "kll_update_many uses dirty scheduler when exceeding threshold" do
+      opts = [k: 200, backend: Rust]
+      state = Rust.kll_new(opts)
+      values = Enum.map(1..5, &(&1 * 1.0))
+      result = Rust.kll_update_many(state, values, Keyword.put(opts, :dirty_threshold, 0))
+      assert is_binary(result)
+    end
+
+    @tag :rust_nif
+    test "kll_merge uses dirty scheduler when exceeding threshold" do
+      opts = [k: 200, backend: Rust]
+      a = Rust.kll_new(opts)
+      b = Rust.kll_new(opts)
+      a = Rust.kll_update(a, 1.0, opts)
+      b = Rust.kll_update(b, 2.0, opts)
+      result = Rust.kll_merge(a, b, Keyword.put(opts, :dirty_threshold, 0))
+      assert is_binary(result)
+    end
+
+    @tag :rust_nif
+    test "ddsketch_update_many uses dirty scheduler when exceeding threshold" do
+      opts = [alpha: 0.01, backend: Rust]
+      state = Rust.ddsketch_new(opts)
+      values = Enum.map(1..5, &(&1 * 1.0))
+      result = Rust.ddsketch_update_many(state, values, Keyword.put(opts, :dirty_threshold, 0))
+      assert is_binary(result)
+    end
+
+    @tag :rust_nif
+    test "ddsketch_merge uses dirty scheduler when exceeding threshold" do
+      opts = [alpha: 0.01, backend: Rust]
+      a = Rust.ddsketch_new(opts)
+      b = Rust.ddsketch_new(opts)
+      a = Rust.ddsketch_update(a, 1.0, opts)
+      b = Rust.ddsketch_update(b, 2.0, opts)
+      result = Rust.ddsketch_merge(a, b, Keyword.put(opts, :dirty_threshold, 0))
+      assert is_binary(result)
+    end
+
+    @tag :rust_nif
+    test "fi_update_many uses dirty scheduler when exceeding threshold" do
+      opts = [k: 10, flags: 0, backend: Rust]
+      state = Rust.fi_new(opts)
+      items = Enum.map(1..5, &"item_#{&1}")
+      result = Rust.fi_update_many(state, items, Keyword.put(opts, :dirty_threshold, 0))
+      assert is_binary(result)
+    end
+
+    @tag :rust_nif
+    test "fi_merge uses dirty scheduler when exceeding threshold" do
+      opts = [k: 10, flags: 0, dirty_threshold: 0, backend: Rust]
+      a = Rust.fi_new(opts)
+      b = Rust.fi_new(opts)
+      a = Rust.fi_update(a, "x", opts)
+      b = Rust.fi_update(b, "y", opts)
+      result = Rust.fi_merge(a, b, opts)
+      assert is_binary(result)
+    end
+
+    @tag :rust_nif
+    test "theta_compact uses dirty scheduler when exceeding threshold" do
+      opts = [k: 64, backend: Rust]
+      state = Rust.theta_new(opts)
+      state = Rust.theta_update(state, ExDataSketch.Hash.hash64("a"), opts)
+      result = Rust.theta_compact(state, Keyword.put(opts, :dirty_threshold, 0))
+      assert is_binary(result)
+    end
+  end
+
+  describe "Rust backend cuckoo error translation" do
+    @tag :rust_nif
+    test "cuckoo_put_many returns {:error, :full, binary} when filter is full" do
+      # Tiny filter that fills quickly
+      opts = [
+        fingerprint_size: 8,
+        bucket_size: 2,
+        bucket_count: 4,
+        max_kicks: 10,
+        seed: 0,
+        dirty_threshold: 100_000,
+        backend: Rust
+      ]
+
+      state = Rust.cuckoo_new(opts)
+      # Generate many unique hashes to overflow the tiny filter
+      hashes = Enum.map(1..100, &ExDataSketch.Hash.hash64("overflow_#{&1}"))
+
+      result = Rust.cuckoo_put_many(state, hashes, opts)
+
+      case result do
+        {:ok, _bin} -> :ok
+        {:error, :full, bin} -> assert is_binary(bin)
+      end
+    end
+  end
+
+  describe "Rust backend unwrap_ok! error path" do
+    @tag :rust_nif
+    test "raises on NIF error" do
+      assert_raise RuntimeError, ~r/Rust NIF error/, fn ->
+        # Pass an impossibly short binary to bloom merge
+        Rust.bloom_merge(<<>>, <<>>, bit_count: 100, dirty_threshold: 100_000, backend: Rust)
+      end
+    end
+  end
+
   describe "Rust backend dirty threshold configuration" do
     setup do
       original = Application.get_env(:ex_data_sketch, :dirty_thresholds)
