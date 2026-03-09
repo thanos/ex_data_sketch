@@ -1,5 +1,5 @@
 use rustler::{Binary, Env, Term};
-use std::collections::HashSet;
+use std::collections::VecDeque;
 
 use crate::error;
 
@@ -56,15 +56,15 @@ fn xor_build_impl<'a>(
     let raw = hashes_bin.as_slice();
     let hash_count = raw.len() / 8;
 
-    // Deduplicate
-    let mut unique_set = HashSet::with_capacity(hash_count);
+    // Deduplicate deterministically (sorted order)
+    let mut unique_hashes = Vec::with_capacity(hash_count);
     for i in 0..hash_count {
         let off = i * 8;
         let h = u64::from_le_bytes(raw[off..off + 8].try_into().unwrap());
-        unique_set.insert(h);
+        unique_hashes.push(h);
     }
-
-    let unique_hashes: Vec<u64> = unique_set.into_iter().collect();
+    unique_hashes.sort_unstable();
+    unique_hashes.dedup();
     let n = unique_hashes.len() as u32;
 
     let variant: u8 = if fp_bits == 16 { 1 } else { 0 };
@@ -125,17 +125,19 @@ fn xor_try_build(
     }
 
     // Peel: find degree-1 positions
-    let mut queue: Vec<u32> = Vec::new();
+    // Use VecDeque with pop_front/push_front to match Pure Elixir's
+    // list head-take and prepend ordering for deterministic parity.
+    let mut queue: VecDeque<u32> = VecDeque::new();
     for i in 0..al {
         if degrees[i] == 1 {
-            queue.push(i as u32);
+            queue.push_back(i as u32);
         }
     }
 
     let mut stack: Vec<(u64, u32)> = Vec::with_capacity(n as usize);
     let mut peeled: u32 = 0;
 
-    while let Some(pos) = queue.pop() {
+    while let Some(pos) = queue.pop_front() {
         if degrees[pos as usize] != 1 {
             continue;
         }
@@ -145,13 +147,15 @@ fn xor_try_build(
         stack.push((hash, pos));
         peeled += 1;
 
-        // Remove this hash from all three of its positions
+        // Remove this hash from all three of its positions.
+        // New degree-1 positions are prepended (push_front) to match
+        // Elixir's [p | queue] prepend behavior in Enum.reduce.
         let (h0, h1, h2) = xor_hash_positions(hash, seed, seg_size);
         for &p in &[h0, h1, h2] {
             degrees[p as usize] -= 1;
             xor_set[p as usize] ^= hash;
             if degrees[p as usize] == 1 && p != pos {
-                queue.push(p);
+                queue.push_front(p);
             }
         }
     }

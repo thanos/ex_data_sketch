@@ -122,7 +122,7 @@ defmodule ExDataSketch.Quantiles do
       3
 
   """
-  @spec quantiles(sketch(), [float()]) :: [float() | nil] | nil
+  @spec quantiles(sketch(), [float()]) :: [float() | nil]
   def quantiles(%KLL{} = sketch, ranks), do: KLL.quantiles(sketch, ranks)
   def quantiles(%DDSketch{} = sketch, ranks), do: DDSketch.quantiles(sketch, ranks)
   def quantiles(%REQ{} = sketch, ranks), do: REQ.quantiles(sketch, ranks)

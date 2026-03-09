@@ -424,28 +424,51 @@ defmodule ExDataSketch.ParityTest do
     @describetag :rust_nif
 
     @xor_items Enum.map(0..199, &"xor_item_#{&1}")
+    @xor_non_members Enum.map(0..199, &"xor_absent_#{&1}")
 
-    test "build produces filters with identical member? results (xor8)" do
+    test "build produces identical serialization (xor8)" do
       {:ok, pure} = XorFilter.build(@xor_items, backend: Pure)
       {:ok, rust} = XorFilter.build(@xor_items, backend: Rust)
 
+      assert XorFilter.serialize(pure) == XorFilter.serialize(rust)
       assert XorFilter.count(pure) == XorFilter.count(rust)
+    end
+
+    test "build produces identical serialization (xor16)" do
+      {:ok, pure} = XorFilter.build(@xor_items, fingerprint_bits: 16, backend: Pure)
+      {:ok, rust} = XorFilter.build(@xor_items, fingerprint_bits: 16, backend: Rust)
+
+      assert XorFilter.serialize(pure) == XorFilter.serialize(rust)
+      assert XorFilter.count(pure) == XorFilter.count(rust)
+    end
+
+    test "member? returns identical results for members and non-members (xor8)" do
+      {:ok, pure} = XorFilter.build(@xor_items, backend: Pure)
+      {:ok, rust} = XorFilter.build(@xor_items, backend: Rust)
 
       for item <- @xor_items do
         assert XorFilter.member?(pure, item) == true
         assert XorFilter.member?(rust, item) == true
       end
+
+      for item <- @xor_non_members do
+        assert XorFilter.member?(pure, item) == XorFilter.member?(rust, item),
+               "XorFilter member? parity mismatch for non-member #{item}"
+      end
     end
 
-    test "build produces filters with identical member? results (xor16)" do
+    test "member? returns identical results for members and non-members (xor16)" do
       {:ok, pure} = XorFilter.build(@xor_items, fingerprint_bits: 16, backend: Pure)
       {:ok, rust} = XorFilter.build(@xor_items, fingerprint_bits: 16, backend: Rust)
-
-      assert XorFilter.count(pure) == XorFilter.count(rust)
 
       for item <- @xor_items do
         assert XorFilter.member?(pure, item) == true
         assert XorFilter.member?(rust, item) == true
+      end
+
+      for item <- @xor_non_members do
+        assert XorFilter.member?(pure, item) == XorFilter.member?(rust, item),
+               "XorFilter member? parity mismatch for non-member #{item}"
       end
     end
   end
