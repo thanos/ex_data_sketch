@@ -16,6 +16,42 @@ Memory usage: `2^p` bytes for registers (e.g., p=14 uses 16 KiB).
 
 Relative error: approximately `1.04 / sqrt(2^p)`.
 
+### ULL Options
+
+UltraLogLog (Ertl, 2023) provides approximately 20% better accuracy than HLL
+at the same memory footprint. It uses the same register array layout but
+stores a different value per register and applies the FGRA estimator.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `:p` | integer | 14 | Precision parameter. Valid range: 4..26. Higher values use more memory but give better accuracy. Register count = 2^p. |
+| `:backend` | module | `ExDataSketch.Backend.Pure` | Backend module for computation. |
+
+Memory usage: `8 + 2^p` bytes (e.g., p=14 uses ~16 KiB).
+
+Relative error: approximately `0.835 / sqrt(2^p)`.
+
+#### HLL vs ULL Comparison
+
+| p  | Memory  | HLL Error | ULL Error | ULL Improvement |
+|----|---------|-----------|-----------|-----------------|
+| 10 | ~1 KiB  | 3.25%     | 2.61%     | ~20%            |
+| 12 | ~4 KiB  | 1.63%     | 1.30%     | ~20%            |
+| 14 | ~16 KiB | 0.81%     | 0.65%     | ~20%            |
+| 16 | ~64 KiB | 0.41%     | 0.33%     | ~20%            |
+
+```elixir
+sketch = ExDataSketch.ULL.new(p: 14)
+sketch = ExDataSketch.ULL.update_many(sketch, items)
+ExDataSketch.ULL.estimate(sketch)
+
+# Merge two sketches
+merged = ExDataSketch.ULL.merge(sketch_a, sketch_b)
+
+# Build from enumerable
+sketch = ExDataSketch.ULL.from_enumerable(stream, p: 14)
+```
+
 ### CMS Options
 
 | Option | Type | Default | Description |

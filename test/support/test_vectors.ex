@@ -10,7 +10,7 @@ defmodule ExDataSketch.TestVectors do
   """
   @spec load_vectors(String.t()) :: [{String.t(), map()}]
   def load_vectors(algorithm)
-      when algorithm in ["hll", "cms", "theta", "kll", "ddsketch", "frequent_items"] do
+      when algorithm in ["hll", "cms", "theta", "kll", "ddsketch", "frequent_items", "ull"] do
     dir = Path.join(@vectors_dir, algorithm)
 
     dir
@@ -96,6 +96,7 @@ defmodule ExDataSketch.TestVectors do
   def normalize_opts("kll", %{"k" => k}), do: [k: k]
   def normalize_opts("ddsketch", %{"alpha" => alpha}), do: [alpha: alpha]
   def normalize_opts("frequent_items", %{"k" => k}), do: [k: k]
+  def normalize_opts("ull", %{"p" => p}), do: [p: p]
 
   # -- Private --
 
@@ -105,6 +106,7 @@ defmodule ExDataSketch.TestVectors do
   defp sketch_module("kll"), do: ExDataSketch.KLL
   defp sketch_module("ddsketch"), do: ExDataSketch.DDSketch
   defp sketch_module("frequent_items"), do: ExDataSketch.FrequentItems
+  defp sketch_module("ull"), do: ExDataSketch.ULL
 
   defp build_sketch(mod, opts, []), do: mod.new(opts)
 

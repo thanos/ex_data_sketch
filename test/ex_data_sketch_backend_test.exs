@@ -58,6 +58,11 @@ defmodule ExDataSketch.BackendTest.StubBackend do
   def mg_top_k(_s, _l, _o), do: []
   def mg_count(_s, _o), do: 0
   def mg_entry_count(_s, _o), do: 0
+  def ull_new(_opts), do: <<>>
+  def ull_update(s, _h, _o), do: s
+  def ull_update_many(s, _h, _o), do: s
+  def ull_merge(s, _b, _o), do: s
+  def ull_estimate(_s, _o), do: 0.0
   def bloom_new(_opts), do: <<>>
   def bloom_put(s, _h, _o), do: s
   def bloom_put_many(s, _h, _o), do: s

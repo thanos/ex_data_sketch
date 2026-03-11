@@ -216,6 +216,23 @@ defmodule ExDataSketch.Backend do
   @doc "Return the number of distinct tracked entries from MisraGries state."
   @callback mg_entry_count(state_bin(), opts()) :: non_neg_integer()
 
+  # -- ULL (UltraLogLog) callbacks --
+
+  @doc "Create a new ULL state binary with the given options."
+  @callback ull_new(opts()) :: state_bin()
+
+  @doc "Update ULL state with a single hash64 value."
+  @callback ull_update(state_bin(), hash64(), opts()) :: state_bin()
+
+  @doc "Update ULL state with a list of hash64 values in a single pass."
+  @callback ull_update_many(state_bin(), [hash64()], opts()) :: state_bin()
+
+  @doc "Merge two ULL state binaries (register-wise max)."
+  @callback ull_merge(state_bin(), state_bin(), opts()) :: state_bin()
+
+  @doc "Estimate cardinality from ULL state."
+  @callback ull_estimate(state_bin(), opts()) :: float()
+
   # -- Bloom callbacks --
 
   @doc "Create a new Bloom filter state binary with the given options."

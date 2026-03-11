@@ -32,6 +32,7 @@ serialization, distribution, and persistence.
 | IBLT | Set reconciliation | Implemented (Pure + Rust) |
 | REQ Sketch | Relative-error quantile estimation | Implemented (Pure) |
 | Misra-Gries | Deterministic heavy-hitter detection | Implemented (Pure) |
+| UltraLogLog (ULL) | Improved cardinality estimation | Implemented (Pure + Rust) |
 
 ### Capability Matrix
 
@@ -151,7 +152,7 @@ mix docs
 | v0.4.0 | Bloom filter (membership testing) | Released |
 | v0.5.0 | Advanced membership filters (Cuckoo, Quotient, CQF, XorFilter, IBLT, FilterChain) | Released |
 | v0.6.0 | REQ sketch, Misra-Gries, XXHash3, Rust NIF parity for all membership filters | Released |
-| v0.7.0 | ULL (UltraLogLog) - Rust NIF Parity | Planned |
+| v0.7.0 | ULL (UltraLogLog) -- improved cardinality estimation with Pure + Rust NIF | Released |
 | v0.8.0 | Massive Static Data & Industry Interop  - Binary Fuse Filters, Ribbon Filter Implementation. Apache DataSketches Interop. | Planned |
 | v0.9.0 | dequantized HHL and Sphinx (Succinct Perfect Hash Index) | Planned |
 

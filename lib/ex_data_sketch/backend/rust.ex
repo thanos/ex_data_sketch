@@ -17,6 +17,7 @@ defmodule ExDataSketch.Backend.Rust do
   size exceeds configurable thresholds. Defaults:
 
   - `hll_update_many`: 10,000 hashes
+  - `ull_update_many`: 10,000 hashes
   - `cms_update_many`: 10,000 pairs
   - `theta_update_many`: 10,000 hashes
   - `cms_merge`: 100,000 total counters
@@ -67,7 +68,8 @@ defmodule ExDataSketch.Backend.Rust do
     cqf_merge: 50_000,
     xor_build: 10_000,
     iblt_put_many: 10_000,
-    iblt_merge: 50_000
+    iblt_merge: 50_000,
+    ull_update_many: 10_000
   }
 
   @doc """
@@ -813,6 +815,42 @@ defmodule ExDataSketch.Backend.Rust do
       end
 
     unwrap_ok!(result)
+  end
+
+  # -- ULL callbacks --
+
+  @impl true
+  def ull_new(opts), do: Pure.ull_new(opts)
+
+  @impl true
+  def ull_update(state_bin, hash64, opts), do: Pure.ull_update(state_bin, hash64, opts)
+
+  @impl true
+  def ull_update_many(state_bin, hashes, opts) do
+    p = Keyword.fetch!(opts, :p)
+    hashes_bin = encode_hashes(hashes)
+    threshold = dirty_threshold(:ull_update_many, opts)
+
+    result =
+      if length(hashes) > threshold do
+        ExDataSketch.Nif.ull_update_many_dirty_nif(state_bin, hashes_bin, p)
+      else
+        ExDataSketch.Nif.ull_update_many_nif(state_bin, hashes_bin, p)
+      end
+
+    unwrap_ok!(result)
+  end
+
+  @impl true
+  def ull_merge(a_bin, b_bin, opts) do
+    p = Keyword.fetch!(opts, :p)
+    unwrap_ok!(ExDataSketch.Nif.ull_merge_nif(a_bin, b_bin, p))
+  end
+
+  @impl true
+  def ull_estimate(state_bin, opts) do
+    p = Keyword.fetch!(opts, :p)
+    unwrap_ok!(ExDataSketch.Nif.ull_estimate_nif(state_bin, p))
   end
 
   # -- Private helpers --

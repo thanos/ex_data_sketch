@@ -39,6 +39,7 @@ defmodule ExDataSketch.Codec do
   - 12: IBLT
   - 13: REQ (Relative Error Quantiles)
   - 14: MisraGries
+  - 15: ULL (UltraLogLog)
 
   ## Versioning
 
@@ -65,8 +66,9 @@ defmodule ExDataSketch.Codec do
   @sketch_id_iblt 12
   @sketch_id_req 13
   @sketch_id_mg 14
+  @sketch_id_ull 15
 
-  @type sketch_id :: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14
+  @type sketch_id :: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15
   @type decoded :: %{
           version: pos_integer(),
           sketch_id: sketch_id(),
@@ -267,11 +269,23 @@ defmodule ExDataSketch.Codec do
   def sketch_id_mg, do: @sketch_id_mg
 
   @doc """
+  Returns the sketch ID constant for ULL.
+
+  ## Examples
+
+      iex> ExDataSketch.Codec.sketch_id_ull()
+      15
+
+  """
+  @spec sketch_id_ull() :: sketch_id()
+  def sketch_id_ull, do: @sketch_id_ull
+
+  @doc """
   Encodes sketch data into the EXSK binary format.
 
   ## Parameters
 
-  - `sketch_id` - sketch type identifier (1=HLL, 2=CMS, 3=Theta, 4=KLL, 5=DDSketch, 6=FrequentItems, 7=Bloom, 8=Cuckoo, 9=Quotient, 10=CQF, 11=XorFilter, 12=IBLT, 13=REQ, 14=MisraGries)
+  - `sketch_id` - sketch type identifier (1=HLL, 2=CMS, 3=Theta, 4=KLL, 5=DDSketch, 6=FrequentItems, 7=Bloom, 8=Cuckoo, 9=Quotient, 10=CQF, 11=XorFilter, 12=IBLT, 13=REQ, 14=MisraGries, 15=ULL)
   - `version` - format version (use `Codec.version/0` for current)
   - `params_bin` - binary-encoded sketch parameters
   - `state_bin` - raw sketch state binary
