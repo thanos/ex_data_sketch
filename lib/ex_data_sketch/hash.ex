@@ -164,13 +164,16 @@ defmodule ExDataSketch.Hash do
       true
 
   """
+  @max_u64 0xFFFFFFFFFFFFFFFF
+
   @spec xxhash3_64(binary(), non_neg_integer()) :: hash64()
   def xxhash3_64(data, seed) when is_binary(data) and is_integer(seed) and seed >= 0 do
-    ExDataSketch.Nif.xxhash3_64_seeded_nif(data, seed)
+    clamped = seed &&& @max_u64
+    ExDataSketch.Nif.xxhash3_64_seeded_nif(data, clamped)
   rescue
     ErlangError ->
       # Fallback to phash2-based hash when NIF is not loaded
-      mix64(:erlang.phash2(data, 1 <<< 32), seed)
+      mix64(:erlang.phash2(data, 1 <<< 32), seed &&& @max_u64)
   end
 
   # Extends a 32-bit base hash to 64 bits using bit mixing.

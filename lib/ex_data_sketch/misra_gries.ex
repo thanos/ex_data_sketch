@@ -243,7 +243,8 @@ defmodule ExDataSketch.MisraGries do
 
   """
   @spec frequent(t(), float()) :: [{term(), non_neg_integer()}]
-  def frequent(%__MODULE__{} = sketch, threshold) when is_float(threshold) and threshold > 0.0 do
+  def frequent(%__MODULE__{} = sketch, threshold)
+      when is_float(threshold) and threshold > 0.0 and threshold < 1.0 do
     n = count(sketch)
     min_count = floor(threshold * n)
 

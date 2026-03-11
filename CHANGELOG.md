@@ -11,10 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- REQ sketch (`ExDataSketch.REQ`) for relative-error quantile estimation with configurable high-rank accuracy. REQ1 binary state format. EXSK serialization (sketch ID 13).
+- Misra-Gries sketch (`ExDataSketch.MisraGries`) for deterministic heavy-hitter detection with configurable key encoding (`:binary`, `:int`, `{:term, :external}`). MG01 binary state format. EXSK serialization (sketch ID 14).
+- XXHash3 NIF integration (`ExDataSketch.Hash.xxhash3_64/1,2`) for fast, cross-platform stable hashing via Rust NIF with phash2-based fallback.
+- KLL `cdf/2` and `pmf/2` for cumulative distribution and probability mass functions.
+- DDSketch `rank/2` for normalized rank queries.
 - Rust NIF acceleration for all membership filters: Bloom, Cuckoo, Quotient, CQF, XorFilter, and IBLT. Batch operations (`put_many`, `merge`, `build`) automatically use compiled Rust NIFs when available, with dirty scheduler thresholds for large inputs.
-- Parity tests verifying byte-identical serialization between Pure Elixir and Rust NIF backends for all 12 sketch algorithms (33 parity tests total).
-- Benchmark suites for REQ sketch, Misra-Gries, and XXHash3 NIF throughput (`bench/req_bench.exs`, `bench/misra_gries_bench.exs`, `bench/xxhash3_bench.exs`).
-- Existing membership filter benchmarks automatically show Pure vs Rust comparison when NIF is available.
+- Parity tests verifying byte-identical serialization between Pure Elixir and Rust NIF backends for all sketch algorithms.
+- Benchmark suites for REQ sketch, Misra-Gries, and XXHash3 NIF throughput.
+- `Quantiles` facade for unified quantile sketch API across KLL and DDSketch.
 
 ## [0.5.0] - 2026-03-10
 
