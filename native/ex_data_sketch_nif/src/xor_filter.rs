@@ -83,7 +83,7 @@ fn xor_build_impl<'a>(
     let arr_len = 3 * seg_size;
 
     for retry in 0..XOR_MAX_RETRIES {
-        let current_seed = seed + retry;
+        let current_seed = seed.wrapping_add(retry);
 
         if let Some((fingerprint_array, final_seed)) =
             xor_try_build(&unique_hashes, n, seg_size, arr_len, fp_bits, current_seed)

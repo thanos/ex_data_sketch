@@ -409,7 +409,7 @@ defmodule ExDataSketch.MisraGries do
   end
 
   defp decode_params(<<k::unsigned-little-32, enc_byte::unsigned-8>>)
-       when k >= 1 do
+       when k >= 1 and enc_byte in [0, 1, 2] do
     {:ok, [k: k, key_encoding: decode_key_encoding(enc_byte)]}
   end
 

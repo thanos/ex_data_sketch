@@ -107,11 +107,9 @@ defmodule ExDataSketch.HashTest do
       assert result >= 0
     end
 
-    test "known test vector: empty string" do
-      # XXHash3 of empty string with seed 0 is a known constant
+    test "empty string with default seed matches explicit seed 0" do
       h = Hash.xxhash3_64(<<>>)
       assert is_integer(h)
-      # Just verify it works and is deterministic
       assert h == Hash.xxhash3_64(<<>>, 0)
     end
   end

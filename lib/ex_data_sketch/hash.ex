@@ -127,7 +127,9 @@ defmodule ExDataSketch.Hash do
   Hashes a binary using XXHash3 (64-bit) via Rust NIF.
 
   Returns a deterministic 64-bit hash that is stable across platforms and
-  versions. Falls back to the phash2-based hash if the NIF is not available.
+  versions when the Rust NIF is available. Falls back to the phash2-based
+  hash if the NIF is not loaded; the fallback is NOT stable across OTP
+  major versions (see module docs).
 
   This function operates on raw binary data. For Elixir terms, convert to
   binary first (e.g., using `:erlang.term_to_binary/1` or `to_string/1`).
