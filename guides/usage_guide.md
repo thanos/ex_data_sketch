@@ -595,6 +595,7 @@ within the same BEAM instance.
 | Multiset counting (how many times?) | CQF | `q: 16, r: 8` | Approximate per-item multiplicity |
 | Static set membership | XorFilter | `fingerprint_bits: 8` | Smallest footprint, fastest lookup |
 | Set reconciliation (what's different?) | IBLT | `cell_count: 1000` | Find symmetric difference between sets |
+| Improved cardinality estimation | ULL | `p: 14` | ~20% better accuracy than HLL at the same memory |
 
 ### HLL: Real-time unique visitor counting
 
@@ -1047,6 +1048,123 @@ end
 # Search.TrendingQueries.trending(5)
 # => [%{query: "elixir genserver", estimated_count: 4821, min_count: 4750, max_count: 4821},
 #     %{query: "phoenix liveview", estimated_count: 3102, min_count: 3010, max_count: 3102}, ...]
+```
+
+### ULL: Multi-node distributed cardinality with improved accuracy
+
+An ad-tech platform counts unique ad impressions per campaign across a cluster.
+Each node maintains a local ULL sketch, serializes it, and sends to a central
+aggregator that merges and reports campaign reach. ULL is chosen over HLL for
+its ~20% better accuracy at the same memory -- significant when reporting to
+advertisers who pay per unique impression.
+
+```elixir
+defmodule AdTech.CampaignReach do
+  @moduledoc """
+  Distributed unique impression counting per campaign using ULL sketches.
+
+  Each application node tracks impressions locally and periodically
+  flushes serialized sketches to a central aggregator for merge.
+  """
+
+  alias ExDataSketch.ULL
+
+  # --- Per-node: local impression tracking ---
+
+  def new_tracker(precision \\ 14) do
+    %{sketches: %{}, precision: precision}
+  end
+
+  def record_impression(tracker, campaign_id, user_id) do
+    sketch =
+      Map.get_lazy(tracker.sketches, campaign_id, fn ->
+        ULL.new(p: tracker.precision)
+      end)
+
+    updated = ULL.update(sketch, user_id)
+    put_in(tracker.sketches[campaign_id], updated)
+  end
+
+  def record_impressions(tracker, campaign_id, user_ids) do
+    sketch =
+      Map.get_lazy(tracker.sketches, campaign_id, fn ->
+        ULL.new(p: tracker.precision)
+      end)
+
+    updated = ULL.update_many(sketch, user_ids)
+    put_in(tracker.sketches[campaign_id], updated)
+  end
+
+  @doc "Serialize all campaign sketches for network transport."
+  def flush(tracker) do
+    payloads =
+      Map.new(tracker.sketches, fn {campaign_id, sketch} ->
+        {campaign_id, ULL.serialize(sketch)}
+      end)
+
+    {payloads, %{tracker | sketches: %{}}}
+  end
+
+  # --- Central aggregator: merge from all nodes ---
+
+  def new_aggregator, do: %{sketches: %{}}
+
+  def ingest(aggregator, payloads) do
+    Enum.reduce(payloads, aggregator, fn {campaign_id, binary}, acc ->
+      {:ok, remote} = ULL.deserialize(binary)
+
+      merged =
+        case Map.fetch(acc.sketches, campaign_id) do
+          {:ok, existing} -> ULL.merge(existing, remote)
+          :error -> remote
+        end
+
+      put_in(acc.sketches[campaign_id], merged)
+    end)
+  end
+
+  @doc "Report unique reach per campaign."
+  def report(aggregator) do
+    Map.new(aggregator.sketches, fn {campaign_id, sketch} ->
+      {campaign_id, %{
+        unique_impressions: ULL.estimate(sketch),
+        sketch_bytes: ULL.size_bytes(sketch)
+      }}
+    end)
+  end
+
+  @doc "Merge hourly aggregators into a daily rollup."
+  def rollup(hourly_aggregators) do
+    Enum.reduce(hourly_aggregators, new_aggregator(), fn hourly, daily ->
+      Enum.reduce(hourly.sketches, daily, fn {campaign_id, sketch}, acc ->
+        merged =
+          case Map.fetch(acc.sketches, campaign_id) do
+            {:ok, existing} -> ULL.merge(existing, sketch)
+            :error -> sketch
+          end
+
+        put_in(acc.sketches[campaign_id], merged)
+      end)
+    end)
+  end
+end
+
+# Usage:
+# Node A records impressions
+# tracker = AdTech.CampaignReach.new_tracker(14)
+# tracker = AdTech.CampaignReach.record_impressions(tracker, "camp_42", user_ids)
+# {payloads, tracker} = AdTech.CampaignReach.flush(tracker)
+# send(aggregator_node, {:impressions, payloads})
+#
+# Aggregator merges from all nodes
+# agg = AdTech.CampaignReach.new_aggregator()
+# agg = AdTech.CampaignReach.ingest(agg, payloads_from_node_a)
+# agg = AdTech.CampaignReach.ingest(agg, payloads_from_node_b)
+# AdTech.CampaignReach.report(agg)
+# => %{"camp_42" => %{unique_impressions: 1_247_823, sketch_bytes: 16392}}
+#
+# ULL at p=14 gives ~0.65% relative error vs HLL's ~0.81%
+# -- a meaningful improvement when billing per unique impression.
 ```
 
 ### Bloom: Deduplication in event processing

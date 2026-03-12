@@ -63,7 +63,7 @@ Add `ex_data_sketch` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:ex_data_sketch, "~> 0.6.0"}
+    {:ex_data_sketch, "~> 0.7.0"}
   ]
 end
 ```
@@ -153,8 +153,8 @@ mix docs
 | v0.5.0 | Advanced membership filters (Cuckoo, Quotient, CQF, XorFilter, IBLT, FilterChain) | Released |
 | v0.6.0 | REQ sketch, Misra-Gries, XXHash3, Rust NIF parity for all membership filters | Released |
 | v0.7.0 | ULL (UltraLogLog) -- improved cardinality estimation with Pure + Rust NIF | Released |
-| v0.8.0 | Massive Static Data & Industry Interop  - Binary Fuse Filters, Ribbon Filter Implementation. Apache DataSketches Interop. | Planned |
-| v0.9.0 | dequantized HHL and Sphinx (Succinct Perfect Hash Index) | Planned |
+| v0.8.0 | Massive Static Data & Industry Interop -- Binary Fuse Filters, Ribbon Filter, Apache DataSketches Interop | Planned |
+| v0.9.0 | Dequantized HLL and Sphinx (Succinct Perfect Hash Index) | Planned |
 
 ## License
 
