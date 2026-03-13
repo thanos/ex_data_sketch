@@ -411,6 +411,56 @@ defmodule ExDataSketch.KLLTest do
     end
   end
 
+  # -- CDF and PMF --
+
+  describe "cdf/2" do
+    test "returns nil for empty sketch" do
+      sketch = KLL.new()
+      assert KLL.cdf(sketch, [50.0]) == nil
+    end
+
+    test "returns ranks at split points" do
+      sketch = KLL.new(k: 200) |> KLL.update_many(1..100)
+      cdf = KLL.cdf(sketch, [25.0, 50.0, 75.0])
+      assert length(cdf) == 3
+      assert Enum.all?(cdf, &is_float/1)
+      # CDF should be monotonically non-decreasing
+      assert cdf == Enum.sort(cdf)
+    end
+
+    test "single split point matches rank" do
+      sketch = KLL.new(k: 200) |> KLL.update_many(1..1000)
+      [cdf_val] = KLL.cdf(sketch, [500.0])
+      rank_val = KLL.rank(sketch, 500.0)
+      assert_in_delta cdf_val, rank_val, 1.0e-10
+    end
+  end
+
+  describe "pmf/2" do
+    test "returns nil for empty sketch" do
+      sketch = KLL.new()
+      assert KLL.pmf(sketch, [50.0]) == nil
+    end
+
+    test "returns m+1 bins for m split points" do
+      sketch = KLL.new(k: 200) |> KLL.update_many(1..100)
+      pmf = KLL.pmf(sketch, [25.0, 50.0, 75.0])
+      assert length(pmf) == 4
+    end
+
+    test "pmf sums to 1.0" do
+      sketch = KLL.new(k: 200) |> KLL.update_many(1..1000)
+      pmf = KLL.pmf(sketch, [200.0, 500.0, 800.0])
+      assert_in_delta Enum.sum(pmf), 1.0, 1.0e-10
+    end
+
+    test "all pmf values are non-negative" do
+      sketch = KLL.new(k: 200) |> KLL.update_many(1..100)
+      pmf = KLL.pmf(sketch, [25.0, 50.0, 75.0])
+      assert Enum.all?(pmf, fn v -> v >= 0.0 end)
+    end
+  end
+
   # -- Property tests --
 
   describe "properties" do

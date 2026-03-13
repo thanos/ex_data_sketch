@@ -8,7 +8,21 @@ defmodule ExDataSketch.ParityTest do
   use ExUnit.Case, async: true
 
   alias ExDataSketch.Backend.{Pure, Rust}
-  alias ExDataSketch.{Bloom, CMS, DDSketch, FrequentItems, HLL, KLL, Theta}
+
+  alias ExDataSketch.{
+    Bloom,
+    CMS,
+    CQF,
+    Cuckoo,
+    DDSketch,
+    FrequentItems,
+    HLL,
+    IBLT,
+    KLL,
+    Quotient,
+    Theta,
+    XorFilter
+  }
 
   # Deterministic input strings
   @items_1000 Enum.map(0..999, &"parity_item_#{&1}")
@@ -297,6 +311,203 @@ defmodule ExDataSketch.ParityTest do
       for item <- test_items do
         assert Bloom.member?(pure, item) == Bloom.member?(rust, item),
                "Bloom member? parity mismatch for #{item}"
+      end
+    end
+  end
+
+  describe "Cuckoo parity" do
+    @describetag :rust_nif
+
+    @cuckoo_items Enum.map(0..199, &"cuckoo_item_#{&1}")
+    @cuckoo_a Enum.map(0..99, &"cuckoo_a_#{&1}")
+    @cuckoo_b Enum.map(100..199, &"cuckoo_b_#{&1}")
+
+    test "put_many produces identical serialization" do
+      {:ok, pure} = Cuckoo.new(capacity: 512, backend: Pure) |> Cuckoo.put_many(@cuckoo_items)
+      {:ok, rust} = Cuckoo.new(capacity: 512, backend: Rust) |> Cuckoo.put_many(@cuckoo_items)
+
+      assert Cuckoo.serialize(pure) == Cuckoo.serialize(rust)
+    end
+
+    test "member? returns identical results" do
+      {:ok, pure} = Cuckoo.new(capacity: 512, backend: Pure) |> Cuckoo.put_many(@cuckoo_a)
+      {:ok, rust} = Cuckoo.new(capacity: 512, backend: Rust) |> Cuckoo.put_many(@cuckoo_a)
+
+      for item <- @cuckoo_a ++ @cuckoo_b do
+        assert Cuckoo.member?(pure, item) == Cuckoo.member?(rust, item),
+               "Cuckoo member? parity mismatch for #{item}"
+      end
+    end
+  end
+
+  describe "Quotient parity" do
+    @describetag :rust_nif
+
+    @qot_items Enum.map(0..99, &"qot_item_#{&1}")
+    @qot_a Enum.map(0..49, &"qot_a_#{&1}")
+    @qot_b Enum.map(50..99, &"qot_b_#{&1}")
+
+    test "put_many produces identical serialization" do
+      pure = Quotient.new(q: 8, r: 5, backend: Pure) |> Quotient.put_many(@qot_items)
+      rust = Quotient.new(q: 8, r: 5, backend: Rust) |> Quotient.put_many(@qot_items)
+
+      assert Quotient.serialize(pure) == Quotient.serialize(rust)
+    end
+
+    test "merge produces identical serialization" do
+      pure_a = Quotient.new(q: 8, r: 5, backend: Pure) |> Quotient.put_many(@qot_a)
+      pure_b = Quotient.new(q: 8, r: 5, backend: Pure) |> Quotient.put_many(@qot_b)
+      pure_merged = Quotient.merge(pure_a, pure_b)
+
+      rust_a = Quotient.new(q: 8, r: 5, backend: Rust) |> Quotient.put_many(@qot_a)
+      rust_b = Quotient.new(q: 8, r: 5, backend: Rust) |> Quotient.put_many(@qot_b)
+      rust_merged = Quotient.merge(rust_a, rust_b)
+
+      assert Quotient.serialize(pure_merged) == Quotient.serialize(rust_merged)
+    end
+
+    test "member? returns identical results" do
+      pure = Quotient.new(q: 8, r: 5, backend: Pure) |> Quotient.put_many(@qot_a)
+      rust = Quotient.new(q: 8, r: 5, backend: Rust) |> Quotient.put_many(@qot_a)
+
+      for item <- @qot_a ++ @qot_b do
+        assert Quotient.member?(pure, item) == Quotient.member?(rust, item),
+               "Quotient member? parity mismatch for #{item}"
+      end
+    end
+  end
+
+  describe "CQF parity" do
+    @describetag :rust_nif
+
+    @cqf_items Enum.map(0..99, &"cqf_item_#{&1}")
+    @cqf_dupes @cqf_items ++ Enum.map(0..49, &"cqf_item_#{&1}")
+    @cqf_a Enum.map(0..49, &"cqf_a_#{&1}")
+    @cqf_b Enum.map(50..99, &"cqf_b_#{&1}")
+
+    test "put_many with duplicates produces identical serialization" do
+      pure = CQF.new(q: 8, r: 5, backend: Pure) |> CQF.put_many(@cqf_dupes)
+      rust = CQF.new(q: 8, r: 5, backend: Rust) |> CQF.put_many(@cqf_dupes)
+
+      assert CQF.serialize(pure) == CQF.serialize(rust)
+      assert CQF.count(pure) == CQF.count(rust)
+    end
+
+    test "merge produces identical serialization" do
+      pure_a = CQF.new(q: 8, r: 5, backend: Pure) |> CQF.put_many(@cqf_a)
+      pure_b = CQF.new(q: 8, r: 5, backend: Pure) |> CQF.put_many(@cqf_b)
+      pure_merged = CQF.merge(pure_a, pure_b)
+
+      rust_a = CQF.new(q: 8, r: 5, backend: Rust) |> CQF.put_many(@cqf_a)
+      rust_b = CQF.new(q: 8, r: 5, backend: Rust) |> CQF.put_many(@cqf_b)
+      rust_merged = CQF.merge(rust_a, rust_b)
+
+      assert CQF.serialize(pure_merged) == CQF.serialize(rust_merged)
+      assert CQF.count(pure_merged) == CQF.count(rust_merged)
+    end
+
+    test "member? and estimate_count return identical results" do
+      pure = CQF.new(q: 8, r: 5, backend: Pure) |> CQF.put_many(@cqf_dupes)
+      rust = CQF.new(q: 8, r: 5, backend: Rust) |> CQF.put_many(@cqf_dupes)
+
+      for item <- @cqf_items do
+        assert CQF.member?(pure, item) == CQF.member?(rust, item),
+               "CQF member? parity mismatch for #{item}"
+
+        assert CQF.estimate_count(pure, item) == CQF.estimate_count(rust, item),
+               "CQF estimate_count parity mismatch for #{item}"
+      end
+    end
+  end
+
+  describe "XorFilter parity" do
+    @describetag :rust_nif
+
+    @xor_items Enum.map(0..199, &"xor_item_#{&1}")
+    @xor_non_members Enum.map(0..199, &"xor_absent_#{&1}")
+
+    test "build produces identical serialization (xor8)" do
+      {:ok, pure} = XorFilter.build(@xor_items, backend: Pure)
+      {:ok, rust} = XorFilter.build(@xor_items, backend: Rust)
+
+      assert XorFilter.serialize(pure) == XorFilter.serialize(rust)
+      assert XorFilter.count(pure) == XorFilter.count(rust)
+    end
+
+    test "build produces identical serialization (xor16)" do
+      {:ok, pure} = XorFilter.build(@xor_items, fingerprint_bits: 16, backend: Pure)
+      {:ok, rust} = XorFilter.build(@xor_items, fingerprint_bits: 16, backend: Rust)
+
+      assert XorFilter.serialize(pure) == XorFilter.serialize(rust)
+      assert XorFilter.count(pure) == XorFilter.count(rust)
+    end
+
+    test "member? returns identical results for members and non-members (xor8)" do
+      {:ok, pure} = XorFilter.build(@xor_items, backend: Pure)
+      {:ok, rust} = XorFilter.build(@xor_items, backend: Rust)
+
+      for item <- @xor_items do
+        assert XorFilter.member?(pure, item) == true
+        assert XorFilter.member?(rust, item) == true
+      end
+
+      for item <- @xor_non_members do
+        assert XorFilter.member?(pure, item) == XorFilter.member?(rust, item),
+               "XorFilter member? parity mismatch for non-member #{item}"
+      end
+    end
+
+    test "member? returns identical results for members and non-members (xor16)" do
+      {:ok, pure} = XorFilter.build(@xor_items, fingerprint_bits: 16, backend: Pure)
+      {:ok, rust} = XorFilter.build(@xor_items, fingerprint_bits: 16, backend: Rust)
+
+      for item <- @xor_items do
+        assert XorFilter.member?(pure, item) == true
+        assert XorFilter.member?(rust, item) == true
+      end
+
+      for item <- @xor_non_members do
+        assert XorFilter.member?(pure, item) == XorFilter.member?(rust, item),
+               "XorFilter member? parity mismatch for non-member #{item}"
+      end
+    end
+  end
+
+  describe "IBLT parity" do
+    @describetag :rust_nif
+
+    @iblt_items Enum.map(0..99, &"iblt_item_#{&1}")
+    @iblt_a Enum.map(0..49, &"iblt_a_#{&1}")
+    @iblt_b Enum.map(50..99, &"iblt_b_#{&1}")
+
+    test "put_many produces identical serialization" do
+      pure = IBLT.new(cell_count: 256, backend: Pure) |> IBLT.put_many(@iblt_items)
+      rust = IBLT.new(cell_count: 256, backend: Rust) |> IBLT.put_many(@iblt_items)
+
+      assert IBLT.serialize(pure) == IBLT.serialize(rust)
+      assert IBLT.count(pure) == IBLT.count(rust)
+    end
+
+    test "merge produces identical serialization" do
+      pure_a = IBLT.new(cell_count: 256, backend: Pure) |> IBLT.put_many(@iblt_a)
+      pure_b = IBLT.new(cell_count: 256, backend: Pure) |> IBLT.put_many(@iblt_b)
+      pure_merged = IBLT.merge(pure_a, pure_b)
+
+      rust_a = IBLT.new(cell_count: 256, backend: Rust) |> IBLT.put_many(@iblt_a)
+      rust_b = IBLT.new(cell_count: 256, backend: Rust) |> IBLT.put_many(@iblt_b)
+      rust_merged = IBLT.merge(rust_a, rust_b)
+
+      assert IBLT.serialize(pure_merged) == IBLT.serialize(rust_merged)
+      assert IBLT.count(pure_merged) == IBLT.count(rust_merged)
+    end
+
+    test "member? returns identical results" do
+      pure = IBLT.new(cell_count: 256, backend: Pure) |> IBLT.put_many(@iblt_a)
+      rust = IBLT.new(cell_count: 256, backend: Rust) |> IBLT.put_many(@iblt_a)
+
+      for item <- @iblt_a ++ @iblt_b do
+        assert IBLT.member?(pure, item) == IBLT.member?(rust, item),
+               "IBLT member? parity mismatch for #{item}"
       end
     end
   end

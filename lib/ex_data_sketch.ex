@@ -22,6 +22,8 @@ defmodule ExDataSketch do
   - `ExDataSketch.XorFilter` -- Xor filter for static, immutable membership testing.
   - `ExDataSketch.IBLT` -- Invertible Bloom Lookup Table for set reconciliation.
   - `ExDataSketch.FilterChain` -- Capability-aware composition framework for membership filters.
+  - `ExDataSketch.REQ` -- REQ Sketch for relative error quantiles with tail accuracy.
+  - `ExDataSketch.MisraGries` -- Misra-Gries for deterministic heavy hitter detection.
   - `ExDataSketch.Quantiles` -- Facade for quantile sketch algorithms.
 
   ## Architecture
@@ -73,7 +75,9 @@ defmodule ExDataSketch do
     HLL,
     IBLT,
     KLL,
+    MisraGries,
     Quotient,
+    REQ,
     Theta
   }
 
@@ -102,7 +106,9 @@ defmodule ExDataSketch do
           | Cuckoo.t()
           | Quotient.t()
           | CQF.t()
-          | IBLT.t(),
+          | IBLT.t()
+          | REQ.t()
+          | MisraGries.t(),
           Enumerable.t()
         ) ::
           HLL.t()
@@ -116,6 +122,8 @@ defmodule ExDataSketch do
           | Quotient.t()
           | CQF.t()
           | IBLT.t()
+          | REQ.t()
+          | MisraGries.t()
   def update_many(%Cuckoo{} = sketch, items) do
     case Cuckoo.put_many(sketch, items) do
       {:ok, updated} -> updated
@@ -129,6 +137,7 @@ defmodule ExDataSketch do
   def update_many(%Theta{} = sketch, items), do: Theta.update_many(sketch, items)
   def update_many(%KLL{} = sketch, items), do: KLL.update_many(sketch, items)
   def update_many(%DDSketch{} = sketch, items), do: DDSketch.update_many(sketch, items)
+  def update_many(%REQ{} = sketch, items), do: REQ.update_many(sketch, items)
 
   def update_many(%FrequentItems{} = sketch, items),
     do: FrequentItems.update_many(sketch, items)
@@ -136,4 +145,5 @@ defmodule ExDataSketch do
   def update_many(%Quotient{} = sketch, items), do: Quotient.put_many(sketch, items)
   def update_many(%CQF{} = sketch, items), do: CQF.put_many(sketch, items)
   def update_many(%IBLT{} = sketch, items), do: IBLT.put_many(sketch, items)
+  def update_many(%MisraGries{} = sketch, items), do: MisraGries.update_many(sketch, items)
 end

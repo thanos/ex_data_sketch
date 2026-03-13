@@ -57,7 +57,17 @@ defmodule ExDataSketch.Backend.Rust do
     ddsketch_merge: 50_000,
     fi_update_many: 10_000,
     fi_merge: 50_000,
-    fi_nif_query: 256
+    fi_nif_query: 256,
+    bloom_put_many: 10_000,
+    bloom_merge: 50_000,
+    cuckoo_put_many: 10_000,
+    quotient_put_many: 10_000,
+    quotient_merge: 50_000,
+    cqf_put_many: 10_000,
+    cqf_merge: 50_000,
+    xor_build: 10_000,
+    iblt_put_many: 10_000,
+    iblt_merge: 50_000
   }
 
   @doc """
@@ -290,6 +300,12 @@ defmodule ExDataSketch.Backend.Rust do
   @impl true
   def kll_max(state_bin, opts), do: Pure.kll_max(state_bin, opts)
 
+  @impl true
+  def kll_cdf(state_bin, split_points, opts), do: Pure.kll_cdf(state_bin, split_points, opts)
+
+  @impl true
+  def kll_pmf(state_bin, split_points, opts), do: Pure.kll_pmf(state_bin, split_points, opts)
+
   # -- DDSketch callbacks --
 
   @impl true
@@ -343,6 +359,72 @@ defmodule ExDataSketch.Backend.Rust do
   @impl true
   def ddsketch_max(state_bin, opts), do: Pure.ddsketch_max(state_bin, opts)
 
+  @impl true
+  def ddsketch_rank(state_bin, value, opts), do: Pure.ddsketch_rank(state_bin, value, opts)
+
+  # -- REQ callbacks --
+
+  @impl true
+  def req_new(opts), do: Pure.req_new(opts)
+
+  @impl true
+  def req_update(state_bin, value, opts), do: Pure.req_update(state_bin, value, opts)
+
+  @impl true
+  def req_update_many(state_bin, values, opts), do: Pure.req_update_many(state_bin, values, opts)
+
+  @impl true
+  def req_merge(state_bin_a, state_bin_b, opts),
+    do: Pure.req_merge(state_bin_a, state_bin_b, opts)
+
+  @impl true
+  def req_quantile(state_bin, rank, opts), do: Pure.req_quantile(state_bin, rank, opts)
+
+  @impl true
+  def req_rank(state_bin, value, opts), do: Pure.req_rank(state_bin, value, opts)
+
+  @impl true
+  def req_cdf(state_bin, split_points, opts), do: Pure.req_cdf(state_bin, split_points, opts)
+
+  @impl true
+  def req_pmf(state_bin, split_points, opts), do: Pure.req_pmf(state_bin, split_points, opts)
+
+  @impl true
+  def req_count(state_bin, opts), do: Pure.req_count(state_bin, opts)
+
+  @impl true
+  def req_min(state_bin, opts), do: Pure.req_min(state_bin, opts)
+
+  @impl true
+  def req_max(state_bin, opts), do: Pure.req_max(state_bin, opts)
+
+  # -- MisraGries callbacks --
+
+  @impl true
+  def mg_new(opts), do: Pure.mg_new(opts)
+
+  @impl true
+  def mg_update(state_bin, item_bytes, opts), do: Pure.mg_update(state_bin, item_bytes, opts)
+
+  @impl true
+  def mg_update_many(state_bin, items, opts), do: Pure.mg_update_many(state_bin, items, opts)
+
+  @impl true
+  def mg_merge(state_bin_a, state_bin_b, opts),
+    do: Pure.mg_merge(state_bin_a, state_bin_b, opts)
+
+  @impl true
+  def mg_estimate(state_bin, item_bytes, opts), do: Pure.mg_estimate(state_bin, item_bytes, opts)
+
+  @impl true
+  def mg_top_k(state_bin, limit, opts), do: Pure.mg_top_k(state_bin, limit, opts)
+
+  @impl true
+  def mg_count(state_bin, opts), do: Pure.mg_count(state_bin, opts)
+
+  @impl true
+  def mg_entry_count(state_bin, opts), do: Pure.mg_entry_count(state_bin, opts)
+
   # -- Bloom callbacks --
 
   @impl true
@@ -352,14 +434,41 @@ defmodule ExDataSketch.Backend.Rust do
   def bloom_put(state_bin, hash64, opts), do: Pure.bloom_put(state_bin, hash64, opts)
 
   @impl true
-  def bloom_put_many(state_bin, hashes, opts), do: Pure.bloom_put_many(state_bin, hashes, opts)
+  def bloom_put_many(state_bin, [], _opts), do: state_bin
+
+  def bloom_put_many(state_bin, hashes, opts) do
+    hash_count = Keyword.fetch!(opts, :hash_count)
+    bit_count = Keyword.fetch!(opts, :bit_count)
+    hashes_bin = encode_hashes(hashes)
+    threshold = dirty_threshold(:bloom_put_many, opts)
+
+    result =
+      if length(hashes) > threshold do
+        ExDataSketch.Nif.bloom_put_many_dirty_nif(state_bin, hashes_bin, hash_count, bit_count)
+      else
+        ExDataSketch.Nif.bloom_put_many_nif(state_bin, hashes_bin, hash_count, bit_count)
+      end
+
+    unwrap_ok!(result)
+  end
 
   @impl true
   def bloom_member?(state_bin, hash64, opts), do: Pure.bloom_member?(state_bin, hash64, opts)
 
   @impl true
-  def bloom_merge(state_bin_a, state_bin_b, opts),
-    do: Pure.bloom_merge(state_bin_a, state_bin_b, opts)
+  def bloom_merge(state_bin_a, state_bin_b, opts) do
+    bit_count = Keyword.fetch!(opts, :bit_count)
+    threshold = dirty_threshold(:bloom_merge, opts)
+
+    result =
+      if bit_count > threshold do
+        ExDataSketch.Nif.bloom_merge_dirty_nif(state_bin_a, state_bin_b)
+      else
+        ExDataSketch.Nif.bloom_merge_nif(state_bin_a, state_bin_b)
+      end
+
+    unwrap_ok!(result)
+  end
 
   @impl true
   def bloom_count(state_bin, opts), do: Pure.bloom_count(state_bin, opts)
@@ -373,7 +482,46 @@ defmodule ExDataSketch.Backend.Rust do
   def cuckoo_put(state_bin, hash64, opts), do: Pure.cuckoo_put(state_bin, hash64, opts)
 
   @impl true
-  def cuckoo_put_many(state_bin, hashes, opts), do: Pure.cuckoo_put_many(state_bin, hashes, opts)
+  def cuckoo_put_many(state_bin, [], _opts), do: {:ok, state_bin}
+
+  def cuckoo_put_many(state_bin, hashes, opts) do
+    fp_bits = Keyword.fetch!(opts, :fingerprint_size)
+    bucket_size = Keyword.fetch!(opts, :bucket_size)
+    bucket_count = Keyword.fetch!(opts, :bucket_count)
+    max_kicks = Keyword.get(opts, :max_kicks, 500)
+    seed = Keyword.get(opts, :seed, 0)
+    hashes_bin = encode_hashes(hashes)
+    threshold = dirty_threshold(:cuckoo_put_many, opts)
+
+    result =
+      if length(hashes) > threshold do
+        ExDataSketch.Nif.cuckoo_put_many_dirty_nif(
+          state_bin,
+          hashes_bin,
+          fp_bits,
+          bucket_size,
+          bucket_count,
+          max_kicks,
+          seed
+        )
+      else
+        ExDataSketch.Nif.cuckoo_put_many_nif(
+          state_bin,
+          hashes_bin,
+          fp_bits,
+          bucket_size,
+          bucket_count,
+          max_kicks,
+          seed
+        )
+      end
+
+    case result do
+      {:ok, bin} -> {:ok, bin}
+      {:error, "full", bin} -> {:error, :full, bin}
+      {:error, reason} -> raise "Rust NIF error: #{reason}"
+    end
+  end
 
   @impl true
   def cuckoo_member?(state_bin, hash64, opts), do: Pure.cuckoo_member?(state_bin, hash64, opts)
@@ -468,8 +616,23 @@ defmodule ExDataSketch.Backend.Rust do
   def quotient_put(state_bin, hash64, opts), do: Pure.quotient_put(state_bin, hash64, opts)
 
   @impl true
-  def quotient_put_many(state_bin, hashes, opts),
-    do: Pure.quotient_put_many(state_bin, hashes, opts)
+  def quotient_put_many(state_bin, [], _opts), do: state_bin
+
+  def quotient_put_many(state_bin, hashes, opts) do
+    q = Keyword.fetch!(opts, :q)
+    r = Keyword.fetch!(opts, :r)
+    hashes_bin = encode_hashes(hashes)
+    threshold = dirty_threshold(:quotient_put_many, opts)
+
+    result =
+      if length(hashes) > threshold do
+        ExDataSketch.Nif.quotient_put_many_dirty_nif(state_bin, hashes_bin, q, r)
+      else
+        ExDataSketch.Nif.quotient_put_many_nif(state_bin, hashes_bin, q, r)
+      end
+
+    unwrap_ok!(result)
+  end
 
   @impl true
   def quotient_member?(state_bin, hash64, opts),
@@ -479,7 +642,21 @@ defmodule ExDataSketch.Backend.Rust do
   def quotient_delete(state_bin, hash64, opts), do: Pure.quotient_delete(state_bin, hash64, opts)
 
   @impl true
-  def quotient_merge(state_a, state_b, opts), do: Pure.quotient_merge(state_a, state_b, opts)
+  def quotient_merge(state_a, state_b, opts) do
+    q = Keyword.fetch!(opts, :q)
+    r = Keyword.fetch!(opts, :r)
+    threshold = dirty_threshold(:quotient_merge, opts)
+    slot_count = Keyword.fetch!(opts, :slot_count)
+
+    result =
+      if slot_count > threshold do
+        ExDataSketch.Nif.quotient_merge_dirty_nif(state_a, state_b, q, r)
+      else
+        ExDataSketch.Nif.quotient_merge_nif(state_a, state_b, q, r)
+      end
+
+    unwrap_ok!(result)
+  end
 
   @impl true
   def quotient_count(state_bin, opts), do: Pure.quotient_count(state_bin, opts)
@@ -493,7 +670,23 @@ defmodule ExDataSketch.Backend.Rust do
   def cqf_put(state_bin, hash64, opts), do: Pure.cqf_put(state_bin, hash64, opts)
 
   @impl true
-  def cqf_put_many(state_bin, hashes, opts), do: Pure.cqf_put_many(state_bin, hashes, opts)
+  def cqf_put_many(state_bin, [], _opts), do: state_bin
+
+  def cqf_put_many(state_bin, hashes, opts) do
+    q = Keyword.fetch!(opts, :q)
+    r = Keyword.fetch!(opts, :r)
+    hashes_bin = encode_hashes(hashes)
+    threshold = dirty_threshold(:cqf_put_many, opts)
+
+    result =
+      if length(hashes) > threshold do
+        ExDataSketch.Nif.cqf_put_many_dirty_nif(state_bin, hashes_bin, q, r)
+      else
+        ExDataSketch.Nif.cqf_put_many_nif(state_bin, hashes_bin, q, r)
+      end
+
+    unwrap_ok!(result)
+  end
 
   @impl true
   def cqf_member?(state_bin, hash64, opts), do: Pure.cqf_member?(state_bin, hash64, opts)
@@ -506,7 +699,21 @@ defmodule ExDataSketch.Backend.Rust do
   def cqf_delete(state_bin, hash64, opts), do: Pure.cqf_delete(state_bin, hash64, opts)
 
   @impl true
-  def cqf_merge(state_a, state_b, opts), do: Pure.cqf_merge(state_a, state_b, opts)
+  def cqf_merge(state_a, state_b, opts) do
+    q = Keyword.fetch!(opts, :q)
+    r = Keyword.fetch!(opts, :r)
+    threshold = dirty_threshold(:cqf_merge, opts)
+    slot_count = Keyword.fetch!(opts, :slot_count)
+
+    result =
+      if slot_count > threshold do
+        ExDataSketch.Nif.cqf_merge_dirty_nif(state_a, state_b, q, r)
+      else
+        ExDataSketch.Nif.cqf_merge_nif(state_a, state_b, q, r)
+      end
+
+    unwrap_ok!(result)
+  end
 
   @impl true
   def cqf_count(state_bin, opts), do: Pure.cqf_count(state_bin, opts)
@@ -514,7 +721,27 @@ defmodule ExDataSketch.Backend.Rust do
   # -- XorFilter callbacks --
 
   @impl true
-  def xor_build(hashes, opts), do: Pure.xor_build(hashes, opts)
+  def xor_build([], opts), do: Pure.xor_build([], opts)
+
+  def xor_build(hashes, opts) do
+    fp_bits = Keyword.get(opts, :fingerprint_bits, 8)
+    seed = Keyword.get(opts, :seed, 0)
+    hashes_bin = encode_hashes(hashes)
+    threshold = dirty_threshold(:xor_build, opts)
+
+    result =
+      if length(hashes) > threshold do
+        ExDataSketch.Nif.xor_build_dirty_nif(hashes_bin, fp_bits, seed)
+      else
+        ExDataSketch.Nif.xor_build_nif(hashes_bin, fp_bits, seed)
+      end
+
+    case result do
+      {:ok, bin} -> {:ok, bin}
+      {:error, "build_failed"} -> {:error, :build_failed}
+      {:error, reason} -> raise "Rust NIF error: #{reason}"
+    end
+  end
 
   @impl true
   def xor_member?(state_bin, hash64, opts), do: Pure.xor_member?(state_bin, hash64, opts)
@@ -532,7 +759,30 @@ defmodule ExDataSketch.Backend.Rust do
     do: Pure.iblt_put(state_bin, key_hash, value_hash, opts)
 
   @impl true
-  def iblt_put_many(state_bin, pairs, opts), do: Pure.iblt_put_many(state_bin, pairs, opts)
+  def iblt_put_many(state_bin, [], _opts), do: state_bin
+
+  def iblt_put_many(state_bin, pairs, opts) do
+    hash_count = Keyword.fetch!(opts, :hash_count)
+    cell_count = Keyword.fetch!(opts, :cell_count)
+    seed = Keyword.fetch!(opts, :seed)
+    pairs_bin = encode_iblt_pairs(pairs)
+    threshold = dirty_threshold(:iblt_put_many, opts)
+
+    result =
+      if length(pairs) > threshold do
+        ExDataSketch.Nif.iblt_put_many_dirty_nif(
+          state_bin,
+          pairs_bin,
+          hash_count,
+          cell_count,
+          seed
+        )
+      else
+        ExDataSketch.Nif.iblt_put_many_nif(state_bin, pairs_bin, hash_count, cell_count, seed)
+      end
+
+    unwrap_ok!(result)
+  end
 
   @impl true
   def iblt_member?(state_bin, key_hash, opts), do: Pure.iblt_member?(state_bin, key_hash, opts)
@@ -551,7 +801,19 @@ defmodule ExDataSketch.Backend.Rust do
   def iblt_count(state_bin, opts), do: Pure.iblt_count(state_bin, opts)
 
   @impl true
-  def iblt_merge(state_a, state_b, opts), do: Pure.iblt_merge(state_a, state_b, opts)
+  def iblt_merge(state_a, state_b, opts) do
+    threshold = dirty_threshold(:iblt_merge, opts)
+    cell_count = Keyword.fetch!(opts, :cell_count)
+
+    result =
+      if cell_count > threshold do
+        ExDataSketch.Nif.iblt_merge_dirty_nif(state_a, state_b)
+      else
+        ExDataSketch.Nif.iblt_merge_nif(state_a, state_b)
+      end
+
+    unwrap_ok!(result)
+  end
 
   # -- Private helpers --
 
@@ -571,6 +833,14 @@ defmodule ExDataSketch.Backend.Rust do
     items
     |> Enum.map(fn item ->
       <<byte_size(item)::unsigned-little-32, item::binary>>
+    end)
+    |> IO.iodata_to_binary()
+  end
+
+  defp encode_iblt_pairs(pairs) do
+    pairs
+    |> Enum.map(fn {key_hash, value_hash} ->
+      <<key_hash::unsigned-little-64, value_hash::unsigned-little-64>>
     end)
     |> IO.iodata_to_binary()
   end

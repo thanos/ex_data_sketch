@@ -120,6 +120,12 @@ defmodule ExDataSketch.Backend do
   @doc "Return the maximum value in KLL state, or nil if empty."
   @callback kll_max(state_bin(), opts()) :: float() | nil
 
+  @doc "Return the CDF at the given split points from KLL state."
+  @callback kll_cdf(state_bin(), [float()], opts()) :: [float()] | nil
+
+  @doc "Return the PMF at the given split points from KLL state."
+  @callback kll_pmf(state_bin(), [float()], opts()) :: [float()] | nil
+
   # -- DDSketch callbacks --
 
   @doc "Create a new DDSketch state binary with the given options."
@@ -145,6 +151,70 @@ defmodule ExDataSketch.Backend do
 
   @doc "Return the maximum value in DDSketch state, or nil if empty."
   @callback ddsketch_max(state_bin(), opts()) :: float() | nil
+
+  @doc "Return the approximate normalized rank of a given value from DDSketch state."
+  @callback ddsketch_rank(state_bin(), float(), opts()) :: float() | nil
+
+  # -- REQ (Relative Error Quantiles) callbacks --
+
+  @doc "Create a new REQ state binary with the given options."
+  @callback req_new(opts()) :: state_bin()
+
+  @doc "Update REQ state with a single float64 value."
+  @callback req_update(state_bin(), float(), opts()) :: state_bin()
+
+  @doc "Update REQ state with a list of float64 values in a single pass."
+  @callback req_update_many(state_bin(), [float()], opts()) :: state_bin()
+
+  @doc "Merge two REQ state binaries."
+  @callback req_merge(state_bin(), state_bin(), opts()) :: state_bin()
+
+  @doc "Return the approximate value at a given normalized rank from REQ state."
+  @callback req_quantile(state_bin(), float(), opts()) :: float() | nil
+
+  @doc "Return the approximate normalized rank of a given value from REQ state."
+  @callback req_rank(state_bin(), float(), opts()) :: float() | nil
+
+  @doc "Return the CDF at the given split points from REQ state."
+  @callback req_cdf(state_bin(), [float()], opts()) :: [float()] | nil
+
+  @doc "Return the PMF at the given split points from REQ state."
+  @callback req_pmf(state_bin(), [float()], opts()) :: [float()] | nil
+
+  @doc "Return the count of items inserted into REQ state."
+  @callback req_count(state_bin(), opts()) :: non_neg_integer()
+
+  @doc "Return the minimum value in REQ state, or nil if empty."
+  @callback req_min(state_bin(), opts()) :: float() | nil
+
+  @doc "Return the maximum value in REQ state, or nil if empty."
+  @callback req_max(state_bin(), opts()) :: float() | nil
+
+  # -- MisraGries callbacks --
+
+  @doc "Create a new MisraGries state binary with the given options."
+  @callback mg_new(opts()) :: state_bin()
+
+  @doc "Update MisraGries state with a single item_bytes value."
+  @callback mg_update(state_bin(), binary(), opts()) :: state_bin()
+
+  @doc "Update MisraGries state with a list of item_bytes values in a single pass."
+  @callback mg_update_many(state_bin(), [binary()], opts()) :: state_bin()
+
+  @doc "Merge two MisraGries state binaries."
+  @callback mg_merge(state_bin(), state_bin(), opts()) :: state_bin()
+
+  @doc "Return the frequency estimate for a given item_bytes from MisraGries state."
+  @callback mg_estimate(state_bin(), binary(), opts()) :: non_neg_integer()
+
+  @doc "Return the top-k entries sorted by count descending from MisraGries state."
+  @callback mg_top_k(state_bin(), non_neg_integer(), opts()) :: [{binary(), non_neg_integer()}]
+
+  @doc "Return the total count of observed items from MisraGries state."
+  @callback mg_count(state_bin(), opts()) :: non_neg_integer()
+
+  @doc "Return the number of distinct tracked entries from MisraGries state."
+  @callback mg_entry_count(state_bin(), opts()) :: non_neg_integer()
 
   # -- Bloom callbacks --
 

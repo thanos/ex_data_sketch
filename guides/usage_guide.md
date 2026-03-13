@@ -283,6 +283,70 @@ chain = ExDataSketch.FilterChain.add_stage(chain, xor)
 | Reconciliation | no | no | no | no | no | yes |
 | Space efficiency | good | better at low FPR | moderate | moderate | best | depends on diff size |
 
+### REQ Options
+
+The Relative Error Quantile (REQ) sketch provides relative-error rank accuracy.
+Unlike KLL (rank error) or DDSketch (value-relative error), REQ concentrates
+accuracy near the extremes of the distribution.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `k` | integer | 12 | Accuracy parameter. Higher k means more accuracy but more memory |
+| `hra` | boolean | true | High Rank Accuracy. When true, accuracy is better at high ranks (p99, p999) |
+| `backend` | module | configured | Backend module |
+
+```elixir
+sketch = ExDataSketch.REQ.new(k: 12, hra: true)
+sketch = ExDataSketch.REQ.update_many(sketch, Enum.map(1..10_000, &(&1 * 1.0)))
+ExDataSketch.REQ.quantile(sketch, 0.99)
+ExDataSketch.REQ.rank(sketch, 9500.0)
+ExDataSketch.REQ.cdf(sketch, [1000.0, 5000.0, 9000.0])
+ExDataSketch.REQ.pmf(sketch, [1000.0, 5000.0, 9000.0])
+```
+
+### MisraGries Options
+
+The Misra-Gries algorithm provides deterministic heavy-hitter detection.
+Unlike FrequentItems (SpaceSaving), Misra-Gries makes no estimate when
+an item is not tracked, returning 0 instead.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `:k` | integer | 10 | Number of counters. Detects items with frequency > n/k. |
+| `:key_encoding` | atom/tuple | `:binary` | Key encoding policy: `:binary` (raw binaries), `:int` (signed 64-bit LE integers), or `{:term, :external}` (Erlang external term format). |
+| `:backend` | module | configured | Backend module. |
+
+```elixir
+# Default binary keys
+sketch = ExDataSketch.MisraGries.new(k: 10)
+sketch = ExDataSketch.MisraGries.update_many(sketch, items)
+ExDataSketch.MisraGries.estimate(sketch, "frequent_item")
+ExDataSketch.MisraGries.top_k(sketch, 10)
+
+# Integer keys
+sketch = ExDataSketch.MisraGries.new(k: 10, key_encoding: :int)
+sketch = ExDataSketch.MisraGries.update_many(sketch, [100, 200, 100, 300, 100])
+ExDataSketch.MisraGries.top_k(sketch, 3)
+# => [{100, 3}, {200, 1}, {300, 1}]
+
+# Arbitrary Erlang terms
+sketch = ExDataSketch.MisraGries.new(k: 10, key_encoding: {:term, :external})
+sketch = ExDataSketch.MisraGries.update_many(sketch, [{:user, 1}, {:user, 2}, {:user, 1}])
+ExDataSketch.MisraGries.estimate(sketch, {:user, 1})
+# => 2
+```
+
+### XXHash3
+
+ExDataSketch includes a Rust NIF implementation of XXHash3 for high-quality
+64-bit hashing. This is used internally by the membership filters and is
+also available directly.
+
+```elixir
+ExDataSketch.Hash.xxhash3_64("some data")
+ExDataSketch.Hash.xxhash3_64("some data", 42)
+```
+
 ### KLL vs DDSketch
 
 Both are quantile sketches available through `ExDataSketch.Quantiles`, but they

@@ -24,12 +24,14 @@ serialization, distribution, and persistence.
 | KLL Quantiles | Rank and quantile estimation | Implemented (Pure + Rust) |
 | DDSketch | Relative-error quantile estimation | Implemented (Pure + Rust) |
 | FrequentItems (SpaceSaving) | Heavy-hitter / top-k detection | Implemented (Pure + Rust) |
-| Bloom Filter | Probabilistic membership testing | Implemented (Pure) |
-| Cuckoo Filter | Membership testing with deletion | Implemented (Pure) |
-| Quotient Filter | Membership with deletion and merge | Implemented (Pure) |
-| CQF (Counting Quotient) | Multiset membership with counting | Implemented (Pure) |
-| XorFilter | Static immutable membership testing | Implemented (Pure) |
-| IBLT | Set reconciliation | Implemented (Pure) |
+| Bloom Filter | Probabilistic membership testing | Implemented (Pure + Rust) |
+| Cuckoo Filter | Membership testing with deletion | Implemented (Pure + Rust) |
+| Quotient Filter | Membership with deletion and merge | Implemented (Pure + Rust) |
+| CQF (Counting Quotient) | Multiset membership with counting | Implemented (Pure + Rust) |
+| XorFilter | Static immutable membership testing | Implemented (Pure + Rust) |
+| IBLT | Set reconciliation | Implemented (Pure + Rust) |
+| REQ Sketch | Relative-error quantile estimation | Implemented (Pure) |
+| Misra-Gries | Deterministic heavy-hitter detection | Implemented (Pure) |
 
 ### Capability Matrix
 
@@ -60,7 +62,7 @@ Add `ex_data_sketch` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:ex_data_sketch, "~> 0.5.0"}
+    {:ex_data_sketch, "~> 0.6.0"}
   ]
 end
 ```
@@ -148,7 +150,7 @@ mix docs
 | v0.3.0 | FrequentItems (SpaceSaving) | Released |
 | v0.4.0 | Bloom filter (membership testing) | Released |
 | v0.5.0 | Advanced membership filters (Cuckoo, Quotient, CQF, XorFilter, IBLT, FilterChain) | Released |
-| v0.6.0 | Advanced Quantile Support (KLL / REQ), Include XXHash3 Integration | Planned |
+| v0.6.0 | REQ sketch, Misra-Gries, XXHash3, Rust NIF parity for all membership filters | Released |
 | v0.7.0 | ULL (UltraLogLog) - Rust NIF Parity | Planned |
 | v0.8.0 | Massive Static Data & Industry Interop  - Binary Fuse Filters, Ribbon Filter Implementation. Apache DataSketches Interop. | Planned |
 | v0.9.0 | dequantized HHL and Sphinx (Succinct Perfect Hash Index) | Planned |

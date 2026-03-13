@@ -62,5 +62,53 @@ defmodule ExDataSketch.QuantilesTest do
       sketch = Quantiles.new() |> Quantiles.update(42.0)
       assert Quantiles.max_value(sketch) == 42.0
     end
+
+    test "cdf/2 delegates to KLL" do
+      sketch = Quantiles.new() |> Quantiles.update_many(1..100)
+      cdf = Quantiles.cdf(sketch, [25.0, 75.0])
+      assert length(cdf) == 2
+    end
+
+    test "pmf/2 delegates to KLL" do
+      sketch = Quantiles.new() |> Quantiles.update_many(1..100)
+      pmf = Quantiles.pmf(sketch, [50.0])
+      assert length(pmf) == 2
+    end
+
+    test "cdf/2 delegates to REQ" do
+      sketch = Quantiles.new(type: :req) |> Quantiles.update_many(1..100)
+      cdf = Quantiles.cdf(sketch, [25.0, 75.0])
+      assert length(cdf) == 2
+    end
+
+    test "pmf/2 delegates to REQ" do
+      sketch = Quantiles.new(type: :req) |> Quantiles.update_many(1..100)
+      pmf = Quantiles.pmf(sketch, [50.0])
+      assert length(pmf) == 2
+    end
+
+    test "rank/2 delegates to DDSketch" do
+      sketch = Quantiles.new(type: :ddsketch) |> Quantiles.update_many(1..100)
+      r = Quantiles.rank(sketch, 50.0)
+      assert is_float(r)
+    end
+  end
+
+  describe "DDSketch unsupported operations" do
+    test "cdf/2 raises ArgumentError for DDSketch" do
+      sketch = Quantiles.new(type: :ddsketch) |> Quantiles.update(1.0)
+
+      assert_raise ArgumentError, ~r/cdf\/2 is not supported for DDSketch/, fn ->
+        Quantiles.cdf(sketch, [0.5])
+      end
+    end
+
+    test "pmf/2 raises ArgumentError for DDSketch" do
+      sketch = Quantiles.new(type: :ddsketch) |> Quantiles.update(1.0)
+
+      assert_raise ArgumentError, ~r/pmf\/2 is not supported for DDSketch/, fn ->
+        Quantiles.pmf(sketch, [0.5])
+      end
+    end
   end
 end

@@ -531,4 +531,51 @@ defmodule ExDataSketch.DDSketchTest do
       assert DDSketch.min_value(sketch) == 1.0
     end
   end
+
+  describe "rank/2" do
+    test "returns nil for empty sketch" do
+      sketch = DDSketch.new()
+      assert DDSketch.rank(sketch, 50.0) == nil
+    end
+
+    test "returns 1.0 for value above max" do
+      sketch = DDSketch.new() |> DDSketch.update_many(1..100)
+      assert DDSketch.rank(sketch, 1000.0) == 1.0
+    end
+
+    test "returns approximate rank for uniform data" do
+      sketch = DDSketch.new(alpha: 0.01) |> DDSketch.update_many(1..1000)
+      r = DDSketch.rank(sketch, 500.0)
+      assert is_float(r)
+      assert r > 0.3 and r < 0.7, "rank of 500 in 1..1000 should be ~0.5, got #{r}"
+    end
+
+    test "rank is monotonically non-decreasing" do
+      sketch = DDSketch.new() |> DDSketch.update_many(1..100)
+      values = [10.0, 25.0, 50.0, 75.0, 90.0]
+      ranks = Enum.map(values, fn v -> DDSketch.rank(sketch, v) end)
+      pairs = Enum.zip(Enum.drop(ranks, -1), Enum.drop(ranks, 1))
+      Enum.each(pairs, fn {a, b} -> assert a <= b end)
+    end
+
+    test "rank of zero in mixed sketch" do
+      sketch = DDSketch.new() |> DDSketch.update_many([0.0, 0.0, 10.0, 20.0])
+      r = DDSketch.rank(sketch, 0.0)
+      # 2 zeros out of 4 items = rank 0.5
+      assert r == 0.5
+    end
+
+    test "accepts integer values" do
+      sketch = DDSketch.new() |> DDSketch.update_many(1..100)
+      r = DDSketch.rank(sketch, 50)
+      assert is_float(r)
+    end
+
+    test "dispatches through Quantiles facade" do
+      alias ExDataSketch.Quantiles
+      sketch = Quantiles.new(type: :ddsketch) |> Quantiles.update_many(1..100)
+      r = Quantiles.rank(sketch, 50.0)
+      assert is_float(r)
+    end
+  end
 end

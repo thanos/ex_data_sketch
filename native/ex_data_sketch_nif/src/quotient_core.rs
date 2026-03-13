@@ -1,0 +1,327 @@
+/// Shared quotient filter slot arithmetic used by both Quotient and CQF NIFs.
+
+pub const QOT_OCC: u8 = 1;
+pub const QOT_CON: u8 = 2;
+pub const QOT_SHI: u8 = 4;
+
+pub type Slot = (u8, u64); // (meta_bits, remainder)
+
+pub fn qot_split_hash(hash64: u64, q: u8, r: u8) -> (u32, u64) {
+    let quotient = (hash64 >> (64 - q as u32)) & ((1u64 << q) - 1);
+    let remainder = (hash64 >> (64 - q as u32 - r as u32)) & ((1u64 << r) - 1);
+    (quotient as u32, remainder)
+}
+
+#[inline]
+pub fn meta(slots: &[Slot], i: u32) -> u8 {
+    slots[i as usize].0
+}
+
+#[inline]
+pub fn rem_val(slots: &[Slot], i: u32) -> u64 {
+    slots[i as usize].1
+}
+
+#[inline]
+pub fn occ(slots: &[Slot], i: u32) -> bool {
+    slots[i as usize].0 & QOT_OCC != 0
+}
+
+#[inline]
+pub fn con(slots: &[Slot], i: u32) -> bool {
+    slots[i as usize].0 & QOT_CON != 0
+}
+
+#[inline]
+pub fn shi(slots: &[Slot], i: u32) -> bool {
+    slots[i as usize].0 & QOT_SHI != 0
+}
+
+#[inline]
+pub fn nxt(i: u32, sc: u32) -> u32 {
+    (i + 1) % sc
+}
+
+#[inline]
+pub fn prv(i: u32, sc: u32) -> u32 {
+    (i + sc - 1) % sc
+}
+
+pub fn set_meta_bit(slots: &mut [Slot], i: u32, bit: u8) {
+    slots[i as usize].0 |= bit;
+}
+
+pub fn decode_slots(body: &[u8], slot_bytes: usize, slot_count: u32) -> Vec<Slot> {
+    let mut slots = Vec::with_capacity(slot_count as usize);
+    for i in 0..slot_count as usize {
+        let off = i * slot_bytes;
+        let mut raw: u64 = 0;
+        for j in 0..slot_bytes {
+            raw |= (body[off + j] as u64) << (j * 8);
+        }
+        let m = (raw & 0x7) as u8;
+        let r = raw >> 3;
+        slots.push((m, r));
+    }
+    slots
+}
+
+pub fn encode_slots(slots: &[Slot], slot_bytes: usize, slot_count: u32) -> Vec<u8> {
+    let mut body = Vec::with_capacity(slot_count as usize * slot_bytes);
+    for i in 0..slot_count as usize {
+        let (m, r) = slots[i];
+        let raw = (m as u64 & 0x7) | (r << 3);
+        for j in 0..slot_bytes {
+            body.push(((raw >> (j * 8)) & 0xFF) as u8);
+        }
+    }
+    body
+}
+
+pub fn find_run_start(slots: &[Slot], fq: u32, sc: u32) -> u32 {
+    if shi(slots, fq) {
+        let cs = walk_back(slots, fq, sc);
+        let n = count_occupied_range(slots, cs, fq, sc);
+        skip_runs_fwd(slots, cs, n, sc)
+    } else {
+        fq
+    }
+}
+
+fn walk_back(slots: &[Slot], i: u32, sc: u32) -> u32 {
+    let mut pos = prv(i, sc);
+    while shi(slots, pos) {
+        pos = prv(pos, sc);
+    }
+    pos
+}
+
+fn count_occupied_range(slots: &[Slot], from: u32, to: u32, sc: u32) -> u32 {
+    let mut count = 0;
+    let mut pos = from;
+    while pos != to {
+        if occ(slots, pos) {
+            count += 1;
+        }
+        pos = nxt(pos, sc);
+    }
+    count
+}
+
+fn skip_runs_fwd(slots: &[Slot], pos: u32, n: u32, sc: u32) -> u32 {
+    let mut p = pos;
+    for _ in 0..n {
+        p = nxt(p, sc);
+        p = skip_continuations(slots, p, sc);
+    }
+    p
+}
+
+fn skip_continuations(slots: &[Slot], pos: u32, sc: u32) -> u32 {
+    let mut p = pos;
+    while con(slots, p) {
+        p = nxt(p, sc);
+    }
+    p
+}
+
+pub fn lookup(slots: &[Slot], fq: u32, fr: u64, sc: u32) -> bool {
+    if !occ(slots, fq) {
+        return false;
+    }
+    let rs = find_run_start(slots, fq, sc);
+    scan_run(slots, rs, fr, sc)
+}
+
+fn scan_run(slots: &[Slot], pos: u32, fr: u64, sc: u32) -> bool {
+    let mut p = pos;
+    loop {
+        let r = rem_val(slots, p);
+        if r == fr {
+            return true;
+        }
+        if r > fr {
+            return false;
+        }
+        let n = nxt(p, sc);
+        if con(slots, n) {
+            p = n;
+        } else {
+            return false;
+        }
+    }
+}
+
+pub fn do_insert(slots: &mut [Slot], fq: u32, fr: u64, sc: u32) {
+    let was_occ = occ(slots, fq);
+    let had_entry = meta(slots, fq) != 0;
+
+    set_meta_bit(slots, fq, QOT_OCC);
+
+    if !was_occ && !had_entry {
+        // Fast path: canonical slot was completely empty
+        slots[fq as usize] = (QOT_OCC, fr);
+    } else if was_occ {
+        let run_start = find_run_start(slots, fq, sc);
+        insert_into_run(slots, fq, run_start, fr, sc);
+    } else {
+        // New run: insert first entry at run_start
+        let run_start = find_run_start(slots, fq, sc);
+        let m = if run_start == fq { 0 } else { QOT_SHI };
+        shift_right(slots, run_start, m, fr, sc);
+    }
+}
+
+fn insert_into_run(slots: &mut [Slot], fq: u32, run_start: u32, fr: u64, sc: u32) {
+    let (pos, at_start) = sorted_pos(slots, run_start, fr, sc);
+
+    if at_start {
+        set_meta_bit(slots, run_start, QOT_CON);
+        let m = if pos == fq { 0 } else { QOT_SHI };
+        shift_right(slots, pos, m, fr, sc);
+    } else {
+        let m = QOT_CON | if pos == fq { 0 } else { QOT_SHI };
+        shift_right(slots, pos, m, fr, sc);
+    }
+}
+
+fn sorted_pos(slots: &[Slot], run_start: u32, fr: u64, sc: u32) -> (u32, bool) {
+    if fr < rem_val(slots, run_start) {
+        return (run_start, true);
+    }
+    let mut pos = run_start;
+    loop {
+        let n = nxt(pos, sc);
+        if con(slots, n) {
+            if fr < rem_val(slots, n) {
+                return (n, false);
+            }
+            pos = n;
+        } else {
+            return (n, false);
+        }
+    }
+}
+
+pub fn shift_right(slots: &mut [Slot], pos: u32, new_meta: u8, new_rem: u64, sc: u32) {
+    let (old_meta, old_rem) = slots[pos as usize];
+    let occ_here = old_meta & QOT_OCC;
+    slots[pos as usize] = (new_meta | occ_here, new_rem);
+
+    if old_meta == 0 {
+        return;
+    }
+
+    // Iterative shift chain, bounded to sc steps to prevent infinite loops
+    // on full/corrupt filters.
+    let mut cur_meta = (old_meta & !QOT_OCC) | QOT_SHI;
+    let mut cur_rem = old_rem;
+    let mut p = nxt(pos, sc);
+
+    for _ in 0..sc {
+        let (om, or) = slots[p as usize];
+        let oh = om & QOT_OCC;
+        slots[p as usize] = (cur_meta | oh, cur_rem);
+
+        if om == 0 {
+            return;
+        }
+
+        cur_meta = (om & !QOT_OCC) | QOT_SHI;
+        cur_rem = or;
+        p = nxt(p, sc);
+    }
+}
+
+pub fn extract_all(slots: &[Slot], sc: u32) -> Vec<(u32, u64)> {
+    let mut fps: Vec<(u32, u64)> = Vec::new();
+    let mut cur_q: Option<u32> = None;
+
+    for i in 0..sc {
+        let m = meta(slots, i);
+        if m == 0 {
+            cur_q = None;
+        } else {
+            let q = resolve_quotient(slots, i, m, cur_q, sc);
+            fps.push((q, rem_val(slots, i)));
+            cur_q = Some(q);
+        }
+    }
+
+    fps.sort();
+    fps.dedup();
+    fps
+}
+
+fn resolve_quotient(slots: &[Slot], i: u32, m: u8, cur_q: Option<u32>, sc: u32) -> u32 {
+    let is_con = m & QOT_CON != 0;
+    let is_shi = m & QOT_SHI != 0;
+
+    if is_con {
+        cur_q.unwrap_or(i)
+    } else if !is_shi {
+        i
+    } else {
+        trace_quotient_for(slots, i, sc)
+    }
+}
+
+fn trace_quotient_for(slots: &[Slot], slot_idx: u32, sc: u32) -> u32 {
+    // Walk back to the cluster start (iterative)
+    let mut cs = slot_idx;
+    while shi(slots, cs) {
+        cs = prv(cs, sc);
+    }
+
+    // Trace forward from cluster start to slot_idx, tracking the current quotient
+    let mut pos = cs;
+    let mut cur_q = cs;
+    while pos != slot_idx {
+        let n = nxt(pos, sc);
+        if !con(slots, n) {
+            cur_q = find_occ(slots, nxt(cur_q, sc), sc);
+        }
+        pos = n;
+    }
+    cur_q
+}
+
+fn find_occ(slots: &[Slot], start: u32, sc: u32) -> u32 {
+    let mut pos = start;
+    for _ in 0..sc {
+        if occ(slots, pos) {
+            return pos;
+        }
+        pos = nxt(pos, sc);
+    }
+    0
+}
+
+// Find the slot index of fr in fq's run, or None.
+#[allow(dead_code)]
+pub fn find_slot(slots: &[Slot], fq: u32, fr: u64, sc: u32) -> Option<u32> {
+    if !occ(slots, fq) {
+        return None;
+    }
+    let rs = find_run_start(slots, fq, sc);
+    scan_run_idx(slots, rs, fr, sc)
+}
+
+fn scan_run_idx(slots: &[Slot], pos: u32, fr: u64, sc: u32) -> Option<u32> {
+    let mut p = pos;
+    loop {
+        let r = rem_val(slots, p);
+        if r == fr {
+            return Some(p);
+        }
+        if r > fr {
+            return None;
+        }
+        let n = nxt(p, sc);
+        if con(slots, n) {
+            p = n;
+        } else {
+            return None;
+        }
+    }
+}
