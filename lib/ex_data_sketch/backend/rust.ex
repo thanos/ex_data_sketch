@@ -69,7 +69,9 @@ defmodule ExDataSketch.Backend.Rust do
     xor_build: 10_000,
     iblt_put_many: 10_000,
     iblt_merge: 50_000,
-    ull_update_many: 10_000
+    ull_update_many: 10_000,
+    ull_merge: 50_000,
+    ull_estimate: 50_000
   }
 
   @doc """
@@ -844,13 +846,33 @@ defmodule ExDataSketch.Backend.Rust do
   @impl true
   def ull_merge(a_bin, b_bin, opts) do
     p = Keyword.fetch!(opts, :p)
-    unwrap_ok!(ExDataSketch.Nif.ull_merge_nif(a_bin, b_bin, p))
+    m = Bitwise.bsl(1, p)
+    threshold = dirty_threshold(:ull_merge, opts)
+
+    result =
+      if m > threshold do
+        ExDataSketch.Nif.ull_merge_dirty_nif(a_bin, b_bin, p)
+      else
+        ExDataSketch.Nif.ull_merge_nif(a_bin, b_bin, p)
+      end
+
+    unwrap_ok!(result)
   end
 
   @impl true
   def ull_estimate(state_bin, opts) do
     p = Keyword.fetch!(opts, :p)
-    unwrap_ok!(ExDataSketch.Nif.ull_estimate_nif(state_bin, p))
+    m = Bitwise.bsl(1, p)
+    threshold = dirty_threshold(:ull_estimate, opts)
+
+    result =
+      if m > threshold do
+        ExDataSketch.Nif.ull_estimate_dirty_nif(state_bin, p)
+      else
+        ExDataSketch.Nif.ull_estimate_nif(state_bin, p)
+      end
+
+    unwrap_ok!(result)
   end
 
   # -- Private helpers --
