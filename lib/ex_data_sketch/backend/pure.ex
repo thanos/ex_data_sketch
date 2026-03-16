@@ -4792,18 +4792,20 @@ defmodule ExDataSketch.Backend.Pure do
   end
 
   # Count how many registers have each value 0..255.
-  # Returns {counts_tuple, q_max} where counts_tuple is a 256-element tuple.
+  # Returns {counters_ref, q_max} where counters_ref is a :counters reference
+  # with 256 slots (1-indexed; register value v is at slot v+1).
+  # Uses :counters for O(1) mutable increment, avoiding per-byte tuple copies.
   defp ull_register_counts(registers, _m) do
-    counts = :erlang.make_tuple(256, 0)
-    ull_register_counts_loop(registers, counts, 0)
+    counts = :counters.new(256, [:atomics])
+    q_max = ull_register_counts_loop(registers, counts, 0)
+    {counts, q_max}
   end
 
-  defp ull_register_counts_loop(<<>>, counts, q_max), do: {counts, q_max}
+  defp ull_register_counts_loop(<<>>, _counts, q_max), do: q_max
 
   defp ull_register_counts_loop(<<val::unsigned-8, rest::binary>>, counts, q_max) do
-    counts = put_elem(counts, val, elem(counts, val) + 1)
-    q_max = max(q_max, val)
-    ull_register_counts_loop(rest, counts, q_max)
+    :counters.add(counts, val + 1, 1)
+    ull_register_counts_loop(rest, counts, max(q_max, val))
   end
 
   # FGRA estimator (Ertl 2017 "new HLL" estimator applied to ULL register values).
@@ -4819,8 +4821,8 @@ defmodule ExDataSketch.Backend.Pure do
     m_f = m * 1.0
     alpha_inf = 1.0 / (2.0 * :math.log(2.0))
 
-    c0 = elem(counts, 0) * 1.0
-    c_q = elem(counts, q_max) * 1.0
+    c0 = :counters.get(counts, 0 + 1) * 1.0
+    c_q = :counters.get(counts, q_max + 1) * 1.0
 
     # Start with tau term (handles the boundary at q_max)
     z = m_f * ull_tau(1.0 - c_q / m_f)
@@ -4842,7 +4844,7 @@ defmodule ExDataSketch.Backend.Pure do
   defp ull_horner_loop(z, _counts, k) when k < 1, do: z
 
   defp ull_horner_loop(z, counts, k) do
-    c_k = elem(counts, k) * 1.0
+    c_k = :counters.get(counts, k + 1) * 1.0
     z = (z + c_k) * 0.5
     ull_horner_loop(z, counts, k - 1)
   end
