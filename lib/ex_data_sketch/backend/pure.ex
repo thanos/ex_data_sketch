@@ -4702,23 +4702,28 @@ defmodule ExDataSketch.Backend.Pure do
 
     <<header::binary-size(@ull_header_size), registers::binary-size(^m)>> = state_bin
 
-    reg_tuple = registers |> :binary.bin_to_list() |> List.to_tuple()
-
-    reg_tuple =
-      List.foldl(hashes, reg_tuple, fn hash64, acc ->
+    # Pre-aggregate hashes into a map of {bucket => max_reg_value}.
+    # This avoids materializing the full register array as a tuple,
+    # which would OOM at high precision values (e.g. p=26 => 67M registers).
+    updates =
+      List.foldl(hashes, %{}, fn hash64, acc ->
         bucket = hash64 >>> (64 - p)
         reg_value = ull_register_value(hash64, p)
-        old_val = elem(acc, bucket)
-
-        if reg_value > old_val do
-          put_elem(acc, bucket, reg_value)
-        else
-          acc
-        end
+        Map.update(acc, bucket, reg_value, &max(&1, reg_value))
       end)
 
-    new_registers = reg_tuple |> Tuple.to_list() |> :erlang.list_to_binary()
-    <<header::binary, new_registers::binary>>
+    sorted_updates = updates |> Map.to_list() |> List.keysort(0)
+    new_registers = ull_splice_updates(registers, sorted_updates, 0)
+    <<header::binary, IO.iodata_to_binary(new_registers)::binary>>
+  end
+
+  defp ull_splice_updates(rest, [], _offset), do: [rest]
+
+  defp ull_splice_updates(registers, [{bucket, new_val} | tail], offset) do
+    skip = bucket - offset
+    <<before::binary-size(skip), old_val::unsigned-8, after_bytes::binary>> = registers
+    val = max(old_val, new_val)
+    [before, val | ull_splice_updates(after_bytes, tail, bucket + 1)]
   end
 
   @impl true
@@ -4786,18 +4791,19 @@ defmodule ExDataSketch.Backend.Pure do
     min(value, 255)
   end
 
-  # Count how many registers have each value 0..q_max.
-  # Returns {counts_map, q_max}.
-  defp ull_register_counts(registers, m) do
-    ull_register_counts_loop(registers, m, %{}, 0)
+  # Count how many registers have each value 0..255.
+  # Returns {counts_tuple, q_max} where counts_tuple is a 256-element tuple.
+  defp ull_register_counts(registers, _m) do
+    counts = :erlang.make_tuple(256, 0)
+    ull_register_counts_loop(registers, counts, 0)
   end
 
-  defp ull_register_counts_loop(<<>>, _m, counts, q_max), do: {counts, q_max}
+  defp ull_register_counts_loop(<<>>, counts, q_max), do: {counts, q_max}
 
-  defp ull_register_counts_loop(<<val::unsigned-8, rest::binary>>, m, counts, q_max) do
-    counts = Map.update(counts, val, 1, &(&1 + 1))
+  defp ull_register_counts_loop(<<val::unsigned-8, rest::binary>>, counts, q_max) do
+    counts = put_elem(counts, val, elem(counts, val) + 1)
     q_max = max(q_max, val)
-    ull_register_counts_loop(rest, m, counts, q_max)
+    ull_register_counts_loop(rest, counts, q_max)
   end
 
   # FGRA estimator (Ertl 2017 "new HLL" estimator applied to ULL register values).
@@ -4813,8 +4819,8 @@ defmodule ExDataSketch.Backend.Pure do
     m_f = m * 1.0
     alpha_inf = 1.0 / (2.0 * :math.log(2.0))
 
-    c0 = Map.get(counts, 0, 0) * 1.0
-    c_q = Map.get(counts, q_max, 0) * 1.0
+    c0 = elem(counts, 0) * 1.0
+    c_q = elem(counts, q_max) * 1.0
 
     # Start with tau term (handles the boundary at q_max)
     z = m_f * ull_tau(1.0 - c_q / m_f)
@@ -4836,7 +4842,7 @@ defmodule ExDataSketch.Backend.Pure do
   defp ull_horner_loop(z, _counts, k) when k < 1, do: z
 
   defp ull_horner_loop(z, counts, k) do
-    c_k = Map.get(counts, k, 0) * 1.0
+    c_k = elem(counts, k) * 1.0
     z = (z + c_k) * 0.5
     ull_horner_loop(z, counts, k - 1)
   end
