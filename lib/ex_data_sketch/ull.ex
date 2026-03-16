@@ -244,7 +244,7 @@ defmodule ExDataSketch.ULL do
     with {:ok, decoded} <- Codec.decode(binary),
          :ok <- validate_sketch_id(decoded.sketch_id),
          {:ok, opts} <- decode_params(decoded.params),
-         :ok <- validate_state(decoded.state) do
+         :ok <- validate_state(decoded.state, opts) do
       backend = Backend.default()
 
       {:ok,
@@ -359,9 +359,46 @@ defmodule ExDataSketch.ULL do
     {:error, Errors.DeserializationError.exception(reason: "invalid ULL params binary")}
   end
 
-  defp validate_state(<<"ULL1", _rest::binary>>), do: :ok
+  defp validate_state(
+         <<"ULL1", version::unsigned-8, state_p::unsigned-8, flags::little-unsigned-16,
+           _registers::binary>> = state,
+         opts
+       ) do
+    p = Keyword.fetch!(opts, :p)
+    expected_size = 8 + Bitwise.bsl(1, p)
 
-  defp validate_state(_other) do
+    cond do
+      version != 1 ->
+        {:error,
+         Errors.DeserializationError.exception(
+           reason: "unsupported ULL state version #{version}, expected 1"
+         )}
+
+      flags != 0 ->
+        {:error,
+         Errors.DeserializationError.exception(
+           reason: "unsupported ULL state flags #{flags}, expected 0"
+         )}
+
+      state_p != p ->
+        {:error,
+         Errors.DeserializationError.exception(
+           reason: "ULL state precision #{state_p} does not match params precision #{p}"
+         )}
+
+      byte_size(state) != expected_size ->
+        {:error,
+         Errors.DeserializationError.exception(
+           reason:
+             "ULL state size #{byte_size(state)} does not match expected #{expected_size} for p=#{p}"
+         )}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_state(_other, _opts) do
     {:error,
      Errors.DeserializationError.exception(
        reason: "invalid ULL state header, expected ULL1 magic"
