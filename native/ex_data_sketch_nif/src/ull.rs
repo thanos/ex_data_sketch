@@ -3,6 +3,15 @@ use rustler::{Binary, Env, Term};
 use crate::error;
 
 const ULL_HEADER_SIZE: usize = 8;
+const ULL_MIN_P: u8 = 4;
+const ULL_MAX_P: u8 = 26;
+
+fn validate_p(env: Env, p: u8) -> Result<usize, Term> {
+    if p < ULL_MIN_P || p > ULL_MAX_P {
+        return Err(error::error_string(env, "invalid ULL precision p, must be 4..26"));
+    }
+    Ok(1usize << p)
+}
 
 /// Count leading zeros in the top `n` bits of `value`.
 /// Matches Pure Elixir's `count_leading_zeros(value, n)` exactly.
@@ -84,7 +93,10 @@ fn tau(x: f64) -> f64 {
 }
 
 fn ull_update_many_impl<'a>(env: Env<'a>, state_bin: Binary, hashes_bin: Binary, p: u8) -> Term<'a> {
-    let m: usize = 1 << p;
+    let m = match validate_p(env, p) {
+        Ok(m) => m,
+        Err(term) => return term,
+    };
     let expected_len = ULL_HEADER_SIZE + m;
 
     if state_bin.len() != expected_len {
@@ -113,7 +125,10 @@ fn ull_update_many_impl<'a>(env: Env<'a>, state_bin: Binary, hashes_bin: Binary,
 }
 
 fn ull_merge_impl<'a>(env: Env<'a>, a_bin: Binary, b_bin: Binary, p: u8) -> Term<'a> {
-    let m: usize = 1 << p;
+    let m = match validate_p(env, p) {
+        Ok(m) => m,
+        Err(term) => return term,
+    };
     let expected_len = ULL_HEADER_SIZE + m;
 
     if a_bin.len() != expected_len || b_bin.len() != expected_len {
@@ -134,7 +149,10 @@ fn ull_merge_impl<'a>(env: Env<'a>, a_bin: Binary, b_bin: Binary, p: u8) -> Term
 }
 
 fn ull_estimate_impl<'a>(env: Env<'a>, state_bin: Binary, p: u8) -> Term<'a> {
-    let m: usize = 1 << p;
+    let m = match validate_p(env, p) {
+        Ok(m) => m,
+        Err(term) => return term,
+    };
     let expected_len = ULL_HEADER_SIZE + m;
 
     if state_bin.len() != expected_len {
