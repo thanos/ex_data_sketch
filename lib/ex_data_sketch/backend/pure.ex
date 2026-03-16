@@ -4885,7 +4885,8 @@ defmodule ExDataSketch.Backend.Pure do
   defp ull_tau_loop(x, z, y) do
     x2 = :math.sqrt(x)
     y2 = y * 0.5
-    z2 = z - :math.pow(1.0 - x2, 2) * y2
+    t = 1.0 - x2
+    z2 = z - t * t * y2
 
     if z2 == z do
       z / 3.0
