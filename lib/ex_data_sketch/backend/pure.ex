@@ -4721,7 +4721,7 @@ defmodule ExDataSketch.Backend.Pure do
 
   defp ull_splice_updates(registers, [{bucket, new_val} | tail], offset) do
     skip = bucket - offset
-    <<before::binary-size(skip), old_val::unsigned-8, after_bytes::binary>> = registers
+    <<before::binary-size(^skip), old_val::unsigned-8, after_bytes::binary>> = registers
     val = max(old_val, new_val)
     [before, val | ull_splice_updates(after_bytes, tail, bucket + 1)]
   end
