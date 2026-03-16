@@ -21,6 +21,7 @@ defmodule ExDataSketch.ParityTest do
     KLL,
     Quotient,
     Theta,
+    ULL,
     XorFilter
   }
 
@@ -509,6 +510,31 @@ defmodule ExDataSketch.ParityTest do
         assert IBLT.member?(pure, item) == IBLT.member?(rust, item),
                "IBLT member? parity mismatch for #{item}"
       end
+    end
+  end
+
+  describe "ULL parity" do
+    @describetag :rust_nif
+
+    test "update_many produces identical serialization and estimate" do
+      pure = ULL.new(backend: Pure) |> ULL.update_many(@items_1000)
+      rust = ULL.new(backend: Rust) |> ULL.update_many(@items_1000)
+
+      assert ULL.serialize(pure) == ULL.serialize(rust)
+      assert_in_delta ULL.estimate(pure), ULL.estimate(rust), 1.0e-9
+    end
+
+    test "merge produces identical serialization and estimate" do
+      pure_a = ULL.new(backend: Pure) |> ULL.update_many(@items_a)
+      pure_b = ULL.new(backend: Pure) |> ULL.update_many(@items_b)
+      pure_merged = ULL.merge(pure_a, pure_b)
+
+      rust_a = ULL.new(backend: Rust) |> ULL.update_many(@items_a)
+      rust_b = ULL.new(backend: Rust) |> ULL.update_many(@items_b)
+      rust_merged = ULL.merge(rust_a, rust_b)
+
+      assert ULL.serialize(pure_merged) == ULL.serialize(rust_merged)
+      assert_in_delta ULL.estimate(pure_merged), ULL.estimate(rust_merged), 1.0e-9
     end
   end
 end

@@ -6,7 +6,7 @@ defmodule ExDataSketch.MergeLawsTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
-  alias ExDataSketch.{Bloom, CMS, DDSketch, FrequentItems, HLL, KLL, MisraGries, REQ, Theta}
+  alias ExDataSketch.{Bloom, CMS, DDSketch, FrequentItems, HLL, KLL, MisraGries, REQ, Theta, ULL}
 
   @max_runs 50
   @hll_opts [p: 10]
@@ -18,6 +18,7 @@ defmodule ExDataSketch.MergeLawsTest do
   @bloom_opts [capacity: 1000]
   @req_opts [k: 12, hra: true]
   @mg_opts [k: 10]
+  @ull_opts [p: 10]
 
   defp string_list(max_length \\ 20) do
     list_of(string(:alphanumeric, min_length: 1), min_length: 1, max_length: max_length)
@@ -574,6 +575,71 @@ defmodule ExDataSketch.MergeLawsTest do
 
         assert MisraGries.count(merged) ==
                  MisraGries.count(sa) + MisraGries.count(sb)
+      end
+    end
+  end
+
+  describe "ULL merge laws" do
+    property "associativity" do
+      check all(
+              a <- string_list(10),
+              b <- string_list(10),
+              c <- string_list(10),
+              max_runs: @max_runs
+            ) do
+        sa = ULL.from_enumerable(a, @ull_opts)
+        sb = ULL.from_enumerable(b, @ull_opts)
+        sc = ULL.from_enumerable(c, @ull_opts)
+
+        left = ULL.merge(sa, ULL.merge(sb, sc))
+        right = ULL.merge(ULL.merge(sa, sb), sc)
+
+        assert left.state == right.state
+      end
+    end
+
+    property "commutativity" do
+      check all(
+              a <- string_list(),
+              b <- string_list(),
+              max_runs: @max_runs
+            ) do
+        sa = ULL.from_enumerable(a, @ull_opts)
+        sb = ULL.from_enumerable(b, @ull_opts)
+
+        assert ULL.merge(sa, sb).state == ULL.merge(sb, sa).state
+      end
+    end
+
+    property "identity: merge with empty" do
+      check all(items <- string_list(), max_runs: @max_runs) do
+        sketch = ULL.from_enumerable(items, @ull_opts)
+        empty = ULL.new(@ull_opts)
+
+        assert ULL.merge(sketch, empty).state == sketch.state
+        assert ULL.merge(empty, sketch).state == sketch.state
+      end
+    end
+
+    property "chunking equivalence" do
+      check all(
+              chunk_a <- string_list(15),
+              chunk_b <- string_list(15),
+              max_runs: @max_runs
+            ) do
+        all_items = chunk_a ++ chunk_b
+        whole = ULL.from_enumerable(all_items, @ull_opts)
+
+        merged =
+          ULL.merge(
+            ULL.from_enumerable(chunk_a, @ull_opts),
+            ULL.from_enumerable(chunk_b, @ull_opts)
+          )
+
+        whole_est = ULL.estimate(whole)
+        merged_est = ULL.estimate(merged)
+
+        assert_in_delta(whole_est, merged_est, whole_est * 0.01 + 0.001)
       end
     end
   end

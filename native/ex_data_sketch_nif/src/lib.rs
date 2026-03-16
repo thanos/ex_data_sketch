@@ -13,6 +13,7 @@ mod hash;
 mod hll;
 mod kll;
 mod theta;
+mod ull;
 
 rustler::atoms! {
     ok,

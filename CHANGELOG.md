@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-03-11
+
+### Added
+
+- UltraLogLog sketch (`ExDataSketch.ULL`) for improved cardinality estimation with ~20% lower relative error than HLL at the same memory footprint. ULL1 binary state format with 8-byte header + 2^p registers. EXSK serialization (sketch ID 15).
+- ULL register encoding from Ertl 2023: `register_value = 2 * geometric_rank - sub_bit` doubles the information per register compared to HLL.
+- FGRA estimator (Ertl 2017 sigma/tau convergence) for ULL cardinality estimation.
+- Rust NIF acceleration for ULL: `update_many`, `merge`, and `estimate` operations with dirty scheduler thresholds.
+- Precision parameter `p` supports range 4..26 (vs 4..16 for HLL), allowing higher accuracy at larger memory budgets.
+- Full API: `new`, `update`, `update_many`, `merge`, `estimate`, `count`, `serialize`, `deserialize`, `from_enumerable`, `merge_many`, `reducer`, `merger`, `size_bytes`.
+- ULL test vectors, parity tests, merge law property tests, and benchmark suite.
+
 ## [0.6.0] - 2026-03-11
 
 ### Added

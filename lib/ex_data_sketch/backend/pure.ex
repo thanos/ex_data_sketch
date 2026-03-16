@@ -4644,4 +4644,254 @@ defmodule ExDataSketch.Backend.Pure do
       put_elem(ca, pos, new_cell)
     end)
   end
+
+  # ============================================================
+  # ULL (UltraLogLog) Implementation
+  # ============================================================
+  #
+  # UltraLogLog (Ertl, 2023) uses the same 2^p register array as HLL,
+  # but stores a different value per register that encodes both the
+  # geometric rank and a sub-bucket bit, then uses the FGRA estimator
+  # (sigma/tau from Ertl 2017) for ~20% better accuracy at same memory.
+  #
+  # State binary layout (ULL1):
+  #   magic:     4 bytes  "ULL1"
+  #   version:   1 byte   (u8, 1)
+  #   precision: 1 byte   (u8, 4..26)
+  #   reserved:  2 bytes  (u16 LE, 0)
+  #   registers: 2^p bytes (one u8 per register)
+  # Total: 8 + 2^p bytes.
+
+  @ull_magic "ULL1"
+  @ull_header_size 8
+
+  @impl true
+  @spec ull_new(keyword()) :: binary()
+  def ull_new(opts) do
+    p = Keyword.fetch!(opts, :p)
+    m = 1 <<< p
+    registers = :binary.copy(<<0>>, m)
+    <<@ull_magic::binary, 1::unsigned-8, p::unsigned-8, 0::unsigned-little-16, registers::binary>>
+  end
+
+  @impl true
+  @spec ull_update(binary(), non_neg_integer(), keyword()) :: binary()
+  def ull_update(state_bin, hash64, opts) do
+    p = Keyword.fetch!(opts, :p)
+    m = 1 <<< p
+
+    bucket = hash64 >>> (64 - p)
+    reg_value = ull_register_value(hash64, p)
+
+    <<header::binary-size(@ull_header_size), registers::binary-size(^m)>> = state_bin
+
+    <<before::binary-size(^bucket), old_val::unsigned-8, after_bytes::binary>> = registers
+
+    if reg_value > old_val do
+      <<header::binary, before::binary, reg_value::unsigned-8, after_bytes::binary>>
+    else
+      state_bin
+    end
+  end
+
+  @impl true
+  @spec ull_update_many(binary(), [non_neg_integer()], keyword()) :: binary()
+  def ull_update_many(state_bin, hashes, opts) do
+    p = Keyword.fetch!(opts, :p)
+    m = 1 <<< p
+
+    <<header::binary-size(@ull_header_size), registers::binary-size(^m)>> = state_bin
+
+    # Pre-aggregate hashes into a map of {bucket => max_reg_value}.
+    # This avoids materializing the full register array as a tuple,
+    # which would OOM at high precision values (e.g. p=26 => 67M registers).
+    updates =
+      List.foldl(hashes, %{}, fn hash64, acc ->
+        bucket = hash64 >>> (64 - p)
+        reg_value = ull_register_value(hash64, p)
+        Map.update(acc, bucket, reg_value, &max(&1, reg_value))
+      end)
+
+    sorted_updates = updates |> Map.to_list() |> List.keysort(0)
+    new_registers = ull_splice_updates(registers, sorted_updates, 0, [])
+    <<header::binary, IO.iodata_to_binary(new_registers)::binary>>
+  end
+
+  defp ull_splice_updates(registers, [], _offset, acc), do: Enum.reverse([registers | acc])
+
+  defp ull_splice_updates(registers, [{bucket, new_val} | tail], offset, acc) do
+    skip = bucket - offset
+    <<before::binary-size(^skip), old_val::unsigned-8, after_bytes::binary>> = registers
+    val = max(old_val, new_val)
+    ull_splice_updates(after_bytes, tail, bucket + 1, [val, before | acc])
+  end
+
+  @impl true
+  @spec ull_merge(binary(), binary(), keyword()) :: binary()
+  def ull_merge(a_bin, b_bin, opts) do
+    p = Keyword.fetch!(opts, :p)
+    m = 1 <<< p
+
+    <<header_a::binary-size(@ull_header_size), regs_a::binary-size(^m)>> = a_bin
+    <<_header_b::binary-size(@ull_header_size), regs_b::binary-size(^m)>> = b_bin
+
+    merged =
+      zip_max_binary(regs_a, regs_b)
+      |> IO.iodata_to_binary()
+
+    <<header_a::binary, merged::binary>>
+  end
+
+  @impl true
+  @spec ull_estimate(binary(), keyword()) :: float()
+  def ull_estimate(state_bin, opts) do
+    p = Keyword.fetch!(opts, :p)
+    m = 1 <<< p
+
+    <<_header::binary-size(@ull_header_size), registers::binary-size(^m)>> = state_bin
+
+    # Count registers at each value level
+    # q_max = max register value
+    {counts, q_max} = ull_register_counts(registers, m)
+
+    if q_max == 0 do
+      # All registers are zero => no items inserted
+      0.0
+    else
+      ull_fgra_estimate(counts, m, q_max)
+    end
+  end
+
+  # -- ULL Helpers --
+
+  # Compute the ULL register value from a 64-bit hash and precision p.
+  # register_value = 2 * geometric_rank - sub_bit
+  # where sub_bit is the bit just after the leading zeros in the suffix.
+  defp ull_register_value(hash64, p) do
+    bits = 64 - p
+    remaining_mask = (1 <<< bits) - 1
+    remaining = hash64 &&& remaining_mask
+
+    geometric_rank = count_leading_zeros(remaining, bits) + 1
+
+    # sub_bit: the bit at position (p + geometric_rank) in the original hash,
+    # which is the bit just after the leading zeros in the suffix.
+    # This is bit (bits - geometric_rank) in `remaining` (0-indexed from MSB of suffix).
+    # If geometric_rank > bits, all suffix bits are zero, sub_bit = 0.
+    sub_bit =
+      if geometric_rank > bits do
+        0
+      else
+        bit_pos = bits - geometric_rank
+        remaining >>> bit_pos &&& 1
+      end
+
+    value = 2 * geometric_rank - sub_bit
+    # Clamp to 0..255
+    min(value, 255)
+  end
+
+  # Count how many registers have each value 0..255.
+  # Returns {counters_ref, q_max} where counters_ref is a :counters reference
+  # with 256 slots (1-indexed; register value v is at slot v+1).
+  # Uses :counters for O(1) mutable increment, avoiding per-byte tuple copies.
+  defp ull_register_counts(registers, _m) do
+    counts = :counters.new(256, [:atomics])
+    q_max = ull_register_counts_loop(registers, counts, 0)
+    {counts, q_max}
+  end
+
+  defp ull_register_counts_loop(<<>>, _counts, q_max), do: q_max
+
+  defp ull_register_counts_loop(<<val::unsigned-8, rest::binary>>, counts, q_max) do
+    :counters.add(counts, val + 1, 1)
+    ull_register_counts_loop(rest, counts, max(q_max, val))
+  end
+
+  # FGRA estimator (Ertl 2017 "new HLL" estimator applied to ULL register values).
+  #
+  # Uses the Horner-scheme computation from Algorithm 4 of Ertl 2017:
+  #   z = m * tau(1 - C[q]/m)
+  #   for k from q-1 down to 1: z = (z + C[k]) * 0.5
+  #   z += m * sigma(C[0]/m)
+  #   estimate = alpha_inf * m^2 / z
+  #
+  # where alpha_inf = 1 / (2 * ln(2))
+  defp ull_fgra_estimate(counts, m, q_max) do
+    m_f = m * 1.0
+    alpha_inf = 1.0 / (2.0 * :math.log(2.0))
+
+    c0 = :counters.get(counts, 0 + 1) * 1.0
+    c_q = :counters.get(counts, q_max + 1) * 1.0
+
+    # Start with tau term (handles the boundary at q_max)
+    z = m_f * ull_tau(1.0 - c_q / m_f)
+
+    # Horner scheme: for k from q_max-1 down to 1
+    z = ull_horner_loop(z, counts, q_max - 1)
+
+    # Add sigma term (handles the C_0 / empty registers)
+    z = z + m_f * ull_sigma(c0 / m_f)
+
+    if z == 0.0 do
+      0.0
+    else
+      alpha_inf * m_f * m_f / z
+    end
+  end
+
+  # Horner loop: for k from start down to 1, z = (z + C[k]) * 0.5
+  defp ull_horner_loop(z, _counts, k) when k < 1, do: z
+
+  defp ull_horner_loop(z, counts, k) do
+    c_k = :counters.get(counts, k + 1) * 1.0
+    z = (z + c_k) * 0.5
+    ull_horner_loop(z, counts, k - 1)
+  end
+
+  # sigma(x) from Ertl 2017 reference implementation:
+  #   z = x, y = 1
+  #   loop: x = x^2, z += x*y, y *= 2
+  #   until convergence
+  defp ull_sigma(x) when x <= 0.0, do: 0.0
+
+  defp ull_sigma(x) do
+    ull_sigma_loop(x, x, 1.0)
+  end
+
+  defp ull_sigma_loop(x, z, y) do
+    x2 = x * x
+    z2 = z + x2 * y
+    y2 = y + y
+
+    if z2 == z do
+      z
+    else
+      ull_sigma_loop(x2, z2, y2)
+    end
+  end
+
+  # tau(x) from Ertl 2017 reference implementation:
+  #   z = 1 - x, y = 1
+  #   loop: x = sqrt(x), y *= 0.5, z -= (1-x)^2 * y
+  #   until convergence
+  #   return z / 3
+  defp ull_tau(x) when x <= 0.0 or x >= 1.0, do: 0.0
+
+  defp ull_tau(x) do
+    ull_tau_loop(x, 1.0 - x, 1.0)
+  end
+
+  defp ull_tau_loop(x, z, y) do
+    x2 = :math.sqrt(x)
+    y2 = y * 0.5
+    t = 1.0 - x2
+    z2 = z - t * t * y2
+
+    if z2 == z do
+      z / 3.0
+    else
+      ull_tau_loop(x2, z2, y2)
+    end
+  end
 end
