@@ -4713,17 +4713,17 @@ defmodule ExDataSketch.Backend.Pure do
       end)
 
     sorted_updates = updates |> Map.to_list() |> List.keysort(0)
-    new_registers = ull_splice_updates(registers, sorted_updates, 0)
+    new_registers = ull_splice_updates(registers, sorted_updates, 0, [])
     <<header::binary, IO.iodata_to_binary(new_registers)::binary>>
   end
 
-  defp ull_splice_updates(rest, [], _offset), do: [rest]
+  defp ull_splice_updates(registers, [], _offset, acc), do: Enum.reverse([registers | acc])
 
-  defp ull_splice_updates(registers, [{bucket, new_val} | tail], offset) do
+  defp ull_splice_updates(registers, [{bucket, new_val} | tail], offset, acc) do
     skip = bucket - offset
     <<before::binary-size(^skip), old_val::unsigned-8, after_bytes::binary>> = registers
     val = max(old_val, new_val)
-    [before, val | ull_splice_updates(after_bytes, tail, bucket + 1)]
+    ull_splice_updates(after_bytes, tail, bucket + 1, [val, before | acc])
   end
 
   @impl true

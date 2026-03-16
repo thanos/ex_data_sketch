@@ -18,6 +18,8 @@ defmodule ExDataSketch.Backend.Rust do
 
   - `hll_update_many`: 10,000 hashes
   - `ull_update_many`: 10,000 hashes
+  - `ull_merge`: 50,000 registers (m = 2^p)
+  - `ull_estimate`: 50,000 registers (m = 2^p)
   - `cms_update_many`: 10,000 pairs
   - `theta_update_many`: 10,000 hashes
   - `cms_merge`: 100,000 total counters
