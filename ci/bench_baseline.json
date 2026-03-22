@@ -1,0 +1,23 @@
+{
+  "cms_estimate [Pure]": 768466.3,
+  "cms_merge [Pure]": 1093.51,
+  "cms_update single [Pure]": 1504.14,
+  "cms_update_many 100k [Pure]": 0.09,
+  "cms_update_many 1k [Pure]": 12.66,
+  "hll_estimate p=14 [Pure]": 2188.83,
+  "hll_merge p=14 [Pure]": 404.67,
+  "hll_update p=10 [Pure]": 1290270.61,
+  "hll_update p=14 [Pure]": 873476.21,
+  "hll_update_many 100k [Pure]": 0.68,
+  "hll_update_many 1k [Pure]": 14.97,
+  "theta_compact estimation [Pure]": 2276.87,
+  "theta_deserialize_datasketches": 540.5,
+  "theta_estimate estimation [Pure]": 8381617.46,
+  "theta_estimate exact [Pure]": 9449206.78,
+  "theta_merge k=4096 [Pure]": 243.24,
+  "theta_serialize_datasketches": 334039.19,
+  "theta_update k=1024 [Pure]": 1736554.17,
+  "theta_update k=4096 [Pure]": 1750997.3,
+  "theta_update_many 100k [Pure]": 9.12,
+  "theta_update_many 1k [Pure]": 1254.08
+}

@@ -990,14 +990,16 @@ defmodule ExDataSketch.Backend.Rust do
     |> IO.iodata_to_binary()
   end
 
-  defp ensure_binaries(items) do
+  @doc false
+  def ensure_binaries(items) do
     Enum.map(items, fn
       bin when is_binary(bin) -> bin
       term -> :erlang.term_to_binary(term)
     end)
   end
 
-  defp normalize_cms_items(items) do
+  @doc false
+  def normalize_cms_items(items) do
     Enum.map(items, fn
       {item, increment} when is_integer(increment) and increment > 0 ->
         bin = if is_binary(item), do: item, else: :erlang.term_to_binary(item)

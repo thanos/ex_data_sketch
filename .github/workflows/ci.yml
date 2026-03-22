@@ -289,7 +289,11 @@ jobs:
 
       - run: mix deps.get
       - run: mix compile --warnings-as-errors
-      - run: mix test
+      - run: mix coveralls.json
+      - name: Check coverage threshold
+        run: mix run ci/compare_coverage.exs
+        env:
+          EX_DATA_SKETCH_COVERAGE_BASELINE: ci/coverage_baseline_rust.json
 
   bench-rust:
     name: Benchmarks (with Rust NIF)

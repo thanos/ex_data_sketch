@@ -1,5 +1,5 @@
 {
-  "threshold": 85.0,
-  "updated_at": "2026-03-04",
-  "notes": "CI baseline (Pure-only, no Rust NIF). Local with Rust: ~93.2%."
+  "threshold": 82.5,
+  "updated_at": "2026-03-22",
+  "notes": "CI baseline (Pure-only, no Rust NIF). Lowered from 85.0% after adding Rust-only raw NIF batch paths (hll/ull/theta/cms_update_many_raw) and tagging hash-dependent vector tests as :rust_nif. Local with Rust: ~93%."
 }
