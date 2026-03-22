@@ -14,6 +14,7 @@ defmodule ExDataSketch.VectorsTest do
       assert expected.state == stored
     end
 
+    @tag :rust_nif
     test "100 items p=14 vector matches generated state" do
       items = for i <- 0..99, do: "item_#{i}"
       expected = HLL.from_enumerable(items, p: 14)
@@ -21,6 +22,7 @@ defmodule ExDataSketch.VectorsTest do
       assert expected.state == stored
     end
 
+    @tag :rust_nif
     test "10000 items p=14 vector matches generated state" do
       items = for i <- 0..9999, do: "item_#{i}"
       expected = HLL.from_enumerable(items, p: 14)
@@ -65,6 +67,7 @@ defmodule ExDataSketch.VectorsTest do
       assert expected.state == stored
     end
 
+    @tag :rust_nif
     test "100 items vector matches generated state" do
       items = for i <- 0..99, do: "item_#{i}"
       expected = CMS.from_enumerable(items, @cms_opts)
@@ -92,6 +95,7 @@ defmodule ExDataSketch.VectorsTest do
       assert restored.state == stored
     end
 
+    @tag :rust_nif
     test "100 items vector gives expected estimates" do
       stored = File.read!(Path.join(@vectors_dir, "cms_v1_100items_w2048_d5_c32.bin"))
       sketch = %CMS{state: stored, opts: @cms_opts, backend: ExDataSketch.Backend.Pure}
@@ -112,6 +116,7 @@ defmodule ExDataSketch.VectorsTest do
       assert expected.state == stored
     end
 
+    @tag :rust_nif
     test "100 items k=4096 vector matches generated state" do
       items = for i <- 0..99, do: "item_#{i}"
       expected = Theta.from_enumerable(items, k: 4096)
@@ -119,6 +124,7 @@ defmodule ExDataSketch.VectorsTest do
       assert expected.state == stored
     end
 
+    @tag :rust_nif
     test "10000 items k=4096 vector matches generated state" do
       items = for i <- 0..9999, do: "item_#{i}"
       expected = Theta.from_enumerable(items, k: 4096)
