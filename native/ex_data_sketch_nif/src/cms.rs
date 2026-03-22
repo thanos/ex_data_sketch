@@ -1,4 +1,4 @@
-use rustler::{Binary, Env, Term};
+use rustler::{Binary, Env, ListIterator, Term};
 use xxhash_rust::xxh3;
 
 use crate::error;
@@ -102,7 +102,7 @@ fn cms_update_many_impl<'a>(
 fn cms_update_many_raw_impl<'a>(
     env: Env<'a>,
     state_bin: Binary,
-    items_bin: Binary,
+    items: ListIterator<'a>,
     width: u32,
     depth: u16,
     counter_width: u8,
@@ -143,25 +143,18 @@ fn cms_update_many_raw_impl<'a>(
     };
     let w = width as usize;
 
-    let items = items_bin.as_slice();
-    let mut offset = 0;
-    while offset + 4 <= items.len() {
-        let len = u32::from_le_bytes(items[offset..offset + 4].try_into().unwrap()) as usize;
-        offset += 4;
-        if offset + len + 4 > items.len() {
-            return error::error_string(env, "items_bin truncated");
-        }
-        let item_bytes = &items[offset..offset + len];
-        offset += len;
-        let increment = u32::from_le_bytes(items[offset..offset + 4].try_into().unwrap()) as u64;
-        offset += 4;
+    for item_term in items {
+        let (bin, increment): (Binary, u32) = match item_term.decode() {
+            Ok(pair) => pair,
+            Err(_) => return error::error_string(env, "expected {binary, increment} tuple"),
+        };
 
-        let hash64 = xxh3::xxh3_64_with_seed(item_bytes, seed);
+        let hash64 = xxh3::xxh3_64_with_seed(bin.as_slice(), seed);
 
         for row in 0..depth {
             let col = cms_row_index(hash64, row, width) as usize;
             let idx = (row as usize) * w + col;
-            let new_val = counters[idx].saturating_add(increment).min(max_counter);
+            let new_val = counters[idx].saturating_add(increment as u64).min(max_counter);
             counters[idx] = new_val;
         }
     }
@@ -189,26 +182,26 @@ fn cms_update_many_raw_impl<'a>(
 fn cms_update_many_raw_nif<'a>(
     env: Env<'a>,
     state_bin: Binary,
-    items_bin: Binary,
+    items: ListIterator<'a>,
     width: u32,
     depth: u16,
     counter_width: u8,
     seed: u64,
 ) -> Term<'a> {
-    cms_update_many_raw_impl(env, state_bin, items_bin, width, depth, counter_width, seed)
+    cms_update_many_raw_impl(env, state_bin, items, width, depth, counter_width, seed)
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
 fn cms_update_many_raw_dirty_nif<'a>(
     env: Env<'a>,
     state_bin: Binary,
-    items_bin: Binary,
+    items: ListIterator<'a>,
     width: u32,
     depth: u16,
     counter_width: u8,
     seed: u64,
 ) -> Term<'a> {
-    cms_update_many_raw_impl(env, state_bin, items_bin, width, depth, counter_width, seed)
+    cms_update_many_raw_impl(env, state_bin, items, width, depth, counter_width, seed)
 }
 
 fn cms_merge_impl<'a>(

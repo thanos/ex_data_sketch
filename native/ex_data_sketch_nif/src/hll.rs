@@ -1,4 +1,4 @@
-use rustler::{Binary, Env, Term};
+use rustler::{Binary, Env, ListIterator, Term};
 use xxhash_rust::xxh3;
 
 use crate::error;
@@ -118,7 +118,7 @@ fn hll_estimate_impl<'a>(env: Env<'a>, state_bin: Binary, p: u8) -> Term<'a> {
     error::ok_float(env, estimate)
 }
 
-fn hll_update_many_raw_impl<'a>(env: Env<'a>, state_bin: Binary, items_bin: Binary, p: u8, seed: u64) -> Term<'a> {
+fn hll_update_many_raw_impl<'a>(env: Env<'a>, state_bin: Binary, items: ListIterator<'a>, p: u8, seed: u64) -> Term<'a> {
     let m: usize = 1 << p;
     let expected_len = HLL_HEADER_SIZE + m;
 
@@ -131,18 +131,12 @@ fn hll_update_many_raw_impl<'a>(env: Env<'a>, state_bin: Binary, items_bin: Bina
     let bits = 64 - p as u32;
     let remaining_mask: u64 = (1u64 << bits) - 1;
 
-    let items = items_bin.as_slice();
-    let mut offset = 0;
-    while offset + 4 <= items.len() {
-        let len = u32::from_le_bytes(items[offset..offset + 4].try_into().unwrap()) as usize;
-        offset += 4;
-        if offset + len > items.len() {
-            return error::error_string(env, "items_bin truncated");
-        }
-        let item_bytes = &items[offset..offset + len];
-        offset += len;
-
-        let hash = xxh3::xxh3_64_with_seed(item_bytes, seed);
+    for item_term in items {
+        let bin: Binary = match item_term.decode() {
+            Ok(b) => b,
+            Err(_) => return error::error_string(env, "all items must be binaries"),
+        };
+        let hash = xxh3::xxh3_64_with_seed(bin.as_slice(), seed);
         let bucket = (hash >> bits) as usize;
         let remaining = hash & remaining_mask;
         let rank = clz_in_bits(remaining, bits) + 1;
@@ -157,13 +151,13 @@ fn hll_update_many_raw_impl<'a>(env: Env<'a>, state_bin: Binary, items_bin: Bina
 }
 
 #[rustler::nif]
-fn hll_update_many_raw_nif<'a>(env: Env<'a>, state_bin: Binary, items_bin: Binary, p: u8, seed: u64) -> Term<'a> {
-    hll_update_many_raw_impl(env, state_bin, items_bin, p, seed)
+fn hll_update_many_raw_nif<'a>(env: Env<'a>, state_bin: Binary, items: ListIterator<'a>, p: u8, seed: u64) -> Term<'a> {
+    hll_update_many_raw_impl(env, state_bin, items, p, seed)
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
-fn hll_update_many_raw_dirty_nif<'a>(env: Env<'a>, state_bin: Binary, items_bin: Binary, p: u8, seed: u64) -> Term<'a> {
-    hll_update_many_raw_impl(env, state_bin, items_bin, p, seed)
+fn hll_update_many_raw_dirty_nif<'a>(env: Env<'a>, state_bin: Binary, items: ListIterator<'a>, p: u8, seed: u64) -> Term<'a> {
+    hll_update_many_raw_impl(env, state_bin, items, p, seed)
 }
 
 #[rustler::nif]

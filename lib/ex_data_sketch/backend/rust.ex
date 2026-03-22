@@ -135,14 +135,14 @@ defmodule ExDataSketch.Backend.Rust do
   def hll_update_many_raw(state_bin, items, opts) do
     p = Keyword.fetch!(opts, :p)
     seed = Keyword.get(opts, :seed, 0)
-    items_bin = encode_raw_items(items)
+    bins = ensure_binaries(items)
     threshold = dirty_threshold(:hll_update_many, opts)
 
     result =
-      if length(items) > threshold do
-        ExDataSketch.Nif.hll_update_many_raw_dirty_nif(state_bin, items_bin, p, seed)
+      if length(bins) > threshold do
+        ExDataSketch.Nif.hll_update_many_raw_dirty_nif(state_bin, bins, p, seed)
       else
-        ExDataSketch.Nif.hll_update_many_raw_nif(state_bin, items_bin, p, seed)
+        ExDataSketch.Nif.hll_update_many_raw_nif(state_bin, bins, p, seed)
       end
 
     unwrap_ok!(result)
@@ -209,14 +209,14 @@ defmodule ExDataSketch.Backend.Rust do
     depth = Keyword.fetch!(opts, :depth)
     counter_width = Keyword.fetch!(opts, :counter_width)
     seed = Keyword.get(opts, :seed, 0)
-    items_bin = encode_raw_cms_items(items)
+    pairs = normalize_cms_items(items)
     threshold = dirty_threshold(:cms_update_many, opts)
 
     result =
-      if length(items) > threshold do
+      if length(pairs) > threshold do
         ExDataSketch.Nif.cms_update_many_raw_dirty_nif(
           state_bin,
-          items_bin,
+          pairs,
           width,
           depth,
           counter_width,
@@ -225,7 +225,7 @@ defmodule ExDataSketch.Backend.Rust do
       else
         ExDataSketch.Nif.cms_update_many_raw_nif(
           state_bin,
-          items_bin,
+          pairs,
           width,
           depth,
           counter_width,
@@ -295,14 +295,14 @@ defmodule ExDataSketch.Backend.Rust do
 
   def theta_update_many_raw(state_bin, items, opts) do
     seed = Keyword.get(opts, :seed, 0)
-    items_bin = encode_raw_items(items)
+    bins = ensure_binaries(items)
     threshold = dirty_threshold(:theta_update_many, opts)
 
     result =
-      if length(items) > threshold do
-        ExDataSketch.Nif.theta_update_many_raw_dirty_nif(state_bin, items_bin, seed)
+      if length(bins) > threshold do
+        ExDataSketch.Nif.theta_update_many_raw_dirty_nif(state_bin, bins, seed)
       else
-        ExDataSketch.Nif.theta_update_many_raw_nif(state_bin, items_bin, seed)
+        ExDataSketch.Nif.theta_update_many_raw_nif(state_bin, bins, seed)
       end
 
     unwrap_ok!(result)
@@ -943,14 +943,14 @@ defmodule ExDataSketch.Backend.Rust do
   def ull_update_many_raw(state_bin, items, opts) do
     p = Keyword.fetch!(opts, :p)
     seed = Keyword.get(opts, :seed, 0)
-    items_bin = encode_raw_items(items)
+    bins = ensure_binaries(items)
     threshold = dirty_threshold(:ull_update_many, opts)
 
     result =
-      if length(items) > threshold do
-        ExDataSketch.Nif.ull_update_many_raw_dirty_nif(state_bin, items_bin, p, seed)
+      if length(bins) > threshold do
+        ExDataSketch.Nif.ull_update_many_raw_dirty_nif(state_bin, bins, p, seed)
       else
-        ExDataSketch.Nif.ull_update_many_raw_nif(state_bin, items_bin, p, seed)
+        ExDataSketch.Nif.ull_update_many_raw_nif(state_bin, bins, p, seed)
       end
 
     unwrap_ok!(result)
@@ -986,27 +986,23 @@ defmodule ExDataSketch.Backend.Rust do
     |> IO.iodata_to_binary()
   end
 
-  defp encode_raw_items(items) do
-    items
-    |> Enum.map(fn item ->
-      bin = if is_binary(item), do: item, else: :erlang.term_to_binary(item)
-      <<byte_size(bin)::unsigned-little-32, bin::binary>>
+  defp ensure_binaries(items) do
+    Enum.map(items, fn
+      bin when is_binary(bin) -> bin
+      term -> :erlang.term_to_binary(term)
     end)
-    |> IO.iodata_to_binary()
   end
 
-  defp encode_raw_cms_items(items) do
-    items
-    |> Enum.map(fn
+  defp normalize_cms_items(items) do
+    Enum.map(items, fn
       {item, increment} when is_integer(increment) and increment > 0 ->
         bin = if is_binary(item), do: item, else: :erlang.term_to_binary(item)
-        <<byte_size(bin)::unsigned-little-32, bin::binary, increment::unsigned-little-32>>
+        {bin, increment}
 
       item ->
         bin = if is_binary(item), do: item, else: :erlang.term_to_binary(item)
-        <<byte_size(bin)::unsigned-little-32, bin::binary, 1::unsigned-little-32>>
+        {bin, 1}
     end)
-    |> IO.iodata_to_binary()
   end
 
   defp encode_pairs(pairs) do
