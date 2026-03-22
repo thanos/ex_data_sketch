@@ -116,6 +116,13 @@ defmodule ExDataSketch.HLLTest do
         sketch = HLL.new(p: 10, backend: @backend)
         assert HLL.update_many(sketch, []).state == sketch.state
       end
+
+      test "works with custom hash_fn" do
+        hash_fn = fn term -> :erlang.phash2(term, 1 <<< 32) end
+        sketch = HLL.new(p: 10, hash_fn: hash_fn, backend: @backend)
+        sketch = HLL.update_many(sketch, ["a", "b", "c"])
+        assert HLL.estimate(sketch) > 0.0
+      end
     end
 
     describe "estimate/1 [#{backend_name}]" do
@@ -307,8 +314,15 @@ defmodule ExDataSketch.HLLTest do
       assert msg =~ "expected HLL sketch ID (1)"
     end
 
-    test "rejects invalid p in params" do
+    test "rejects invalid p in 1-byte params" do
       bin = ExDataSketch.Codec.encode(1, 1, <<3>>, <<0, 0>>)
+      assert {:error, %DeserializationError{message: msg}} = HLL.deserialize(bin)
+      assert msg =~ "invalid HLL precision"
+    end
+
+    test "rejects invalid p in 2-byte params" do
+      # p=3 with xxhash3 strategy byte
+      bin = ExDataSketch.Codec.encode(1, 1, <<3, 1>>, <<0, 0>>)
       assert {:error, %DeserializationError{message: msg}} = HLL.deserialize(bin)
       assert msg =~ "invalid HLL precision"
     end
@@ -317,6 +331,43 @@ defmodule ExDataSketch.HLLTest do
       bin = ExDataSketch.Codec.encode(1, 1, <<>>, <<0, 0>>)
       assert {:error, %DeserializationError{message: msg}} = HLL.deserialize(bin)
       assert msg =~ "invalid HLL params"
+    end
+
+    test "deserializes xxhash3 hash strategy" do
+      sketch = HLL.from_enumerable(["a", "b"], p: 10)
+      # Re-serialize with xxhash3 strategy byte
+      state = sketch.state
+      params = <<10::unsigned-8, 1::unsigned-8>>
+      bin = ExDataSketch.Codec.encode(1, 1, params, state)
+      assert {:ok, restored} = HLL.deserialize(bin)
+      assert restored.opts[:hash_strategy] == :xxhash3
+    end
+
+    test "deserializes custom hash strategy" do
+      sketch = HLL.from_enumerable(["a", "b"], p: 10)
+      state = sketch.state
+      params = <<10::unsigned-8, 2::unsigned-8>>
+      bin = ExDataSketch.Codec.encode(1, 1, params, state)
+      assert {:ok, restored} = HLL.deserialize(bin)
+      assert restored.opts[:hash_strategy] == :custom
+    end
+
+    test "deserializes unknown hash strategy as phash2" do
+      sketch = HLL.from_enumerable(["a", "b"], p: 10)
+      state = sketch.state
+      params = <<10::unsigned-8, 99::unsigned-8>>
+      bin = ExDataSketch.Codec.encode(1, 1, params, state)
+      assert {:ok, restored} = HLL.deserialize(bin)
+      assert restored.opts[:hash_strategy] == :phash2
+    end
+
+    test "deserializes legacy 1-byte params as phash2" do
+      sketch = HLL.from_enumerable(["a", "b"], p: 10)
+      state = sketch.state
+      params = <<10::unsigned-8>>
+      bin = ExDataSketch.Codec.encode(1, 1, params, state)
+      assert {:ok, restored} = HLL.deserialize(bin)
+      assert restored.opts[:hash_strategy] == :phash2
     end
   end
 

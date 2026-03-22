@@ -116,6 +116,13 @@ defmodule ExDataSketch.ULLTest do
         sketch = ULL.new(p: 10, backend: @backend)
         assert ULL.update_many(sketch, []).state == sketch.state
       end
+
+      test "works with custom hash_fn" do
+        hash_fn = fn term -> :erlang.phash2(term, 1 <<< 32) end
+        sketch = ULL.new(p: 10, hash_fn: hash_fn, backend: @backend)
+        sketch = ULL.update_many(sketch, ["a", "b", "c"])
+        assert ULL.estimate(sketch) > 0.0
+      end
     end
 
     describe "estimate/1 [#{backend_name}]" do
@@ -307,9 +314,16 @@ defmodule ExDataSketch.ULLTest do
       assert msg =~ "expected ULL sketch ID (15)"
     end
 
-    test "rejects invalid p in params" do
+    test "rejects invalid p in 1-byte params" do
       state = <<"ULL1", 1, 3, 0::16, 0, 0>>
       bin = ExDataSketch.Codec.encode(15, 1, <<3>>, state)
+      assert {:error, %DeserializationError{message: msg}} = ULL.deserialize(bin)
+      assert msg =~ "invalid ULL precision"
+    end
+
+    test "rejects invalid p in 2-byte params" do
+      state = <<"ULL1", 1, 3, 0::16, 0, 0>>
+      bin = ExDataSketch.Codec.encode(15, 1, <<3, 1>>, state)
       assert {:error, %DeserializationError{message: msg}} = ULL.deserialize(bin)
       assert msg =~ "invalid ULL precision"
     end
@@ -319,6 +333,33 @@ defmodule ExDataSketch.ULLTest do
       bin = ExDataSketch.Codec.encode(15, 1, <<>>, state)
       assert {:error, %DeserializationError{message: msg}} = ULL.deserialize(bin)
       assert msg =~ "invalid ULL params"
+    end
+
+    test "deserializes xxhash3 hash strategy" do
+      sketch = ULL.from_enumerable(["a", "b"], p: 10)
+      state = sketch.state
+      params = <<10::unsigned-8, 1::unsigned-8>>
+      bin = ExDataSketch.Codec.encode(15, 1, params, state)
+      assert {:ok, restored} = ULL.deserialize(bin)
+      assert restored.opts[:hash_strategy] == :xxhash3
+    end
+
+    test "deserializes custom hash strategy" do
+      sketch = ULL.from_enumerable(["a", "b"], p: 10)
+      state = sketch.state
+      params = <<10::unsigned-8, 2::unsigned-8>>
+      bin = ExDataSketch.Codec.encode(15, 1, params, state)
+      assert {:ok, restored} = ULL.deserialize(bin)
+      assert restored.opts[:hash_strategy] == :custom
+    end
+
+    test "deserializes unknown hash strategy as phash2" do
+      sketch = ULL.from_enumerable(["a", "b"], p: 10)
+      state = sketch.state
+      params = <<10::unsigned-8, 99::unsigned-8>>
+      bin = ExDataSketch.Codec.encode(15, 1, params, state)
+      assert {:ok, restored} = ULL.deserialize(bin)
+      assert restored.opts[:hash_strategy] == :phash2
     end
 
     test "rejects invalid state header" do
