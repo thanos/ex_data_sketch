@@ -1,4 +1,5 @@
 use rustler::{Binary, Env, Term};
+use xxhash_rust::xxh3;
 
 use crate::error;
 
@@ -96,6 +97,118 @@ fn cms_update_many_impl<'a>(
     }
 
     error::ok_binary(env, &result)
+}
+
+fn cms_update_many_raw_impl<'a>(
+    env: Env<'a>,
+    state_bin: Binary,
+    items_bin: Binary,
+    width: u32,
+    depth: u16,
+    counter_width: u8,
+    seed: u64,
+) -> Term<'a> {
+    let counter_bytes = (counter_width / 8) as usize;
+    let total_counters = (width as usize) * (depth as usize);
+    let data_size = total_counters * counter_bytes;
+    let expected_len = CMS_HEADER_SIZE + data_size;
+
+    if state_bin.len() != expected_len {
+        return error::error_string(env, "invalid CMS state length");
+    }
+
+    let state = state_bin.as_slice();
+    let header = &state[..CMS_HEADER_SIZE];
+    let counters_data = &state[CMS_HEADER_SIZE..];
+
+    let mut counters: Vec<u64> = Vec::with_capacity(total_counters);
+    match counter_bytes {
+        4 => {
+            for chunk in counters_data.chunks_exact(4) {
+                counters.push(u32::from_le_bytes(chunk.try_into().unwrap()) as u64);
+            }
+        }
+        8 => {
+            for chunk in counters_data.chunks_exact(8) {
+                counters.push(u64::from_le_bytes(chunk.try_into().unwrap()));
+            }
+        }
+        _ => return error::error_string(env, "unsupported counter width"),
+    }
+
+    let max_counter: u64 = if counter_width == 64 {
+        u64::MAX
+    } else {
+        (1u64 << counter_width) - 1
+    };
+    let w = width as usize;
+
+    let items = items_bin.as_slice();
+    let mut offset = 0;
+    while offset + 4 <= items.len() {
+        let len = u32::from_le_bytes(items[offset..offset + 4].try_into().unwrap()) as usize;
+        offset += 4;
+        if offset + len + 4 > items.len() {
+            return error::error_string(env, "items_bin truncated");
+        }
+        let item_bytes = &items[offset..offset + len];
+        offset += len;
+        let increment = u32::from_le_bytes(items[offset..offset + 4].try_into().unwrap()) as u64;
+        offset += 4;
+
+        let hash64 = xxh3::xxh3_64_with_seed(item_bytes, seed);
+
+        for row in 0..depth {
+            let col = cms_row_index(hash64, row, width) as usize;
+            let idx = (row as usize) * w + col;
+            let new_val = counters[idx].saturating_add(increment).min(max_counter);
+            counters[idx] = new_val;
+        }
+    }
+
+    let mut result = Vec::with_capacity(expected_len);
+    result.extend_from_slice(header);
+    match counter_bytes {
+        4 => {
+            for &val in &counters {
+                result.extend_from_slice(&(val as u32).to_le_bytes());
+            }
+        }
+        8 => {
+            for &val in &counters {
+                result.extend_from_slice(&val.to_le_bytes());
+            }
+        }
+        _ => unreachable!(),
+    }
+
+    error::ok_binary(env, &result)
+}
+
+#[rustler::nif]
+fn cms_update_many_raw_nif<'a>(
+    env: Env<'a>,
+    state_bin: Binary,
+    items_bin: Binary,
+    width: u32,
+    depth: u16,
+    counter_width: u8,
+    seed: u64,
+) -> Term<'a> {
+    cms_update_many_raw_impl(env, state_bin, items_bin, width, depth, counter_width, seed)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn cms_update_many_raw_dirty_nif<'a>(
+    env: Env<'a>,
+    state_bin: Binary,
+    items_bin: Binary,
+    width: u32,
+    depth: u16,
+    counter_width: u8,
+    seed: u64,
+) -> Term<'a> {
+    cms_update_many_raw_impl(env, state_bin, items_bin, width, depth, counter_width, seed)
 }
 
 fn cms_merge_impl<'a>(

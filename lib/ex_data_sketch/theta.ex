@@ -154,12 +154,18 @@ defmodule ExDataSketch.Theta do
   end
 
   def update_many(%__MODULE__{opts: opts, backend: backend} = sketch, items) do
+    use_raw = backend == Backend.Rust and Keyword.get(opts, :hash_fn) == nil
+
     new_state =
       items
       |> Stream.chunk_every(@update_many_chunk_size)
       |> Enum.reduce(sketch.state, fn chunk, state_acc ->
-        hashes = Enum.map(chunk, &hash_item(&1, opts))
-        backend.theta_update_many(state_acc, hashes, opts)
+        if use_raw do
+          Backend.Rust.theta_update_many_raw(state_acc, chunk, opts)
+        else
+          hashes = Enum.map(chunk, &hash_item(&1, opts))
+          backend.theta_update_many(state_acc, hashes, opts)
+        end
       end)
 
     %{sketch | state: new_state}

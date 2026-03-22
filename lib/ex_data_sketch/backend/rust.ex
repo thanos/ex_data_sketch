@@ -132,6 +132,22 @@ defmodule ExDataSketch.Backend.Rust do
     unwrap_ok!(ExDataSketch.Nif.hll_estimate_nif(state_bin, p))
   end
 
+  def hll_update_many_raw(state_bin, items, opts) do
+    p = Keyword.fetch!(opts, :p)
+    seed = Keyword.get(opts, :seed, 0)
+    items_bin = encode_raw_items(items)
+    threshold = dirty_threshold(:hll_update_many, opts)
+
+    result =
+      if length(items) > threshold do
+        ExDataSketch.Nif.hll_update_many_raw_dirty_nif(state_bin, items_bin, p, seed)
+      else
+        ExDataSketch.Nif.hll_update_many_raw_nif(state_bin, items_bin, p, seed)
+      end
+
+    unwrap_ok!(result)
+  end
+
   # -- CMS callbacks --
 
   @impl true
@@ -187,6 +203,38 @@ defmodule ExDataSketch.Backend.Rust do
 
   @impl true
   def cms_estimate(state_bin, hash64, opts), do: Pure.cms_estimate(state_bin, hash64, opts)
+
+  def cms_update_many_raw(state_bin, items, opts) do
+    width = Keyword.fetch!(opts, :width)
+    depth = Keyword.fetch!(opts, :depth)
+    counter_width = Keyword.fetch!(opts, :counter_width)
+    seed = Keyword.get(opts, :seed, 0)
+    items_bin = encode_raw_cms_items(items)
+    threshold = dirty_threshold(:cms_update_many, opts)
+
+    result =
+      if length(items) > threshold do
+        ExDataSketch.Nif.cms_update_many_raw_dirty_nif(
+          state_bin,
+          items_bin,
+          width,
+          depth,
+          counter_width,
+          seed
+        )
+      else
+        ExDataSketch.Nif.cms_update_many_raw_nif(
+          state_bin,
+          items_bin,
+          width,
+          depth,
+          counter_width,
+          seed
+        )
+      end
+
+    unwrap_ok!(result)
+  end
 
   # -- Theta callbacks --
 
@@ -244,6 +292,21 @@ defmodule ExDataSketch.Backend.Rust do
 
   @impl true
   def theta_estimate(state_bin, opts), do: Pure.theta_estimate(state_bin, opts)
+
+  def theta_update_many_raw(state_bin, items, opts) do
+    seed = Keyword.get(opts, :seed, 0)
+    items_bin = encode_raw_items(items)
+    threshold = dirty_threshold(:theta_update_many, opts)
+
+    result =
+      if length(items) > threshold do
+        ExDataSketch.Nif.theta_update_many_raw_dirty_nif(state_bin, items_bin, seed)
+      else
+        ExDataSketch.Nif.theta_update_many_raw_nif(state_bin, items_bin, seed)
+      end
+
+    unwrap_ok!(result)
+  end
 
   @impl true
   def theta_from_components(k, theta, entries) do
@@ -877,6 +940,22 @@ defmodule ExDataSketch.Backend.Rust do
     unwrap_ok!(result)
   end
 
+  def ull_update_many_raw(state_bin, items, opts) do
+    p = Keyword.fetch!(opts, :p)
+    seed = Keyword.get(opts, :seed, 0)
+    items_bin = encode_raw_items(items)
+    threshold = dirty_threshold(:ull_update_many, opts)
+
+    result =
+      if length(items) > threshold do
+        ExDataSketch.Nif.ull_update_many_raw_dirty_nif(state_bin, items_bin, p, seed)
+      else
+        ExDataSketch.Nif.ull_update_many_raw_nif(state_bin, items_bin, p, seed)
+      end
+
+    unwrap_ok!(result)
+  end
+
   # -- Private helpers --
 
   defp encode_f64s(values) do
@@ -903,6 +982,29 @@ defmodule ExDataSketch.Backend.Rust do
     pairs
     |> Enum.map(fn {key_hash, value_hash} ->
       <<key_hash::unsigned-little-64, value_hash::unsigned-little-64>>
+    end)
+    |> IO.iodata_to_binary()
+  end
+
+  defp encode_raw_items(items) do
+    items
+    |> Enum.map(fn item ->
+      bin = if is_binary(item), do: item, else: :erlang.term_to_binary(item)
+      <<byte_size(bin)::unsigned-little-32, bin::binary>>
+    end)
+    |> IO.iodata_to_binary()
+  end
+
+  defp encode_raw_cms_items(items) do
+    items
+    |> Enum.map(fn
+      {item, increment} when is_integer(increment) and increment > 0 ->
+        bin = if is_binary(item), do: item, else: :erlang.term_to_binary(item)
+        <<byte_size(bin)::unsigned-little-32, bin::binary, increment::unsigned-little-32>>
+
+      item ->
+        bin = if is_binary(item), do: item, else: :erlang.term_to_binary(item)
+        <<byte_size(bin)::unsigned-little-32, bin::binary, 1::unsigned-little-32>>
     end)
     |> IO.iodata_to_binary()
   end

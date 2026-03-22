@@ -163,16 +163,24 @@ defmodule ExDataSketch.CMS do
   """
   @spec update_many(t(), Enumerable.t()) :: t()
   def update_many(%__MODULE__{state: state, opts: opts, backend: backend} = sketch, items) do
-    pairs =
-      Enum.map(items, fn
-        {item, increment} when is_integer(increment) and increment > 0 ->
-          {hash_item(item, opts), increment}
+    use_raw = backend == Backend.Rust and Keyword.get(opts, :hash_fn) == nil
 
-        item ->
-          {hash_item(item, opts), 1}
-      end)
+    new_state =
+      if use_raw do
+        Backend.Rust.cms_update_many_raw(state, Enum.to_list(items), opts)
+      else
+        pairs =
+          Enum.map(items, fn
+            {item, increment} when is_integer(increment) and increment > 0 ->
+              {hash_item(item, opts), increment}
 
-    new_state = backend.cms_update_many(state, pairs, opts)
+            item ->
+              {hash_item(item, opts), 1}
+          end)
+
+        backend.cms_update_many(state, pairs, opts)
+      end
+
     %{sketch | state: new_state}
   end
 
