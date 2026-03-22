@@ -22,14 +22,15 @@ defmodule ExDataSketch.HLLTest do
   describe "new/1" do
     test "creates sketch with default p=14" do
       sketch = HLL.new()
-      assert sketch.opts == [p: 14]
+      assert sketch.opts[:p] == 14
+      assert sketch.opts[:hash_strategy] in [:phash2, :xxhash3]
       assert sketch.backend == Backend.Pure
     end
 
     test "creates sketch with custom p" do
       for p <- 4..16 do
         sketch = HLL.new(p: p)
-        assert sketch.opts == [p: p]
+        assert sketch.opts[:p] == p
       end
     end
 

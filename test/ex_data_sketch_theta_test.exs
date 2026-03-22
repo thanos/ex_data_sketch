@@ -22,14 +22,15 @@ defmodule ExDataSketch.ThetaTest do
   describe "new/1" do
     test "creates sketch with default k=4096" do
       sketch = Theta.new()
-      assert sketch.opts == [k: 4096]
+      assert sketch.opts[:k] == 4096
+      assert sketch.opts[:hash_strategy] in [:phash2, :xxhash3]
       assert sketch.backend == Backend.Pure
     end
 
     test "creates sketch with custom k" do
       for k <- [16, 32, 64, 128, 256, 512, 1024, 2048, 4096] do
         sketch = Theta.new(k: k)
-        assert sketch.opts == [k: k]
+        assert sketch.opts[:k] == k
       end
     end
 

@@ -573,9 +573,53 @@ ExDataSketch.Hash.hash64("hello")
 ExDataSketch.Hash.hash64_binary(<<1, 2, 3>>)
 ```
 
-The default hash implementation uses `:erlang.phash2/2` combined with
-additional mixing to produce a full 64-bit output. This is deterministic
-within the same BEAM instance.
+### Auto-detection
+
+`hash64/2` automatically selects the best available hash implementation:
+
+- **XXHash3 (NIF)**: When the Rust NIF is loaded, `hash64/2` uses XXHash3 via
+  NIF, producing native 64-bit hashes with zero Elixir-side overhead. XXHash3
+  output is stable across platforms.
+
+- **phash2 + fixnum-safe mix64 (pure)**: When the NIF is not available,
+  `hash64/2` falls back to `:erlang.phash2/2` with a 64-bit mixer that uses
+  16-bit partial products to avoid bigint heap allocations. Every intermediate
+  value stays under 35 bits (well within the BEAM's 60-bit fixnum limit),
+  eliminating the 3+ transient bigint allocations per hash call that a naive
+  64-bit multiply would incur.
+
+The NIF availability check is performed once and cached in `:persistent_term`
+for zero-cost subsequent lookups.
+
+### Why not 32-bit hashes
+
+32-bit hashes degrade sketch accuracy above approximately 10M items due to
+birthday-paradox collisions. The fixnum-safe mixer preserves full 64-bit output
+quality at the cost of roughly 20 fixnum operations per hash -- still faster
+than 3+ bigint heap allocations from naive 64-bit multiplications.
+
+### Hash strategy tagging
+
+Sketches record which hash function was used at creation time (`:xxhash3`,
+`:phash2`, or `:custom`). This tag is persisted through serialization in the
+EXSK params section so deserialized sketches document their provenance.
+The tag is metadata only and does not affect runtime hash dispatch.
+
+### Pluggable hash
+
+Users can override the default hash with a custom function:
+
+```elixir
+HLL.new(p: 14, hash_fn: fn term -> my_hash(term) end)
+```
+
+When `:hash_fn` is provided, the sketch records `hash_strategy: :custom`.
+
+### Stability
+
+`:erlang.phash2/2` output is not guaranteed stable across OTP major versions.
+XXHash3 output is stable across platforms. For cross-version or cross-system
+stability, use the NIF build (XXHash3) or supply a custom `:hash_fn`.
 
 ## Use Cases
 
@@ -1415,11 +1459,11 @@ data structures like MapSet:
 
 - **Processing allocation is O(n) for both approaches.** Every item must be
   processed, so both MapSet and HLL/ULL allocate proportionally to the number
-  of items inserted. HLL may report higher total allocation because its
-  64-bit hash mixing (`mix64`) produces intermediate bigints (values exceeding
-  60 bits are heap-allocated in the BEAM), whereas MapSet's internal
-  `:erlang.phash2` performs its arithmetic inside the VM in C with no Elixir
-  heap allocation.
+  of items inserted. The pure-Elixir hash mixer uses 16-bit partial products
+  that stay within the BEAM's fixnum limit, avoiding the transient bigint
+  allocations that earlier versions incurred. When the Rust NIF is available,
+  hashing moves entirely into native code with zero Elixir heap allocation
+  per item.
 
 - **Result size is where sketches win.** An HLL sketch at p=12 occupies a
   fixed 4 KB regardless of whether 1,000 or 100,000,000 items were inserted.
@@ -1442,11 +1486,11 @@ the fixed sketch footprint.
 
 ### Backend Considerations
 
-The **Rust backend** (`ExDataSketch.Backend.Rust`) moves hashing and batch
-operations into a NIF, eliminating per-item bigint overhead from Elixir's hash
-mixing. This significantly reduces total allocation in Benchee measurements and
-improves throughput. When benchmarking, specify the backend explicitly so
-results are reproducible:
+The **Rust backend** (`ExDataSketch.Backend.Rust`) moves batch sketch operations
+(update_many, merge, estimate) into a NIF for maximum throughput. When the NIF
+is loaded, `hash64/2` also automatically uses XXHash3 for hashing, so the full
+pipeline runs in native code. When benchmarking, specify the backend explicitly
+so results are reproducible:
 
 ```elixir
 HLL.new(p: 12, backend: ExDataSketch.Backend.Rust)
@@ -1454,4 +1498,7 @@ HLL.new(p: 12, backend: ExDataSketch.Backend.Rust)
 
 The **Pure backend** processes items one at a time in `update_many`, avoiding
 intermediate list allocation but performing all arithmetic on the Elixir heap.
-It is useful for environments where the Rust NIF is not available.
+The fixnum-safe hash mixer eliminates bigint overhead that earlier versions
+incurred, keeping per-item allocation to a single unavoidable 64-bit return
+value. The pure backend is useful for environments where the Rust NIF is not
+available.

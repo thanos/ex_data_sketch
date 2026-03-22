@@ -1,13 +1,13 @@
 {
-  "expected": {
-    "canonical_exsk_base64": "RVhTSwEDBAAAAAAQAAARAAAAAQAQAAD//////////wAAAAA=",
-    "estimate": 0.0,
-    "tolerance": 0
-  },
   "algorithm": "theta",
-  "vector_version": 1,
   "algorithm_opts": {
     "k": 4096
   },
-  "input_items": []
+  "expected": {
+    "canonical_exsk_base64": "RVhTSwEDBQAAAAAQAAAAEQAAAAEAEAAA//////////8AAAAA",
+    "estimate": 0.0,
+    "tolerance": 0
+  },
+  "input_items": [],
+  "vector_version": 1
 }

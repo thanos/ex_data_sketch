@@ -72,8 +72,8 @@ defmodule ExDataSketch.HLL do
   ## Examples
 
       iex> sketch = ExDataSketch.HLL.new(p: 10)
-      iex> sketch.opts
-      [p: 10]
+      iex> sketch.opts[:p]
+      10
       iex> ExDataSketch.HLL.size_bytes(sketch)
       1028
 
@@ -86,8 +86,11 @@ defmodule ExDataSketch.HLL do
     hash_fn = Keyword.get(opts, :hash_fn)
     seed = Keyword.get(opts, :seed)
 
+    hash_strategy =
+      if hash_fn, do: :custom, else: Hash.default_hash_strategy()
+
     clean_opts =
-      [p: p] ++
+      [p: p, hash_strategy: hash_strategy] ++
         if(hash_fn, do: [hash_fn: hash_fn], else: []) ++
         if(seed, do: [seed: seed], else: [])
 
@@ -236,7 +239,8 @@ defmodule ExDataSketch.HLL do
   @spec serialize(t()) :: binary()
   def serialize(%__MODULE__{state: state, opts: opts}) do
     p = Keyword.fetch!(opts, :p)
-    params_bin = <<p::unsigned-8>>
+    hs = hash_strategy_byte(opts)
+    params_bin = <<p::unsigned-8, hs::unsigned-8>>
     Codec.encode(Codec.sketch_id_hll(), Codec.version(), params_bin, state)
   end
 
@@ -416,8 +420,14 @@ defmodule ExDataSketch.HLL do
      Errors.DeserializationError.exception(reason: "expected HLL sketch ID (1), got #{id}")}
   end
 
+  # Legacy 1-byte format (no hash strategy tag)
   defp decode_params(<<p::unsigned-8>>) when p >= @min_p and p <= @max_p do
-    {:ok, [p: p]}
+    {:ok, [p: p, hash_strategy: :phash2]}
+  end
+
+  # New 2-byte format with hash strategy tag
+  defp decode_params(<<p::unsigned-8, hs::unsigned-8>>) when p >= @min_p and p <= @max_p do
+    {:ok, [p: p, hash_strategy: decode_hash_strategy(hs)]}
   end
 
   defp decode_params(<<p::unsigned-8>>) do
@@ -425,7 +435,25 @@ defmodule ExDataSketch.HLL do
      Errors.DeserializationError.exception(reason: "invalid HLL precision #{p} in params")}
   end
 
+  defp decode_params(<<p::unsigned-8, _hs::unsigned-8>>) do
+    {:error,
+     Errors.DeserializationError.exception(reason: "invalid HLL precision #{p} in params")}
+  end
+
   defp decode_params(_other) do
     {:error, Errors.DeserializationError.exception(reason: "invalid HLL params binary")}
   end
+
+  defp hash_strategy_byte(opts) do
+    case Keyword.get(opts, :hash_strategy, :phash2) do
+      :phash2 -> 0
+      :xxhash3 -> 1
+      :custom -> 2
+    end
+  end
+
+  defp decode_hash_strategy(0), do: :phash2
+  defp decode_hash_strategy(1), do: :xxhash3
+  defp decode_hash_strategy(2), do: :custom
+  defp decode_hash_strategy(_), do: :phash2
 end

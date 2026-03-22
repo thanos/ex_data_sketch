@@ -105,8 +105,11 @@ defmodule ExDataSketch.CMS do
     hash_fn = Keyword.get(opts, :hash_fn)
     seed = Keyword.get(opts, :seed)
 
+    hash_strategy =
+      if hash_fn, do: :custom, else: Hash.default_hash_strategy()
+
     clean_opts =
-      [width: width, depth: depth, counter_width: counter_width] ++
+      [width: width, depth: depth, counter_width: counter_width, hash_strategy: hash_strategy] ++
         if(hash_fn, do: [hash_fn: hash_fn], else: []) ++
         if(seed, do: [seed: seed], else: [])
 
@@ -193,7 +196,7 @@ defmodule ExDataSketch.CMS do
         %__MODULE__{state: state_a, opts: opts_a, backend: backend} = sketch,
         %__MODULE__{state: state_b, opts: opts_b}
       ) do
-    if opts_a != opts_b do
+    if Keyword.delete(opts_a, :hash_strategy) != Keyword.delete(opts_b, :hash_strategy) do
       raise Errors.IncompatibleSketchesError,
         reason: "CMS parameter mismatch: #{inspect(opts_a)} vs #{inspect(opts_b)}"
     end
@@ -253,11 +256,13 @@ defmodule ExDataSketch.CMS do
     width = Keyword.fetch!(opts, :width)
     depth = Keyword.fetch!(opts, :depth)
     counter_width = Keyword.fetch!(opts, :counter_width)
+    hs = hash_strategy_byte(opts)
 
     params_bin = <<
       width::unsigned-little-32,
       depth::unsigned-little-16,
-      counter_width::unsigned-8
+      counter_width::unsigned-8,
+      hs::unsigned-8
     >>
 
     Codec.encode(Codec.sketch_id_cms(), Codec.version(), params_bin, state)
@@ -457,12 +462,36 @@ defmodule ExDataSketch.CMS do
      Errors.DeserializationError.exception(reason: "expected CMS sketch ID (2), got #{id}")}
   end
 
+  # Legacy 7-byte format (no hash strategy tag)
   defp decode_params(<<width::unsigned-little-32, depth::unsigned-little-16, cw::unsigned-8>>)
        when width > 0 and depth > 0 and cw in [32, 64] do
-    {:ok, [width: width, depth: depth, counter_width: cw]}
+    {:ok, [width: width, depth: depth, counter_width: cw, hash_strategy: :phash2]}
+  end
+
+  # New 8-byte format with hash strategy tag
+  defp decode_params(
+         <<width::unsigned-little-32, depth::unsigned-little-16, cw::unsigned-8,
+           hs::unsigned-8>>
+       )
+       when width > 0 and depth > 0 and cw in [32, 64] do
+    {:ok,
+     [width: width, depth: depth, counter_width: cw, hash_strategy: decode_hash_strategy(hs)]}
   end
 
   defp decode_params(_other) do
     {:error, Errors.DeserializationError.exception(reason: "invalid CMS params binary")}
   end
+
+  defp hash_strategy_byte(opts) do
+    case Keyword.get(opts, :hash_strategy, :phash2) do
+      :phash2 -> 0
+      :xxhash3 -> 1
+      :custom -> 2
+    end
+  end
+
+  defp decode_hash_strategy(0), do: :phash2
+  defp decode_hash_strategy(1), do: :xxhash3
+  defp decode_hash_strategy(2), do: :custom
+  defp decode_hash_strategy(_), do: :phash2
 end

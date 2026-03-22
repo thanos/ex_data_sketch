@@ -80,8 +80,8 @@ defmodule ExDataSketch.Theta do
   ## Examples
 
       iex> sketch = ExDataSketch.Theta.new(k: 1024)
-      iex> sketch.opts
-      [k: 1024]
+      iex> sketch.opts[:k]
+      1024
       iex> ExDataSketch.Theta.size_bytes(sketch)
       17
 
@@ -94,8 +94,11 @@ defmodule ExDataSketch.Theta do
     hash_fn = Keyword.get(opts, :hash_fn)
     seed = Keyword.get(opts, :seed)
 
+    hash_strategy =
+      if hash_fn, do: :custom, else: Hash.default_hash_strategy()
+
     clean_opts =
-      [k: k] ++
+      [k: k, hash_strategy: hash_strategy] ++
         if(hash_fn, do: [hash_fn: hash_fn], else: []) ++
         if(seed, do: [seed: seed], else: [])
 
@@ -258,7 +261,8 @@ defmodule ExDataSketch.Theta do
   @spec serialize(t()) :: binary()
   def serialize(%__MODULE__{state: state, opts: opts}) do
     k = Keyword.fetch!(opts, :k)
-    params_bin = <<k::unsigned-little-32>>
+    hs = hash_strategy_byte(opts)
+    params_bin = <<k::unsigned-little-32, hs::unsigned-8>>
     Codec.encode(Codec.sketch_id_theta(), Codec.version(), params_bin, state)
   end
 
@@ -455,9 +459,16 @@ defmodule ExDataSketch.Theta do
      Errors.DeserializationError.exception(reason: "expected Theta sketch ID (3), got #{id}")}
   end
 
+  # Legacy 4-byte format (no hash strategy tag)
   defp decode_params(<<k::unsigned-little-32>>)
        when k >= @min_k and k <= @max_k and (k &&& k - 1) == 0 do
-    {:ok, [k: k]}
+    {:ok, [k: k, hash_strategy: :phash2]}
+  end
+
+  # New 5-byte format with hash strategy tag
+  defp decode_params(<<k::unsigned-little-32, hs::unsigned-8>>)
+       when k >= @min_k and k <= @max_k and (k &&& k - 1) == 0 do
+    {:ok, [k: k, hash_strategy: decode_hash_strategy(hs)]}
   end
 
   defp decode_params(<<k::unsigned-little-32>>) do
@@ -468,7 +479,28 @@ defmodule ExDataSketch.Theta do
      )}
   end
 
+  defp decode_params(<<k::unsigned-little-32, _hs::unsigned-8>>) do
+    {:error,
+     Errors.DeserializationError.exception(
+       reason:
+         "invalid Theta k=#{k} in params (must be a power of 2 between #{@min_k} and #{@max_k})"
+     )}
+  end
+
   defp decode_params(_other) do
     {:error, Errors.DeserializationError.exception(reason: "invalid Theta params binary")}
   end
+
+  defp hash_strategy_byte(opts) do
+    case Keyword.get(opts, :hash_strategy, :phash2) do
+      :phash2 -> 0
+      :xxhash3 -> 1
+      :custom -> 2
+    end
+  end
+
+  defp decode_hash_strategy(0), do: :phash2
+  defp decode_hash_strategy(1), do: :xxhash3
+  defp decode_hash_strategy(2), do: :custom
+  defp decode_hash_strategy(_), do: :phash2
 end

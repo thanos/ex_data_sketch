@@ -34,7 +34,8 @@ defmodule ExDataSketch.VectorsTest do
       binary = HLL.serialize(sketch)
       assert {:ok, restored} = HLL.deserialize(binary)
       assert restored.state == stored
-      assert restored.opts == [p: 14]
+      assert restored.opts[:p] == 14
+      assert restored.opts[:hash_strategy] in [:phash2, :xxhash3]
     end
 
     test "100 items vector serialize/deserialize round-trip" do
@@ -77,7 +78,10 @@ defmodule ExDataSketch.VectorsTest do
       binary = CMS.serialize(sketch)
       assert {:ok, restored} = CMS.deserialize(binary)
       assert restored.state == stored
-      assert restored.opts == @cms_opts
+      assert restored.opts[:width] == 2048
+      assert restored.opts[:depth] == 5
+      assert restored.opts[:counter_width] == 32
+      assert restored.opts[:hash_strategy] in [:phash2, :xxhash3]
     end
 
     test "100 items vector serialize/deserialize round-trip" do
@@ -128,7 +132,8 @@ defmodule ExDataSketch.VectorsTest do
       binary = Theta.serialize(sketch)
       assert {:ok, restored} = Theta.deserialize(binary)
       assert restored.state == stored
-      assert restored.opts == [k: 4096]
+      assert restored.opts[:k] == 4096
+      assert restored.opts[:hash_strategy] in [:phash2, :xxhash3]
     end
 
     test "100 items vector serialize/deserialize round-trip" do

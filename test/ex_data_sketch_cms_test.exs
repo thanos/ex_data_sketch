@@ -22,13 +22,18 @@ defmodule ExDataSketch.CMSTest do
   describe "new/1" do
     test "creates sketch with default options" do
       sketch = CMS.new()
-      assert sketch.opts == [width: 2048, depth: 5, counter_width: 32]
+      assert sketch.opts[:width] == 2048
+      assert sketch.opts[:depth] == 5
+      assert sketch.opts[:counter_width] == 32
+      assert sketch.opts[:hash_strategy] in [:phash2, :xxhash3]
       assert sketch.backend == Backend.Pure
     end
 
     test "creates sketch with custom options" do
       sketch = CMS.new(width: 1024, depth: 3, counter_width: 64)
-      assert sketch.opts == [width: 1024, depth: 3, counter_width: 64]
+      assert sketch.opts[:width] == 1024
+      assert sketch.opts[:depth] == 3
+      assert sketch.opts[:counter_width] == 64
     end
 
     test "binary has correct size" do

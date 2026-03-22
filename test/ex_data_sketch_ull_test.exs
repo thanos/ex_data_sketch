@@ -22,14 +22,15 @@ defmodule ExDataSketch.ULLTest do
   describe "new/1" do
     test "creates sketch with default p=14" do
       sketch = ULL.new()
-      assert sketch.opts == [p: 14]
+      assert sketch.opts[:p] == 14
+      assert sketch.opts[:hash_strategy] in [:phash2, :xxhash3]
       assert sketch.backend == Backend.Pure
     end
 
     test "creates sketch with custom p" do
       for p <- [4, 10, 14, 20, 26] do
         sketch = ULL.new(p: p)
-        assert sketch.opts == [p: p]
+        assert sketch.opts[:p] == p
       end
     end
 
