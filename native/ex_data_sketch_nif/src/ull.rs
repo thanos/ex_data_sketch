@@ -1,4 +1,5 @@
-use rustler::{Binary, Env, Term};
+use rustler::{Binary, Env, ListIterator, Term};
+use xxhash_rust::xxh3;
 
 use crate::error;
 
@@ -201,6 +202,48 @@ fn ull_estimate_impl<'a>(env: Env<'a>, state_bin: Binary, p: u8) -> Term<'a> {
     };
 
     error::ok_float(env, estimate)
+}
+
+fn ull_update_many_raw_impl<'a>(env: Env<'a>, state_bin: Binary, items: ListIterator<'a>, p: u8, seed: u64) -> Term<'a> {
+    let m = match validate_p(env, p) {
+        Ok(m) => m,
+        Err(term) => return term,
+    };
+    let expected_len = ULL_HEADER_SIZE + m;
+
+    if state_bin.len() != expected_len {
+        return error::error_string(env, "invalid ULL state length");
+    }
+
+    let state = state_bin.as_slice();
+    let mut result = state.to_vec();
+
+    for item_term in items {
+        let bin: Binary = match item_term.decode() {
+            Ok(b) => b,
+            Err(_) => return error::error_string(env, "all items must be binaries"),
+        };
+        let hash = xxh3::xxh3_64_with_seed(bin.as_slice(), seed);
+        let bucket = (hash >> (64 - p)) as usize;
+        let reg_value = ull_register_value(hash, p);
+
+        let reg_idx = ULL_HEADER_SIZE + bucket;
+        if reg_value > result[reg_idx] {
+            result[reg_idx] = reg_value;
+        }
+    }
+
+    error::ok_binary(env, &result)
+}
+
+#[rustler::nif]
+fn ull_update_many_raw_nif<'a>(env: Env<'a>, state_bin: Binary, items: ListIterator<'a>, p: u8, seed: u64) -> Term<'a> {
+    ull_update_many_raw_impl(env, state_bin, items, p, seed)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn ull_update_many_raw_dirty_nif<'a>(env: Env<'a>, state_bin: Binary, items: ListIterator<'a>, p: u8, seed: u64) -> Term<'a> {
+    ull_update_many_raw_impl(env, state_bin, items, p, seed)
 }
 
 #[rustler::nif]

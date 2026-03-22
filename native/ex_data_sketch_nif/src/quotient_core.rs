@@ -258,7 +258,10 @@ fn resolve_quotient(slots: &[Slot], i: u32, m: u8, cur_q: Option<u32>, sc: u32) 
     let is_shi = m & QOT_SHI != 0;
 
     if is_con {
-        cur_q.unwrap_or(i)
+        match cur_q {
+            Some(q) => q,
+            None => trace_quotient_for(slots, i, sc),
+        }
     } else if !is_shi {
         i
     } else {

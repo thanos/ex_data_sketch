@@ -22,13 +22,18 @@ defmodule ExDataSketch.CMSTest do
   describe "new/1" do
     test "creates sketch with default options" do
       sketch = CMS.new()
-      assert sketch.opts == [width: 2048, depth: 5, counter_width: 32]
+      assert sketch.opts[:width] == 2048
+      assert sketch.opts[:depth] == 5
+      assert sketch.opts[:counter_width] == 32
+      assert sketch.opts[:hash_strategy] in [:phash2, :xxhash3]
       assert sketch.backend == Backend.Pure
     end
 
     test "creates sketch with custom options" do
       sketch = CMS.new(width: 1024, depth: 3, counter_width: 64)
-      assert sketch.opts == [width: 1024, depth: 3, counter_width: 64]
+      assert sketch.opts[:width] == 1024
+      assert sketch.opts[:depth] == 3
+      assert sketch.opts[:counter_width] == 64
     end
 
     test "binary has correct size" do
@@ -150,6 +155,13 @@ defmodule ExDataSketch.CMSTest do
       test "empty list is a no-op" do
         sketch = CMS.new(backend: @backend)
         assert CMS.update_many(sketch, []).state == sketch.state
+      end
+
+      test "works with custom hash_fn" do
+        hash_fn = fn term -> :erlang.phash2(term, 1 <<< 32) end
+        sketch = CMS.new(hash_fn: hash_fn, backend: @backend)
+        sketch = CMS.update_many(sketch, ["a", "b", "c"])
+        assert CMS.estimate(sketch, "a") >= 1
       end
     end
 
@@ -339,6 +351,54 @@ defmodule ExDataSketch.CMSTest do
       bin = ExDataSketch.Codec.encode(2, 1, <<>>, <<0, 0>>)
       assert {:error, %DeserializationError{message: msg}} = CMS.deserialize(bin)
       assert msg =~ "invalid CMS params"
+    end
+
+    test "deserializes xxhash3 hash strategy" do
+      sketch = CMS.from_enumerable(["a", "b"])
+      state = sketch.state
+      w = sketch.opts[:width]
+      d = sketch.opts[:depth]
+      cw = sketch.opts[:counter_width]
+      params = <<w::unsigned-little-32, d::unsigned-little-16, cw::unsigned-8, 1::unsigned-8>>
+      bin = ExDataSketch.Codec.encode(2, 1, params, state)
+      assert {:ok, restored} = CMS.deserialize(bin)
+      assert restored.opts[:hash_strategy] == :xxhash3
+    end
+
+    test "deserializes custom hash strategy" do
+      sketch = CMS.from_enumerable(["a", "b"])
+      state = sketch.state
+      w = sketch.opts[:width]
+      d = sketch.opts[:depth]
+      cw = sketch.opts[:counter_width]
+      params = <<w::unsigned-little-32, d::unsigned-little-16, cw::unsigned-8, 2::unsigned-8>>
+      bin = ExDataSketch.Codec.encode(2, 1, params, state)
+      assert {:ok, restored} = CMS.deserialize(bin)
+      assert restored.opts[:hash_strategy] == :custom
+    end
+
+    test "deserializes unknown hash strategy as phash2" do
+      sketch = CMS.from_enumerable(["a", "b"])
+      state = sketch.state
+      w = sketch.opts[:width]
+      d = sketch.opts[:depth]
+      cw = sketch.opts[:counter_width]
+      params = <<w::unsigned-little-32, d::unsigned-little-16, cw::unsigned-8, 99::unsigned-8>>
+      bin = ExDataSketch.Codec.encode(2, 1, params, state)
+      assert {:ok, restored} = CMS.deserialize(bin)
+      assert restored.opts[:hash_strategy] == :phash2
+    end
+
+    test "deserializes legacy 7-byte params as phash2" do
+      sketch = CMS.from_enumerable(["a", "b"])
+      state = sketch.state
+      w = sketch.opts[:width]
+      d = sketch.opts[:depth]
+      cw = sketch.opts[:counter_width]
+      params = <<w::unsigned-little-32, d::unsigned-little-16, cw::unsigned-8>>
+      bin = ExDataSketch.Codec.encode(2, 1, params, state)
+      assert {:ok, restored} = CMS.deserialize(bin)
+      assert restored.opts[:hash_strategy] == :phash2
     end
   end
 

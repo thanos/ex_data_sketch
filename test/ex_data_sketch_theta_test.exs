@@ -22,14 +22,15 @@ defmodule ExDataSketch.ThetaTest do
   describe "new/1" do
     test "creates sketch with default k=4096" do
       sketch = Theta.new()
-      assert sketch.opts == [k: 4096]
+      assert sketch.opts[:k] == 4096
+      assert sketch.opts[:hash_strategy] in [:phash2, :xxhash3]
       assert sketch.backend == Backend.Pure
     end
 
     test "creates sketch with custom k" do
       for k <- [16, 32, 64, 128, 256, 512, 1024, 2048, 4096] do
         sketch = Theta.new(k: k)
-        assert sketch.opts == [k: k]
+        assert sketch.opts[:k] == k
       end
     end
 
@@ -129,6 +130,13 @@ defmodule ExDataSketch.ThetaTest do
       test "empty list is a no-op" do
         sketch = Theta.new(k: 1024, backend: @backend)
         assert Theta.update_many(sketch, []).state == sketch.state
+      end
+
+      test "works with custom hash_fn" do
+        hash_fn = fn term -> :erlang.phash2(term, 1 <<< 32) end
+        sketch = Theta.new(k: 1024, hash_fn: hash_fn, backend: @backend)
+        sketch = Theta.update_many(sketch, ["a", "b", "c"])
+        assert Theta.estimate(sketch) > 0.0
       end
     end
 
@@ -440,6 +448,50 @@ defmodule ExDataSketch.ThetaTest do
       bin = ExDataSketch.Codec.encode(3, 1, params, <<0, 0>>)
       assert {:error, %DeserializationError{message: msg}} = Theta.deserialize(bin)
       assert msg =~ "power of 2"
+    end
+
+    test "rejects invalid k in 5-byte params" do
+      # k=100 (not power-of-2) with hash strategy byte
+      params = <<100::unsigned-little-32, 1::unsigned-8>>
+      bin = ExDataSketch.Codec.encode(3, 1, params, <<0, 0>>)
+      assert {:error, %DeserializationError{message: msg}} = Theta.deserialize(bin)
+      assert msg =~ "power of 2"
+    end
+
+    test "deserializes xxhash3 hash strategy" do
+      sketch = Theta.from_enumerable(["a", "b"], k: 1024)
+      state = sketch.state
+      params = <<1024::unsigned-little-32, 1::unsigned-8>>
+      bin = ExDataSketch.Codec.encode(3, 1, params, state)
+      assert {:ok, restored} = Theta.deserialize(bin)
+      assert restored.opts[:hash_strategy] == :xxhash3
+    end
+
+    test "deserializes custom hash strategy" do
+      sketch = Theta.from_enumerable(["a", "b"], k: 1024)
+      state = sketch.state
+      params = <<1024::unsigned-little-32, 2::unsigned-8>>
+      bin = ExDataSketch.Codec.encode(3, 1, params, state)
+      assert {:ok, restored} = Theta.deserialize(bin)
+      assert restored.opts[:hash_strategy] == :custom
+    end
+
+    test "deserializes unknown hash strategy as phash2" do
+      sketch = Theta.from_enumerable(["a", "b"], k: 1024)
+      state = sketch.state
+      params = <<1024::unsigned-little-32, 99::unsigned-8>>
+      bin = ExDataSketch.Codec.encode(3, 1, params, state)
+      assert {:ok, restored} = Theta.deserialize(bin)
+      assert restored.opts[:hash_strategy] == :phash2
+    end
+
+    test "deserializes legacy 4-byte params as phash2" do
+      sketch = Theta.from_enumerable(["a", "b"], k: 1024)
+      state = sketch.state
+      params = <<1024::unsigned-little-32>>
+      bin = ExDataSketch.Codec.encode(3, 1, params, state)
+      assert {:ok, restored} = Theta.deserialize(bin)
+      assert restored.opts[:hash_strategy] == :phash2
     end
   end
 
