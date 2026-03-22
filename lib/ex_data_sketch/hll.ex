@@ -119,10 +119,29 @@ defmodule ExDataSketch.HLL do
       true
 
   """
+  @update_many_chunk_size 10_000
+
   @spec update_many(t(), Enumerable.t()) :: t()
-  def update_many(%__MODULE__{state: state, opts: opts, backend: backend} = sketch, items) do
-    hashes = Enum.map(items, &Hash.hash64/1)
-    new_state = backend.hll_update_many(state, hashes, opts)
+  def update_many(%__MODULE__{opts: opts, backend: backend} = sketch, items)
+      when backend == Backend.Pure do
+    new_state =
+      Enum.reduce(items, sketch.state, fn item, state_acc ->
+        hash = Hash.hash64(item)
+        backend.hll_update(state_acc, hash, opts)
+      end)
+
+    %{sketch | state: new_state}
+  end
+
+  def update_many(%__MODULE__{opts: opts, backend: backend} = sketch, items) do
+    new_state =
+      items
+      |> Stream.chunk_every(@update_many_chunk_size)
+      |> Enum.reduce(sketch.state, fn chunk, state_acc ->
+        hashes = Enum.map(chunk, &Hash.hash64/1)
+        backend.hll_update_many(state_acc, hashes, opts)
+      end)
+
     %{sketch | state: new_state}
   end
 

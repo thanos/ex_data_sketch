@@ -1396,3 +1396,62 @@ Requirements for merging:
 - Both sketches must be the same type (e.g., both HLL).
 - Both sketches must have the same parameters (e.g., same `p` value for HLL).
 - Attempting to merge incompatible sketches returns an error.
+
+## Benchmarking
+
+Run all benchmarks with `mix bench`, or individual benchmark files with
+`mix run bench/<name>.exs`.
+
+### Interpreting Benchee Memory Numbers
+
+Benchee's "Memory usage" metric measures **total heap allocation** during the
+benchmarked function call. This is the sum of every byte allocated on the
+process heap, including transient garbage that is immediately collectible
+(intermediate values, short-lived binary copies, list cons cells, etc.). It is
+**not** peak memory, resident memory, or the size of the final data structure.
+
+This distinction matters when benchmarking probabilistic sketches against exact
+data structures like MapSet:
+
+- **Processing allocation is O(n) for both approaches.** Every item must be
+  processed, so both MapSet and HLL/ULL allocate proportionally to the number
+  of items inserted. HLL may report higher total allocation because its
+  64-bit hash mixing (`mix64`) produces intermediate bigints (values exceeding
+  60 bits are heap-allocated in the BEAM), whereas MapSet's internal
+  `:erlang.phash2` performs its arithmetic inside the VM in C with no Elixir
+  heap allocation.
+
+- **Result size is where sketches win.** An HLL sketch at p=12 occupies a
+  fixed 4 KB regardless of whether 1,000 or 100,000,000 items were inserted.
+  A MapSet must store every unique element and grows linearly with cardinality.
+
+To measure the actual memory advantage, compare the size of the finished data
+structures rather than Benchee's total allocation metric:
+
+```elixir
+mapset = Enum.into(data, MapSet.new())
+hll = HLL.new(p: 12) |> HLL.update_many(items)
+
+:erlang.external_size(mapset)   # grows with cardinality
+:erlang.external_size(hll.state) # fixed at ~4 KB for p=12
+```
+
+See `bench/hhl_v_naive.exs` for a complete example that includes both a
+Benchee throughput/allocation comparison and a result-size comparison showing
+the fixed sketch footprint.
+
+### Backend Considerations
+
+The **Rust backend** (`ExDataSketch.Backend.Rust`) moves hashing and batch
+operations into a NIF, eliminating per-item bigint overhead from Elixir's hash
+mixing. This significantly reduces total allocation in Benchee measurements and
+improves throughput. When benchmarking, specify the backend explicitly so
+results are reproducible:
+
+```elixir
+HLL.new(p: 12, backend: ExDataSketch.Backend.Rust)
+```
+
+The **Pure backend** processes items one at a time in `update_many`, avoiding
+intermediate list allocation but performing all arithmetic on the Elixir heap.
+It is useful for environments where the Rust NIF is not available.
