@@ -45,7 +45,11 @@ defmodule ExDataSketch.Backend.Rust do
 
   @behaviour ExDataSketch.Backend
 
+  import Bitwise
+
   alias ExDataSketch.Backend.Pure
+
+  @mask64 0xFFFFFFFFFFFFFFFF
 
   @default_thresholds %{
     hll_update_many: 10_000,
@@ -134,7 +138,7 @@ defmodule ExDataSketch.Backend.Rust do
 
   def hll_update_many_raw(state_bin, items, opts) do
     p = Keyword.fetch!(opts, :p)
-    seed = Keyword.get(opts, :seed, 0)
+    seed = Keyword.get(opts, :seed, 0) &&& @mask64
     bins = ensure_binaries(items)
     threshold = dirty_threshold(:hll_update_many, opts)
 
@@ -208,7 +212,7 @@ defmodule ExDataSketch.Backend.Rust do
     width = Keyword.fetch!(opts, :width)
     depth = Keyword.fetch!(opts, :depth)
     counter_width = Keyword.fetch!(opts, :counter_width)
-    seed = Keyword.get(opts, :seed, 0)
+    seed = Keyword.get(opts, :seed, 0) &&& @mask64
     pairs = normalize_cms_items(items)
     threshold = dirty_threshold(:cms_update_many, opts)
 
@@ -294,7 +298,7 @@ defmodule ExDataSketch.Backend.Rust do
   def theta_estimate(state_bin, opts), do: Pure.theta_estimate(state_bin, opts)
 
   def theta_update_many_raw(state_bin, items, opts) do
-    seed = Keyword.get(opts, :seed, 0)
+    seed = Keyword.get(opts, :seed, 0) &&& @mask64
     bins = ensure_binaries(items)
     threshold = dirty_threshold(:theta_update_many, opts)
 
@@ -942,7 +946,7 @@ defmodule ExDataSketch.Backend.Rust do
 
   def ull_update_many_raw(state_bin, items, opts) do
     p = Keyword.fetch!(opts, :p)
-    seed = Keyword.get(opts, :seed, 0)
+    seed = Keyword.get(opts, :seed, 0) &&& @mask64
     bins = ensure_binaries(items)
     threshold = dirty_threshold(:ull_update_many, opts)
 

@@ -204,10 +204,16 @@ defmodule ExDataSketch.CMS do
         %__MODULE__{state: state_a, opts: opts_a, backend: backend} = sketch,
         %__MODULE__{state: state_b, opts: opts_b}
       ) do
-    if Keyword.delete(opts_a, :hash_strategy) != Keyword.delete(opts_b, :hash_strategy) do
+    if opts_a[:width] != opts_b[:width] or opts_a[:depth] != opts_b[:depth] or
+         opts_a[:counter_width] != opts_b[:counter_width] do
       raise Errors.IncompatibleSketchesError,
-        reason: "CMS parameter mismatch: #{inspect(opts_a)} vs #{inspect(opts_b)}"
+        reason:
+          "CMS parameter mismatch: width=#{opts_a[:width]}/#{opts_b[:width]}, " <>
+            "depth=#{opts_a[:depth]}/#{opts_b[:depth]}, " <>
+            "counter_width=#{opts_a[:counter_width]}/#{opts_b[:counter_width]}"
     end
+
+    Hash.validate_merge_hash_compat!(opts_a, opts_b, "CMS")
 
     new_state = backend.cms_merge(state_a, state_b, opts_a)
     %{sketch | state: new_state}

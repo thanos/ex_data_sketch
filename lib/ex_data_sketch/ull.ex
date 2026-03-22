@@ -140,9 +140,11 @@ defmodule ExDataSketch.ULL do
   def update_many(%__MODULE__{opts: opts, backend: backend} = sketch, items)
       when backend == Backend.Pure do
     new_state =
-      Enum.reduce(items, sketch.state, fn item, state_acc ->
-        hash = hash_item(item, opts)
-        backend.ull_update(state_acc, hash, opts)
+      items
+      |> Stream.chunk_every(@update_many_chunk_size)
+      |> Enum.reduce(sketch.state, fn chunk, state_acc ->
+        hashes = Enum.map(chunk, &hash_item(&1, opts))
+        backend.ull_update_many(state_acc, hashes, opts)
       end)
 
     %{sketch | state: new_state}
@@ -194,6 +196,8 @@ defmodule ExDataSketch.ULL do
       raise Errors.IncompatibleSketchesError,
         reason: "ULL precision mismatch: #{opts_a[:p]} vs #{opts_b[:p]}"
     end
+
+    Hash.validate_merge_hash_compat!(opts_a, opts_b, "ULL")
 
     new_state = backend.ull_merge(state_a, state_b, opts_a)
     %{sketch | state: new_state}

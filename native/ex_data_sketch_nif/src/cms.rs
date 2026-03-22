@@ -146,7 +146,7 @@ fn cms_update_many_raw_impl<'a>(
     for item_term in items {
         let (bin, increment): (Binary, u32) = match item_term.decode() {
             Ok(pair) => pair,
-            Err(_) => return error::error_string(env, "expected {binary, increment} tuple"),
+            Err(_) => return error::error_string(env, "expected {binary, increment} tuple where increment is a u32 (0..4294967295)"),
         };
 
         let hash64 = xxh3::xxh3_64_with_seed(bin.as_slice(), seed);

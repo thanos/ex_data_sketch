@@ -331,6 +331,41 @@ defmodule ExDataSketch.Hash do
     {r2 ||| r3 <<< 16, r0 ||| r1 <<< 16}
   end
 
+  @doc """
+  Validates that two sets of sketch options have compatible hashing configuration.
+
+  Raises `ExDataSketch.Errors.IncompatibleSketchesError` if:
+  - Either sketch uses a custom `:hash_fn` (closures cannot be compared)
+  - Hash strategies differ (e.g. `:xxhash3` vs `:phash2`)
+  - Seeds differ (default is 0)
+  """
+  @spec validate_merge_hash_compat!(Keyword.t(), Keyword.t(), String.t()) :: :ok
+  def validate_merge_hash_compat!(opts_a, opts_b, sketch_type) do
+    strategy_a = Keyword.get(opts_a, :hash_strategy)
+    strategy_b = Keyword.get(opts_b, :hash_strategy)
+
+    if strategy_a == :custom or strategy_b == :custom do
+      raise ExDataSketch.Errors.IncompatibleSketchesError,
+        reason:
+          "#{sketch_type} merge is not supported with custom :hash_fn (cannot verify hash compatibility)"
+    end
+
+    if strategy_a != strategy_b do
+      raise ExDataSketch.Errors.IncompatibleSketchesError,
+        reason: "#{sketch_type} hash strategy mismatch: #{strategy_a} vs #{strategy_b}"
+    end
+
+    seed_a = Keyword.get(opts_a, :seed, 0)
+    seed_b = Keyword.get(opts_b, :seed, 0)
+
+    if seed_a != seed_b do
+      raise ExDataSketch.Errors.IncompatibleSketchesError,
+        reason: "#{sketch_type} seed mismatch: #{seed_a} vs #{seed_b}"
+    end
+
+    :ok
+  end
+
   defp nif_loaded? do
     Code.ensure_loaded?(ExDataSketch.Nif) and ExDataSketch.Nif.nif_loaded() == :ok
   rescue
