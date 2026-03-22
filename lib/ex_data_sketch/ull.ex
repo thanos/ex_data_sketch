@@ -69,6 +69,8 @@ defmodule ExDataSketch.ULL do
   - `:p` - precision parameter, integer #{@min_p}..#{@max_p} (default: #{@default_p}).
     Higher values use more memory but give better accuracy.
   - `:backend` - backend module (default: `ExDataSketch.Backend.Pure`).
+  - `:hash_fn` - custom hash function `(term -> non_neg_integer)`.
+  - `:seed` - hash seed (default: 0).
 
   ## Examples
 
@@ -84,7 +86,14 @@ defmodule ExDataSketch.ULL do
     p = Keyword.get(opts, :p, @default_p)
     validate_p!(p)
     backend = Backend.resolve(opts)
-    clean_opts = [p: p]
+    hash_fn = Keyword.get(opts, :hash_fn)
+    seed = Keyword.get(opts, :seed)
+
+    clean_opts =
+      [p: p] ++
+        if(hash_fn, do: [hash_fn: hash_fn], else: []) ++
+        if(seed, do: [seed: seed], else: [])
+
     state = backend.ull_new(clean_opts)
     %__MODULE__{state: state, opts: clean_opts, backend: backend}
   end
@@ -104,7 +113,7 @@ defmodule ExDataSketch.ULL do
   """
   @spec update(t(), term()) :: t()
   def update(%__MODULE__{state: state, opts: opts, backend: backend} = sketch, item) do
-    hash = Hash.hash64(item)
+    hash = hash_item(item, opts)
     new_state = backend.ull_update(state, hash, opts)
     %{sketch | state: new_state}
   end
@@ -129,7 +138,7 @@ defmodule ExDataSketch.ULL do
       when backend == Backend.Pure do
     new_state =
       Enum.reduce(items, sketch.state, fn item, state_acc ->
-        hash = Hash.hash64(item)
+        hash = hash_item(item, opts)
         backend.ull_update(state_acc, hash, opts)
       end)
 
@@ -141,7 +150,7 @@ defmodule ExDataSketch.ULL do
       items
       |> Stream.chunk_every(@update_many_chunk_size)
       |> Enum.reduce(sketch.state, fn chunk, state_acc ->
-        hashes = Enum.map(chunk, &Hash.hash64/1)
+        hashes = Enum.map(chunk, &hash_item(&1, opts))
         backend.ull_update_many(state_acc, hashes, opts)
       end)
 
@@ -348,6 +357,19 @@ defmodule ExDataSketch.ULL do
   end
 
   # -- Private --
+
+  @default_seed 0
+
+  defp hash_item(item, opts) do
+    case Keyword.get(opts, :hash_fn) do
+      nil ->
+        seed = Keyword.get(opts, :seed, @default_seed)
+        Hash.hash64(item, seed: seed)
+
+      hash_fn ->
+        Hash.hash64(item, hash_fn: hash_fn)
+    end
+  end
 
   defp validate_p!(p) when is_integer(p) and p >= @min_p and p <= @max_p, do: :ok
 

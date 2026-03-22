@@ -81,6 +81,8 @@ defmodule ExDataSketch.CMS do
   - `:depth` - number of rows (default: #{@default_depth}). Must be positive.
   - `:counter_width` - bits per counter, 32 or 64 (default: #{@default_counter_width}).
   - `:backend` - backend module (default: `ExDataSketch.Backend.Pure`).
+  - `:hash_fn` - custom hash function `(term -> non_neg_integer)`.
+  - `:seed` - hash seed (default: 0).
 
   ## Examples
 
@@ -100,7 +102,14 @@ defmodule ExDataSketch.CMS do
     validate_counter_width!(counter_width)
 
     backend = Backend.resolve(opts)
-    clean_opts = [width: width, depth: depth, counter_width: counter_width]
+    hash_fn = Keyword.get(opts, :hash_fn)
+    seed = Keyword.get(opts, :seed)
+
+    clean_opts =
+      [width: width, depth: depth, counter_width: counter_width] ++
+        if(hash_fn, do: [hash_fn: hash_fn], else: []) ++
+        if(seed, do: [seed: seed], else: [])
+
     state = backend.cms_new(clean_opts)
     %__MODULE__{state: state, opts: clean_opts, backend: backend}
   end
@@ -131,7 +140,7 @@ defmodule ExDataSketch.CMS do
         increment \\ 1
       )
       when is_integer(increment) and increment > 0 do
-    hash = Hash.hash64(item)
+    hash = hash_item(item, opts)
     new_state = backend.cms_update(state, hash, increment, opts)
     %{sketch | state: new_state}
   end
@@ -154,10 +163,10 @@ defmodule ExDataSketch.CMS do
     pairs =
       Enum.map(items, fn
         {item, increment} when is_integer(increment) and increment > 0 ->
-          {Hash.hash64(item), increment}
+          {hash_item(item, opts), increment}
 
         item ->
-          {Hash.hash64(item), 1}
+          {hash_item(item, opts), 1}
       end)
 
     new_state = backend.cms_update_many(state, pairs, opts)
@@ -208,7 +217,7 @@ defmodule ExDataSketch.CMS do
   """
   @spec estimate(t(), term()) :: non_neg_integer()
   def estimate(%__MODULE__{state: state, opts: opts, backend: backend}, item) do
-    hash = Hash.hash64(item)
+    hash = hash_item(item, opts)
     backend.cms_estimate(state, hash, opts)
   end
 
@@ -400,6 +409,19 @@ defmodule ExDataSketch.CMS do
   end
 
   # -- Private --
+
+  @default_seed 0
+
+  defp hash_item(item, opts) do
+    case Keyword.get(opts, :hash_fn) do
+      nil ->
+        seed = Keyword.get(opts, :seed, @default_seed)
+        Hash.hash64(item, seed: seed)
+
+      hash_fn ->
+        Hash.hash64(item, hash_fn: hash_fn)
+    end
+  end
 
   defp validate_width!(w) when is_integer(w) and w > 0, do: :ok
 

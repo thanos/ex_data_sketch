@@ -74,6 +74,8 @@ defmodule ExDataSketch.Theta do
   - `:k` - nominal number of entries (default: #{@default_k}). Must be a
     power of 2, between #{@min_k} and #{@max_k}.
   - `:backend` - backend module (default: `ExDataSketch.Backend.Pure`).
+  - `:hash_fn` - custom hash function `(term -> non_neg_integer)`.
+  - `:seed` - hash seed (default: 0).
 
   ## Examples
 
@@ -89,7 +91,14 @@ defmodule ExDataSketch.Theta do
     k = Keyword.get(opts, :k, @default_k)
     validate_k!(k)
     backend = Backend.resolve(opts)
-    clean_opts = [k: k]
+    hash_fn = Keyword.get(opts, :hash_fn)
+    seed = Keyword.get(opts, :seed)
+
+    clean_opts =
+      [k: k] ++
+        if(hash_fn, do: [hash_fn: hash_fn], else: []) ++
+        if(seed, do: [seed: seed], else: [])
+
     state = backend.theta_new(clean_opts)
     %__MODULE__{state: state, opts: clean_opts, backend: backend}
   end
@@ -109,7 +118,7 @@ defmodule ExDataSketch.Theta do
   """
   @spec update(t(), term()) :: t()
   def update(%__MODULE__{state: state, opts: opts, backend: backend} = sketch, item) do
-    hash = Hash.hash64(item)
+    hash = hash_item(item, opts)
     new_state = backend.theta_update(state, hash, opts)
     %{sketch | state: new_state}
   end
@@ -134,7 +143,7 @@ defmodule ExDataSketch.Theta do
       when backend == Backend.Pure do
     new_state =
       Enum.reduce(items, sketch.state, fn item, state_acc ->
-        hash = Hash.hash64(item)
+        hash = hash_item(item, opts)
         backend.theta_update(state_acc, hash, opts)
       end)
 
@@ -146,7 +155,7 @@ defmodule ExDataSketch.Theta do
       items
       |> Stream.chunk_every(@update_many_chunk_size)
       |> Enum.reduce(sketch.state, fn chunk, state_acc ->
-        hashes = Enum.map(chunk, &Hash.hash64/1)
+        hashes = Enum.map(chunk, &hash_item(&1, opts))
         backend.theta_update_many(state_acc, hashes, opts)
       end)
 
@@ -406,6 +415,19 @@ defmodule ExDataSketch.Theta do
   end
 
   # -- Private --
+
+  @default_seed 0
+
+  defp hash_item(item, opts) do
+    case Keyword.get(opts, :hash_fn) do
+      nil ->
+        seed = Keyword.get(opts, :seed, @default_seed)
+        Hash.hash64(item, seed: seed)
+
+      hash_fn ->
+        Hash.hash64(item, hash_fn: hash_fn)
+    end
+  end
 
   defp validate_k!(k) when is_integer(k) and k >= @min_k and k <= @max_k do
     if (k &&& k - 1) != 0 do
