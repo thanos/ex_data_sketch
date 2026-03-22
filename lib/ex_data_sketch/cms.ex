@@ -478,8 +478,7 @@ defmodule ExDataSketch.CMS do
 
   # New 8-byte format with hash strategy tag
   defp decode_params(
-         <<width::unsigned-little-32, depth::unsigned-little-16, cw::unsigned-8,
-           hs::unsigned-8>>
+         <<width::unsigned-little-32, depth::unsigned-little-16, cw::unsigned-8, hs::unsigned-8>>
        )
        when width > 0 and depth > 0 and cw in [32, 64] do
     {:ok,

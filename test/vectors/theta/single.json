@@ -4,7 +4,7 @@
     "k": 4096
   },
   "expected": {
-    "canonical_exsk_base64": "RVhTSwEDBQAAAAAQAAAAGQAAAAEAEAAA//////////8BAAAAl1jcWHfqTwA=",
+    "canonical_exsk_base64": "RVhTSwEDBQAAAAAQAAABGQAAAAEAEAAA//////////8BAAAA/dxiXFXoVZU=",
     "estimate": 1.0,
     "tolerance": 0
   },

@@ -2740,8 +2740,8 @@ defmodule ExDataSketch.Backend.Pure do
     is_shi = (m &&& @qot_shi) != 0
 
     cond do
-      is_con -> cur_q
-      not is_shi -> i
+      is_con and cur_q != nil -> cur_q
+      not is_shi and not is_con -> i
       true -> qot_trace_quotient_for(ctx, i)
     end
   end

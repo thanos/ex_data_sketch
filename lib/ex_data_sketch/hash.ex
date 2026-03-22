@@ -122,19 +122,17 @@ defmodule ExDataSketch.Hash do
   @spec hash64(term(), opts()) :: hash64()
   def hash64(term, opts \\ []) do
     case Keyword.get(opts, :hash_fn) do
-      nil ->
-        seed = Keyword.get(opts, :seed, 0)
+      nil -> hash64_default(term, Keyword.get(opts, :seed, 0))
+      hash_fn when is_function(hash_fn, 1) -> hash_fn.(term)
+    end
+  end
 
-        if nif_available?() do
-          # Pass binaries directly to avoid term_to_binary allocation
-          bin = if is_binary(term), do: term, else: :erlang.term_to_binary(term)
-          ExDataSketch.Nif.xxhash3_64_seeded_nif(bin, seed &&& @mask64)
-        else
-          mix64(:erlang.phash2(term, 1 <<< 32), seed)
-        end
-
-      hash_fn when is_function(hash_fn, 1) ->
-        hash_fn.(term)
+  defp hash64_default(term, seed) do
+    if nif_available?() do
+      bin = if is_binary(term), do: term, else: :erlang.term_to_binary(term)
+      ExDataSketch.Nif.xxhash3_64_seeded_nif(bin, seed &&& @mask64)
+    else
+      mix64(:erlang.phash2(term, 1 <<< 32), seed)
     end
   end
 
@@ -238,7 +236,7 @@ defmodule ExDataSketch.Hash do
   # hi <<< 32 ||| lo return value.
   @spec mix64(non_neg_integer(), non_neg_integer()) :: hash64()
   defp mix64(base32, seed) do
-    seed_hi = (seed >>> 32) &&& @mask32
+    seed_hi = seed >>> 32 &&& @mask32
     seed_lo = seed &&& @mask32
 
     # Full 64-bit product: base32 * golden_ratio
@@ -248,7 +246,7 @@ defmodule ExDataSketch.Hash do
     raw_lo = prod_lo + seed_lo
     b_lo = raw_lo &&& @mask32
     carry = raw_lo >>> 32
-    b_hi = (prod_hi + seed_hi + carry) &&& @mask32
+    b_hi = prod_hi + seed_hi + carry &&& @mask32
 
     # combined = (bxor(base32, seed) <<< 32 ||| (base32 * golden + seed))
     # The <<< 32 puts bxor(base32, seed_lo) into the high word (seed_hi drops
@@ -270,13 +268,8 @@ defmodule ExDataSketch.Hash do
   # XOR a {hi, lo} pair with itself right-shifted by n bits.
   defp xor_rshift({hi, lo}, n) when n < 32 do
     shifted_hi = hi >>> n
-    shifted_lo = ((hi <<< (32 - n)) &&& @mask32) ||| (lo >>> n)
+    shifted_lo = (hi <<< (32 - n) &&& @mask32) ||| lo >>> n
     {bxor(hi, shifted_hi), bxor(lo, shifted_lo)}
-  end
-
-  defp xor_rshift({hi, lo}, n) when n >= 32 do
-    shifted_lo = hi >>> (n - 32)
-    {hi, bxor(lo, shifted_lo)}
   end
 
   # Full 64-bit product of two 32-bit values using 16-bit schoolbook multiply.
@@ -299,7 +292,7 @@ defmodule ExDataSketch.Hash do
     r2 = col2 &&& @mask16
     r3 = col2 >>> 16
 
-    {r2 ||| (r3 <<< 16), r0 ||| (r1 <<< 16)}
+    {r2 ||| r3 <<< 16, r0 ||| r1 <<< 16}
   end
 
   # 64x64 multiply mod 2^64 using 16-bit schoolbook partial products.
@@ -335,7 +328,7 @@ defmodule ExDataSketch.Hash do
     col3 = a3 * b0 + a2 * b1 + a1 * b2 + a0 * b3 + carry2
     r3 = col3 &&& @mask16
 
-    {r2 ||| (r3 <<< 16), r0 ||| (r1 <<< 16)}
+    {r2 ||| r3 <<< 16, r0 ||| r1 <<< 16}
   end
 
   defp nif_loaded? do
