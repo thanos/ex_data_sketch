@@ -45,7 +45,11 @@ defmodule ExDataSketch.Hash do
   import Bitwise
 
   @type hash64 :: non_neg_integer()
-  @type hash_opt :: {:seed, non_neg_integer()} | {:hash_fn, (term() -> hash64())}
+  @type hash_strategy :: :phash2 | :xxhash3 | :custom
+  @type hash_opt ::
+          {:seed, non_neg_integer()}
+          | {:hash_fn, (term() -> hash64())}
+          | {:hash_strategy, hash_strategy()}
   @type opts :: [hash_opt()]
 
   @mask16 0xFFFF

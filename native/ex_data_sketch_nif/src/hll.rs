@@ -4,6 +4,15 @@ use xxhash_rust::xxh3;
 use crate::error;
 
 const HLL_HEADER_SIZE: usize = 4;
+const HLL_MIN_P: u8 = 4;
+const HLL_MAX_P: u8 = 16;
+
+fn validate_p(env: Env, p: u8) -> Result<usize, Term> {
+    if p < HLL_MIN_P || p > HLL_MAX_P {
+        return Err(error::error_string(env, "invalid HLL precision p, must be 4..16"));
+    }
+    Ok(1usize << p)
+}
 
 /// Count leading zeros in the top `n` bits of `value`.
 /// Matches Pure Elixir's `count_leading_zeros(value, n)` exactly.
@@ -28,7 +37,7 @@ fn alpha(m: usize) -> f64 {
 }
 
 fn hll_update_many_impl<'a>(env: Env<'a>, state_bin: Binary, hashes_bin: Binary, p: u8) -> Term<'a> {
-    let m: usize = 1 << p;
+    let m = match validate_p(env, p) { Ok(m) => m, Err(e) => return e };
     let expected_len = HLL_HEADER_SIZE + m;
 
     if state_bin.len() != expected_len {
@@ -60,7 +69,7 @@ fn hll_update_many_impl<'a>(env: Env<'a>, state_bin: Binary, hashes_bin: Binary,
 }
 
 fn hll_merge_impl<'a>(env: Env<'a>, a_bin: Binary, b_bin: Binary, p: u8) -> Term<'a> {
-    let m: usize = 1 << p;
+    let m = match validate_p(env, p) { Ok(m) => m, Err(e) => return e };
     let expected_len = HLL_HEADER_SIZE + m;
 
     if a_bin.len() != expected_len || b_bin.len() != expected_len {
@@ -81,7 +90,7 @@ fn hll_merge_impl<'a>(env: Env<'a>, a_bin: Binary, b_bin: Binary, p: u8) -> Term
 }
 
 fn hll_estimate_impl<'a>(env: Env<'a>, state_bin: Binary, p: u8) -> Term<'a> {
-    let m: usize = 1 << p;
+    let m = match validate_p(env, p) { Ok(m) => m, Err(e) => return e };
     let expected_len = HLL_HEADER_SIZE + m;
 
     if state_bin.len() != expected_len {
@@ -119,7 +128,7 @@ fn hll_estimate_impl<'a>(env: Env<'a>, state_bin: Binary, p: u8) -> Term<'a> {
 }
 
 fn hll_update_many_raw_impl<'a>(env: Env<'a>, state_bin: Binary, items: ListIterator<'a>, p: u8, seed: u64) -> Term<'a> {
-    let m: usize = 1 << p;
+    let m = match validate_p(env, p) { Ok(m) => m, Err(e) => return e };
     let expected_len = HLL_HEADER_SIZE + m;
 
     if state_bin.len() != expected_len {

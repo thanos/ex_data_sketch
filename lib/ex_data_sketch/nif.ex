@@ -29,10 +29,10 @@ defmodule ExDataSketch.Nif do
   def hll_update_many_nif(_state_bin, _hashes_bin, _p), do: :erlang.nif_error(:not_loaded)
   def hll_update_many_dirty_nif(_state_bin, _hashes_bin, _p), do: :erlang.nif_error(:not_loaded)
 
-  def hll_update_many_raw_nif(_state_bin, _items_bin, _p, _seed),
+  def hll_update_many_raw_nif(_state_bin, _items, _p, _seed),
     do: :erlang.nif_error(:not_loaded)
 
-  def hll_update_many_raw_dirty_nif(_state_bin, _items_bin, _p, _seed),
+  def hll_update_many_raw_dirty_nif(_state_bin, _items, _p, _seed),
     do: :erlang.nif_error(:not_loaded)
 
   def hll_merge_nif(_a_bin, _b_bin, _p), do: :erlang.nif_error(:not_loaded)
@@ -46,10 +46,10 @@ defmodule ExDataSketch.Nif do
   def cms_update_many_dirty_nif(_state_bin, _pairs_bin, _w, _d, _cw),
     do: :erlang.nif_error(:not_loaded)
 
-  def cms_update_many_raw_nif(_state_bin, _items_bin, _w, _d, _cw, _seed),
+  def cms_update_many_raw_nif(_state_bin, _items, _w, _d, _cw, _seed),
     do: :erlang.nif_error(:not_loaded)
 
-  def cms_update_many_raw_dirty_nif(_state_bin, _items_bin, _w, _d, _cw, _seed),
+  def cms_update_many_raw_dirty_nif(_state_bin, _items, _w, _d, _cw, _seed),
     do: :erlang.nif_error(:not_loaded)
 
   def cms_merge_nif(_a_bin, _b_bin, _w, _d, _cw), do: :erlang.nif_error(:not_loaded)
@@ -58,9 +58,9 @@ defmodule ExDataSketch.Nif do
   # Theta
   def theta_update_many_nif(_state_bin, _hashes_bin), do: :erlang.nif_error(:not_loaded)
   def theta_update_many_dirty_nif(_state_bin, _hashes_bin), do: :erlang.nif_error(:not_loaded)
-  def theta_update_many_raw_nif(_state_bin, _items_bin, _seed), do: :erlang.nif_error(:not_loaded)
+  def theta_update_many_raw_nif(_state_bin, _items, _seed), do: :erlang.nif_error(:not_loaded)
 
-  def theta_update_many_raw_dirty_nif(_state_bin, _items_bin, _seed),
+  def theta_update_many_raw_dirty_nif(_state_bin, _items, _seed),
     do: :erlang.nif_error(:not_loaded)
 
   def theta_compact_nif(_state_bin), do: :erlang.nif_error(:not_loaded)
@@ -155,10 +155,10 @@ defmodule ExDataSketch.Nif do
   def ull_update_many_nif(_state_bin, _hashes_bin, _p), do: :erlang.nif_error(:not_loaded)
   def ull_update_many_dirty_nif(_state_bin, _hashes_bin, _p), do: :erlang.nif_error(:not_loaded)
 
-  def ull_update_many_raw_nif(_state_bin, _items_bin, _p, _seed),
+  def ull_update_many_raw_nif(_state_bin, _items, _p, _seed),
     do: :erlang.nif_error(:not_loaded)
 
-  def ull_update_many_raw_dirty_nif(_state_bin, _items_bin, _p, _seed),
+  def ull_update_many_raw_dirty_nif(_state_bin, _items, _p, _seed),
     do: :erlang.nif_error(:not_loaded)
 
   def ull_merge_nif(_a_bin, _b_bin, _p), do: :erlang.nif_error(:not_loaded)
@@ -168,8 +168,8 @@ defmodule ExDataSketch.Nif do
 
   # FrequentItems
   def fi_new_nif(_k, _flags), do: :erlang.nif_error(:not_loaded)
-  def fi_update_many_nif(_state_bin, _packed_items_bin), do: :erlang.nif_error(:not_loaded)
-  def fi_update_many_dirty_nif(_state_bin, _packed_items_bin), do: :erlang.nif_error(:not_loaded)
+  def fi_update_many_nif(_state_bin, _packed_items), do: :erlang.nif_error(:not_loaded)
+  def fi_update_many_dirty_nif(_state_bin, _packed_items), do: :erlang.nif_error(:not_loaded)
   def fi_merge_nif(_a_bin, _b_bin), do: :erlang.nif_error(:not_loaded)
   def fi_merge_dirty_nif(_a_bin, _b_bin), do: :erlang.nif_error(:not_loaded)
   def fi_estimate_nif(_state_bin, _item_bytes), do: :erlang.nif_error(:not_loaded)
