@@ -440,7 +440,18 @@ defmodule ExDataSketch.HLL do
 
   # New 2-byte format with hash strategy tag
   defp decode_params(<<p::unsigned-8, hs::unsigned-8>>) when p >= @min_p and p <= @max_p do
-    {:ok, [p: p, hash_strategy: decode_hash_strategy(hs)]}
+    case decode_hash_strategy(hs) do
+      :custom ->
+        {:error,
+         Errors.DeserializationError.exception(
+           reason:
+             "HLL was serialized with a custom :hash_fn which cannot be restored; " <>
+               "pass the original hash_fn when re-creating the sketch"
+         )}
+
+      strategy ->
+        {:ok, [p: p, hash_strategy: strategy]}
+    end
   end
 
   defp decode_params(<<p::unsigned-8>>) do

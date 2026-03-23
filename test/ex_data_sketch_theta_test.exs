@@ -467,13 +467,16 @@ defmodule ExDataSketch.ThetaTest do
       assert restored.opts[:hash_strategy] == :xxhash3
     end
 
-    test "deserializes custom hash strategy" do
+    test "rejects custom hash strategy during deserialization" do
       sketch = Theta.from_enumerable(["a", "b"], k: 1024)
       state = sketch.state
       params = <<1024::unsigned-little-32, 2::unsigned-8>>
       bin = ExDataSketch.Codec.encode(3, 1, params, state)
-      assert {:ok, restored} = Theta.deserialize(bin)
-      assert restored.opts[:hash_strategy] == :custom
+
+      assert {:error, %ExDataSketch.Errors.DeserializationError{message: message}} =
+               Theta.deserialize(bin)
+
+      assert message =~ "custom :hash_fn which cannot be restored"
     end
 
     test "deserializes unknown hash strategy as phash2" do

@@ -344,13 +344,16 @@ defmodule ExDataSketch.ULLTest do
       assert restored.opts[:hash_strategy] == :xxhash3
     end
 
-    test "deserializes custom hash strategy" do
+    test "rejects custom hash strategy during deserialization" do
       sketch = ULL.from_enumerable(["a", "b"], p: 10)
       state = sketch.state
       params = <<10::unsigned-8, 2::unsigned-8>>
       bin = ExDataSketch.Codec.encode(15, 1, params, state)
-      assert {:ok, restored} = ULL.deserialize(bin)
-      assert restored.opts[:hash_strategy] == :custom
+
+      assert {:error, %ExDataSketch.Errors.DeserializationError{message: message}} =
+               ULL.deserialize(bin)
+
+      assert message =~ "custom :hash_fn which cannot be restored"
     end
 
     test "deserializes unknown hash strategy as phash2" do

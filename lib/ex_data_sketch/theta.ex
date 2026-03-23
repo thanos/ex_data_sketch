@@ -481,7 +481,18 @@ defmodule ExDataSketch.Theta do
   # New 5-byte format with hash strategy tag
   defp decode_params(<<k::unsigned-little-32, hs::unsigned-8>>)
        when k >= @min_k and k <= @max_k and (k &&& k - 1) == 0 do
-    {:ok, [k: k, hash_strategy: decode_hash_strategy(hs)]}
+    case decode_hash_strategy(hs) do
+      :custom ->
+        {:error,
+         Errors.DeserializationError.exception(
+           reason:
+             "Theta was serialized with a custom :hash_fn which cannot be restored; " <>
+               "pass the original hash_fn when re-creating the sketch"
+         )}
+
+      strategy ->
+        {:ok, [k: k, hash_strategy: strategy]}
+    end
   end
 
   defp decode_params(<<k::unsigned-little-32>>) do

@@ -6,14 +6,12 @@ alias ExDataSketch.HLL
 # --------------------------------------------
 # Benchee's "Memory usage" measures TOTAL HEAP ALLOCATION during the function
 # call, not peak or resident memory. This includes all transient garbage that
-# is immediately collectible (intermediate bigints from hashing, short-lived
-# binary copies, list cons cells, etc.).
+# is immediately collectible (short-lived binary copies, list cons cells, etc.).
 #
-# Because every item must be hashed, total allocation is always O(n) for both
-# MapSet and HLL. HLL will appear to use MORE total allocation than MapSet at
-# small-to-medium scales because Elixir's 64-bit hash mixing (mix64) produces
-# intermediate bigints (>60 bits) that are heap-allocated, whereas MapSet's
-# internal :erlang.phash2 does its arithmetic inside the VM in C.
+# The Pure backend's mix64 is fixnum-safe (all intermediates stay under 60
+# bits), so hashing itself does not allocate transient bigints. The remaining
+# per-item allocation comes from :erlang.term_to_binary conversions and the
+# unavoidable 64-bit hash return values that exceed the BEAM fixnum range.
 #
 # The real HLL advantage is RESULT SIZE: the final sketch is a fixed 4 KB
 # (at p=12) regardless of whether you inserted 1K or 100M items, while MapSet
@@ -22,8 +20,8 @@ alias ExDataSketch.HLL
 # the finished data structures.
 #
 # For production use the Rust backend (ExDataSketch.Backend.Rust) is
-# recommended; it moves hashing into a NIF, eliminating the per-item bigint
-# overhead entirely.
+# recommended; it moves hashing into the NIF batch call, eliminating per-item
+# Elixir heap allocation entirely (94.6% memory reduction at 10M items).
 
 defmodule TaxiData do
   def stream_ids(limit),

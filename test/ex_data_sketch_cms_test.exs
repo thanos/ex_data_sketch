@@ -365,7 +365,7 @@ defmodule ExDataSketch.CMSTest do
       assert restored.opts[:hash_strategy] == :xxhash3
     end
 
-    test "deserializes custom hash strategy" do
+    test "rejects custom hash strategy during deserialization" do
       sketch = CMS.from_enumerable(["a", "b"])
       state = sketch.state
       w = sketch.opts[:width]
@@ -373,8 +373,11 @@ defmodule ExDataSketch.CMSTest do
       cw = sketch.opts[:counter_width]
       params = <<w::unsigned-little-32, d::unsigned-little-16, cw::unsigned-8, 2::unsigned-8>>
       bin = ExDataSketch.Codec.encode(2, 1, params, state)
-      assert {:ok, restored} = CMS.deserialize(bin)
-      assert restored.opts[:hash_strategy] == :custom
+
+      assert {:error, %ExDataSketch.Errors.DeserializationError{message: message}} =
+               CMS.deserialize(bin)
+
+      assert message =~ "custom :hash_fn which cannot be restored"
     end
 
     test "deserializes unknown hash strategy as phash2" do

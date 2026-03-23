@@ -129,6 +129,10 @@ defmodule ExDataSketch.Hash do
 
       hash_fn when is_function(hash_fn, 1) ->
         hash_fn.(term)
+
+      other ->
+        raise ArgumentError,
+              ":hash_fn must be a 1-arity function, got: #{inspect(other)}"
     end
   end
 
@@ -193,6 +197,10 @@ defmodule ExDataSketch.Hash do
 
       hash_fn when is_function(hash_fn, 1) ->
         hash_fn.(binary)
+
+      other ->
+        raise ArgumentError,
+              ":hash_fn must be a 1-arity function, got: #{inspect(other)}"
     end
   end
 
@@ -387,8 +395,8 @@ defmodule ExDataSketch.Hash do
   """
   @spec validate_merge_hash_compat!(Keyword.t(), Keyword.t(), String.t()) :: :ok
   def validate_merge_hash_compat!(opts_a, opts_b, sketch_type) do
-    strategy_a = Keyword.get(opts_a, :hash_strategy)
-    strategy_b = Keyword.get(opts_b, :hash_strategy)
+    strategy_a = Keyword.get(opts_a, :hash_strategy, :phash2)
+    strategy_b = Keyword.get(opts_b, :hash_strategy, :phash2)
 
     if strategy_a == :custom or strategy_b == :custom do
       raise ExDataSketch.Errors.IncompatibleSketchesError,

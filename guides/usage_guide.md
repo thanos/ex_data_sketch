@@ -602,8 +602,13 @@ than 3+ bigint heap allocations from naive 64-bit multiplications.
 
 Sketches record which hash function was used at creation time (`:xxhash3`,
 `:phash2`, or `:custom`). This tag is persisted through serialization in the
-EXSK params section so deserialized sketches document their provenance.
-The tag is metadata only and does not affect runtime hash dispatch.
+EXSK params section and controls runtime hash dispatch:
+
+- `:phash2` -- always uses the pure Elixir mix64 path, even when the NIF is available.
+- `:xxhash3` -- requires the Rust NIF; raises `ArgumentError` if unavailable.
+- `:custom` -- cannot be deserialized (the original function is not recoverable from bytes); `deserialize/1` returns `{:error, %DeserializationError{}}`.
+
+Merge operations validate that both sketches share the same strategy and seed.
 
 ### Pluggable hash
 

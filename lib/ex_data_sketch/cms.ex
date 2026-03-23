@@ -497,8 +497,18 @@ defmodule ExDataSketch.CMS do
          <<width::unsigned-little-32, depth::unsigned-little-16, cw::unsigned-8, hs::unsigned-8>>
        )
        when width > 0 and depth > 0 and cw in [32, 64] do
-    {:ok,
-     [width: width, depth: depth, counter_width: cw, hash_strategy: decode_hash_strategy(hs)]}
+    case decode_hash_strategy(hs) do
+      :custom ->
+        {:error,
+         Errors.DeserializationError.exception(
+           reason:
+             "CMS was serialized with a custom :hash_fn which cannot be restored; " <>
+               "pass the original hash_fn when re-creating the sketch"
+         )}
+
+      strategy ->
+        {:ok, [width: width, depth: depth, counter_width: cw, hash_strategy: strategy]}
+    end
   end
 
   defp decode_params(_other) do
