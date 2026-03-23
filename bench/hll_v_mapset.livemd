@@ -1,0 +1,85 @@
+# HLL v MapSet: Unique values benchmark
+
+```elixir
+Mix.install([
+  {:ex_data_sketch, "~> 0.7.1"},
+  {:benchee, "~> 1.5"},
+  {:flow, "~> 1.2"}
+])
+```
+
+## Section
+
+```elixir
+alias ExDataSketch.HLL
+
+
+defmodule TaxiData do
+  def stream_ids(limit),
+    do: Stream.repeatedly(fn -> :rand.uniform(5_000_000) end) |> Stream.take(limit)
+end
+
+defmodule Format do
+  def bytes(n) when n < 1_024, do: "#{n} B"
+  def bytes(n) when n < 1_048_576, do: "#{Float.round(n / 1_024, 1)} KB"
+  def bytes(n), do: "#{Float.round(n / 1_048_576, 2)} MB"
+end
+
+inputs = %{
+  "100k Rows" => 100_000,
+  "1m Rows" => 1_000_000,
+  "10m Rows" => 10_000_000
+}
+
+# -- Benchmark 1: Throughput & total allocation (Benchee) ---------------------
+IO.puts("\n=== Throughput & Total Allocation (Benchee) ===\n")
+
+Benchee.run(
+  %{
+    "Naive: MapSet (Uniq)" => {
+      fn data -> data |> Enum.into(MapSet.new()) |> MapSet.size() end,
+      before_each: fn limit -> TaxiData.stream_ids(limit) |> Enum.to_list() end
+    },
+    "Sketch: HLL (Uniq)" => {
+      fn items ->
+        HLL.new(p: 12, backend: ExDataSketch.Backend.Rust)
+        |> HLL.update_many(items)
+        |> HLL.estimate()
+      end,
+      before_each: fn limit ->
+        TaxiData.stream_ids(limit) |> Enum.map(&Integer.to_string/1)
+      end
+    }
+  },
+  inputs: inputs,
+  memory_time: 2,
+  time: 5
+)
+
+# -- Benchmark 2: Result memory (the real HLL advantage) ---------------------
+
+```
+
+```elixir
+IO.puts("\n=== Result Memory: Final Data Structure Size ===\n")
+
+for {label, limit} <- Enum.sort_by(inputs, fn {_, v} -> v end) do
+  data = TaxiData.stream_ids(limit) |> Enum.to_list()
+  items = Enum.map(data, &Integer.to_string/1)
+
+  mapset = Enum.into(data, MapSet.new())
+  hll = HLL.new(p: 12) |> HLL.update_many(items)
+
+  mapset_bytes = :erlang.external_size(mapset)
+  hll_bytes = :erlang.external_size(hll.state)
+
+  IO.puts("#{label}:")
+  IO.puts("  MapSet result size:  #{Format.bytes(mapset_bytes)}")
+  IO.puts("  HLL result size:     #{Format.bytes(hll_bytes)}")
+  IO.puts("  Ratio:               MapSet is #{Float.round(mapset_bytes / hll_bytes, 1)}x larger")
+  IO.puts("  MapSet unique count: #{MapSet.size(mapset)}")
+  IO.puts("  HLL estimate:        #{Float.round(HLL.estimate(hll), 0)}")
+  IO.puts("")
+end
+
+```

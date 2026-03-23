@@ -1,4 +1,5 @@
-use rustler::{Binary, Env, Term};
+use rustler::{Binary, Env, ListIterator, Term};
+use xxhash_rust::xxh3;
 
 use crate::error;
 
@@ -115,6 +116,48 @@ fn hll_estimate_impl<'a>(env: Env<'a>, state_bin: Binary, p: u8) -> Term<'a> {
     };
 
     error::ok_float(env, estimate)
+}
+
+fn hll_update_many_raw_impl<'a>(env: Env<'a>, state_bin: Binary, items: ListIterator<'a>, p: u8, seed: u64) -> Term<'a> {
+    let m: usize = 1 << p;
+    let expected_len = HLL_HEADER_SIZE + m;
+
+    if state_bin.len() != expected_len {
+        return error::error_string(env, "invalid HLL state length");
+    }
+
+    let state = state_bin.as_slice();
+    let mut result = state.to_vec();
+    let bits = 64 - p as u32;
+    let remaining_mask: u64 = (1u64 << bits) - 1;
+
+    for item_term in items {
+        let bin: Binary = match item_term.decode() {
+            Ok(b) => b,
+            Err(_) => return error::error_string(env, "all items must be binaries"),
+        };
+        let hash = xxh3::xxh3_64_with_seed(bin.as_slice(), seed);
+        let bucket = (hash >> bits) as usize;
+        let remaining = hash & remaining_mask;
+        let rank = clz_in_bits(remaining, bits) + 1;
+
+        let reg_idx = HLL_HEADER_SIZE + bucket;
+        if rank > result[reg_idx] {
+            result[reg_idx] = rank;
+        }
+    }
+
+    error::ok_binary(env, &result)
+}
+
+#[rustler::nif]
+fn hll_update_many_raw_nif<'a>(env: Env<'a>, state_bin: Binary, items: ListIterator<'a>, p: u8, seed: u64) -> Term<'a> {
+    hll_update_many_raw_impl(env, state_bin, items, p, seed)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn hll_update_many_raw_dirty_nif<'a>(env: Env<'a>, state_bin: Binary, items: ListIterator<'a>, p: u8, seed: u64) -> Term<'a> {
+    hll_update_many_raw_impl(env, state_bin, items, p, seed)
 }
 
 #[rustler::nif]

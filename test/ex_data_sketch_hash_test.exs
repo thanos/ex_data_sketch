@@ -132,4 +132,64 @@ defmodule ExDataSketch.HashTest do
       assert ExDataSketch.HLL.estimate(sketch) > 0.0
     end
   end
+
+  describe "validate_merge_hash_compat!/3" do
+    test "passes when both use same default strategy and seed" do
+      opts = [p: 14, hash_strategy: :xxhash3]
+      assert :ok == Hash.validate_merge_hash_compat!(opts, opts, "HLL")
+    end
+
+    test "passes when both use same strategy with explicit seed" do
+      opts_a = [p: 14, hash_strategy: :xxhash3, seed: 42]
+      opts_b = [p: 14, hash_strategy: :xxhash3, seed: 42]
+      assert :ok == Hash.validate_merge_hash_compat!(opts_a, opts_b, "HLL")
+    end
+
+    test "passes when both omit seed (defaults to 0)" do
+      opts_a = [p: 14, hash_strategy: :phash2]
+      opts_b = [p: 14, hash_strategy: :phash2]
+      assert :ok == Hash.validate_merge_hash_compat!(opts_a, opts_b, "HLL")
+    end
+
+    test "raises on strategy mismatch" do
+      opts_a = [p: 14, hash_strategy: :xxhash3]
+      opts_b = [p: 14, hash_strategy: :phash2]
+
+      assert_raise ExDataSketch.Errors.IncompatibleSketchesError,
+                   ~r/hash strategy mismatch/,
+                   fn -> Hash.validate_merge_hash_compat!(opts_a, opts_b, "HLL") end
+    end
+
+    test "raises on seed mismatch" do
+      opts_a = [p: 14, hash_strategy: :xxhash3, seed: 1]
+      opts_b = [p: 14, hash_strategy: :xxhash3, seed: 2]
+
+      assert_raise ExDataSketch.Errors.IncompatibleSketchesError,
+                   ~r/seed mismatch/,
+                   fn -> Hash.validate_merge_hash_compat!(opts_a, opts_b, "HLL") end
+    end
+
+    test "raises when either uses custom hash_fn" do
+      opts_a = [p: 14, hash_strategy: :custom]
+      opts_b = [p: 14, hash_strategy: :xxhash3]
+
+      assert_raise ExDataSketch.Errors.IncompatibleSketchesError,
+                   ~r/custom :hash_fn/,
+                   fn -> Hash.validate_merge_hash_compat!(opts_a, opts_b, "HLL") end
+    end
+
+    test "raises when both use custom hash_fn" do
+      opts = [p: 14, hash_strategy: :custom]
+
+      assert_raise ExDataSketch.Errors.IncompatibleSketchesError,
+                   ~r/custom :hash_fn/,
+                   fn -> Hash.validate_merge_hash_compat!(opts, opts, "HLL") end
+    end
+
+    test "seed 0 matches missing seed" do
+      opts_a = [p: 14, hash_strategy: :xxhash3, seed: 0]
+      opts_b = [p: 14, hash_strategy: :xxhash3]
+      assert :ok == Hash.validate_merge_hash_compat!(opts_a, opts_b, "HLL")
+    end
+  end
 end

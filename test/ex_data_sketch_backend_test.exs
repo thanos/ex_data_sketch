@@ -677,6 +677,61 @@ defmodule ExDataSketch.BackendTest do
     end
   end
 
+  describe "ensure_binaries/1" do
+    test "passes binaries through unchanged" do
+      assert Rust.ensure_binaries(["a", "b", "c"]) == ["a", "b", "c"]
+    end
+
+    test "converts non-binary terms via term_to_binary" do
+      result = Rust.ensure_binaries([123, :atom, {1, 2}])
+      assert length(result) == 3
+      assert Enum.all?(result, &is_binary/1)
+      assert Enum.at(result, 0) == :erlang.term_to_binary(123)
+      assert Enum.at(result, 1) == :erlang.term_to_binary(:atom)
+      assert Enum.at(result, 2) == :erlang.term_to_binary({1, 2})
+    end
+
+    test "handles mixed binary and non-binary items" do
+      result = Rust.ensure_binaries(["hello", 42, "world"])
+      assert result == ["hello", :erlang.term_to_binary(42), "world"]
+    end
+
+    test "returns empty list for empty input" do
+      assert Rust.ensure_binaries([]) == []
+    end
+  end
+
+  describe "normalize_cms_items/1" do
+    test "wraps bare items with default increment 1" do
+      result = Rust.normalize_cms_items(["a", "b"])
+      assert result == [{"a", 1}, {"b", 1}]
+    end
+
+    test "preserves explicit {item, increment} tuples" do
+      result = Rust.normalize_cms_items([{"a", 5}, {"b", 10}])
+      assert result == [{"a", 5}, {"b", 10}]
+    end
+
+    test "converts non-binary items to binary" do
+      result = Rust.normalize_cms_items([42, {99, 3}])
+      assert result == [{:erlang.term_to_binary(42), 1}, {:erlang.term_to_binary(99), 3}]
+    end
+
+    test "handles mixed bare and tuple items" do
+      result = Rust.normalize_cms_items(["x", {"y", 7}, :z])
+
+      assert result == [
+               {"x", 1},
+               {"y", 7},
+               {:erlang.term_to_binary(:z), 1}
+             ]
+    end
+
+    test "returns empty list for empty input" do
+      assert Rust.normalize_cms_items([]) == []
+    end
+  end
+
   describe "Rust backend dirty threshold configuration" do
     setup do
       original = Application.get_env(:ex_data_sketch, :dirty_thresholds)

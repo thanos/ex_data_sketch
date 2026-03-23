@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-03-22
+
+### Added
+
+- Move hashing into NIF batch calls: `update_many` for HLL, ULL, Theta, and CMS now sends raw items to Rust and hashes inside the NIF, eliminating per-item Elixir heap allocations (94.6% memory reduction at 10M items). (#202)
+- Wire `:hash_fn` and `:seed` options through HLL, ULL, Theta, and CMS, enabling custom hash functions and reproducible seeded hashing. (#198)
+- Merge hash-compatibility validation: `merge/2` on HLL, ULL, Theta, and CMS now raises `IncompatibleSketchesError` when hash strategy or seed differs between sketches. (#205)
+- Pure backend `hll_update_many` optimization: pre-aggregate map with sorted binary splice replaces tuple-based per-hash full-tuple copies, reducing transient allocation from O(n * m) to O(n + m).
+- ListIterator-based NIF item decoding for zero-copy Erlang list iteration in Rust.
+- Test infrastructure: configurable coverage baselines, Rust CI coverage reporting, 39 new tests covering deserialization edge cases, custom hash_fn paths, helper functions, and merge validation.
+
+### Fixed
+
+- Quotient filter wrap-around bug: `extract_all` in both Pure and Rust backends failed when a cluster wrapped from slot N-1 to slot 0, producing nil quotients (Pure crash) or silent corruption (Rust). (#203, #204)
+- CMS merge validation: replaced flawed `Keyword.delete(opts, :hash_strategy)` comparison with explicit width/depth/counter_width checks.
+- Pure backend `update_many` regression: restored chunk + batch `*_update_many` path for HLL, ULL, and Theta (was incorrectly using per-item `*_update`).
+- Seed clamping: all raw NIF functions now clamp seed values to u64 range before passing to Rust.
+- Hash-dependent vector tests tagged with `@tag :rust_nif` to prevent failures in pure-only CI (vectors were generated with xxhash3).
+
 ## [0.7.0] - 2026-03-11
 
 ### Added
