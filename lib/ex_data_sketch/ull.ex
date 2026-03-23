@@ -151,7 +151,9 @@ defmodule ExDataSketch.ULL do
   end
 
   def update_many(%__MODULE__{opts: opts, backend: backend} = sketch, items) do
-    use_raw = backend == Backend.Rust and Keyword.get(opts, :hash_fn) == nil
+    use_raw =
+      backend == Backend.Rust and Keyword.get(opts, :hash_fn) == nil and
+        Keyword.get(opts, :hash_strategy) != :phash2
 
     new_state =
       items
@@ -378,7 +380,8 @@ defmodule ExDataSketch.ULL do
     case Keyword.get(opts, :hash_fn) do
       nil ->
         seed = Keyword.get(opts, :seed, @default_seed)
-        Hash.hash64(item, seed: seed)
+        strategy = Keyword.get(opts, :hash_strategy)
+        Hash.hash64(item, seed: seed, hash_strategy: strategy)
 
       hash_fn ->
         Hash.hash64(item, hash_fn: hash_fn)

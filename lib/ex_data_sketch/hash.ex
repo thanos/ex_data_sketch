@@ -122,17 +122,36 @@ defmodule ExDataSketch.Hash do
   @spec hash64(term(), opts()) :: hash64()
   def hash64(term, opts \\ []) do
     case Keyword.get(opts, :hash_fn) do
-      nil -> hash64_default(term, Keyword.get(opts, :seed, 0))
-      hash_fn when is_function(hash_fn, 1) -> hash_fn.(term)
+      nil ->
+        seed = Keyword.get(opts, :seed, 0)
+        strategy = Keyword.get(opts, :hash_strategy)
+        hash64_default(term, seed, strategy)
+
+      hash_fn when is_function(hash_fn, 1) ->
+        hash_fn.(term)
     end
   end
 
-  defp hash64_default(term, seed) do
+  defp hash64_default(term, seed, :phash2) do
+    mix64(:erlang.phash2(term, 1 <<< 32), seed &&& @mask64)
+  end
+
+  defp hash64_default(term, seed, :xxhash3) do
     if nif_available?() do
       bin = if is_binary(term), do: term, else: :erlang.term_to_binary(term)
       ExDataSketch.Nif.xxhash3_64_seeded_nif(bin, seed &&& @mask64)
     else
-      mix64(:erlang.phash2(term, 1 <<< 32), seed)
+      raise ArgumentError,
+        "hash_strategy :xxhash3 requires the Rust NIF but it is not available"
+    end
+  end
+
+  defp hash64_default(term, seed, _auto) do
+    if nif_available?() do
+      bin = if is_binary(term), do: term, else: :erlang.term_to_binary(term)
+      ExDataSketch.Nif.xxhash3_64_seeded_nif(bin, seed &&& @mask64)
+    else
+      mix64(:erlang.phash2(term, 1 <<< 32), seed &&& @mask64)
     end
   end
 
@@ -164,15 +183,32 @@ defmodule ExDataSketch.Hash do
     case Keyword.get(opts, :hash_fn) do
       nil ->
         seed = Keyword.get(opts, :seed, 0)
-
-        if nif_available?() do
-          ExDataSketch.Nif.xxhash3_64_seeded_nif(binary, seed &&& @mask64)
-        else
-          mix64(:erlang.phash2(binary, 1 <<< 32), seed)
-        end
+        strategy = Keyword.get(opts, :hash_strategy)
+        hash64_binary_default(binary, seed, strategy)
 
       hash_fn when is_function(hash_fn, 1) ->
         hash_fn.(binary)
+    end
+  end
+
+  defp hash64_binary_default(binary, seed, :phash2) do
+    mix64(:erlang.phash2(binary, 1 <<< 32), seed &&& @mask64)
+  end
+
+  defp hash64_binary_default(binary, seed, :xxhash3) do
+    if nif_available?() do
+      ExDataSketch.Nif.xxhash3_64_seeded_nif(binary, seed &&& @mask64)
+    else
+      raise ArgumentError,
+        "hash_strategy :xxhash3 requires the Rust NIF but it is not available"
+    end
+  end
+
+  defp hash64_binary_default(binary, seed, _auto) do
+    if nif_available?() do
+      ExDataSketch.Nif.xxhash3_64_seeded_nif(binary, seed &&& @mask64)
+    else
+      mix64(:erlang.phash2(binary, 1 <<< 32), seed &&& @mask64)
     end
   end
 
