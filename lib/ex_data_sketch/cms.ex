@@ -161,25 +161,22 @@ defmodule ExDataSketch.CMS do
       2
 
   """
+  @update_many_chunk_size 10_000
+
   @spec update_many(t(), Enumerable.t()) :: t()
   def update_many(%__MODULE__{state: state, opts: opts, backend: backend} = sketch, items) do
     use_raw = backend == Backend.Rust and Keyword.get(opts, :hash_fn) == nil
 
     new_state =
-      if use_raw do
-        Backend.Rust.cms_update_many_raw(state, Enum.to_list(items), opts)
-      else
-        pairs =
-          Enum.map(items, fn
-            {item, increment} when is_integer(increment) and increment > 0 ->
-              {hash_item(item, opts), increment}
-
-            item ->
-              {hash_item(item, opts), 1}
-          end)
-
-        backend.cms_update_many(state, pairs, opts)
-      end
+      items
+      |> Stream.chunk_every(@update_many_chunk_size)
+      |> Enum.reduce(state, fn chunk, state_acc ->
+        if use_raw do
+          Backend.Rust.cms_update_many_raw(state_acc, chunk, opts)
+        else
+          backend.cms_update_many(state_acc, hash_pairs(chunk, opts), opts)
+        end
+      end)
 
     %{sketch | state: new_state}
   end
@@ -430,6 +427,16 @@ defmodule ExDataSketch.CMS do
   # -- Private --
 
   @default_seed 0
+
+  defp hash_pairs(chunk, opts) do
+    Enum.map(chunk, fn
+      {item, increment} when is_integer(increment) and increment > 0 ->
+        {hash_item(item, opts), increment}
+
+      item ->
+        {hash_item(item, opts), 1}
+    end)
+  end
 
   defp hash_item(item, opts) do
     case Keyword.get(opts, :hash_fn) do

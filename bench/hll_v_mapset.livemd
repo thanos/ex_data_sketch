@@ -2,7 +2,7 @@
 
 ```elixir
 Mix.install([
-  {:ex_data_sketch, "~> 0.7.0"},
+  {:ex_data_sketch, "~> 0.7.1"},
   {:benchee, "~> 1.5"},
   {:flow, "~> 1.2"}
 ])
