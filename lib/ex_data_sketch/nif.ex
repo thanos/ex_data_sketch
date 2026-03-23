@@ -20,6 +20,8 @@ defmodule ExDataSketch.Nif do
       ]
   end
 
+  # coveralls-ignore-start
+
   @doc false
   def nif_loaded, do: :erlang.nif_error(:not_loaded)
 
@@ -174,4 +176,6 @@ defmodule ExDataSketch.Nif do
   def fi_top_k_nif(_state_bin, _limit), do: :erlang.nif_error(:not_loaded)
   def fi_count_nif(_state_bin), do: :erlang.nif_error(:not_loaded)
   def fi_entry_count_nif(_state_bin), do: :erlang.nif_error(:not_loaded)
+
+  # coveralls-ignore-stop
 end

@@ -142,8 +142,13 @@ defmodule ExDataSketch.Hash do
       ExDataSketch.Nif.xxhash3_64_seeded_nif(bin, seed &&& @mask64)
     else
       raise ArgumentError,
-        "hash_strategy :xxhash3 requires the Rust NIF but it is not available"
+            "hash_strategy :xxhash3 requires the Rust NIF but it is not available"
     end
+  end
+
+  defp hash64_default(_term, _seed, :custom) do
+    raise ArgumentError,
+          "hash_strategy :custom requires a :hash_fn but none was provided"
   end
 
   defp hash64_default(term, seed, _auto) do
@@ -200,8 +205,13 @@ defmodule ExDataSketch.Hash do
       ExDataSketch.Nif.xxhash3_64_seeded_nif(binary, seed &&& @mask64)
     else
       raise ArgumentError,
-        "hash_strategy :xxhash3 requires the Rust NIF but it is not available"
+            "hash_strategy :xxhash3 requires the Rust NIF but it is not available"
     end
+  end
+
+  defp hash64_binary_default(_binary, _seed, :custom) do
+    raise ArgumentError,
+          "hash_strategy :custom requires a :hash_fn but none was provided"
   end
 
   defp hash64_binary_default(binary, seed, _auto) do

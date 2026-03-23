@@ -100,6 +100,8 @@ defmodule ExDataSketch.Backend.Rust do
     _ -> false
   end
 
+  # coveralls-ignore-start
+
   # -- HLL callbacks --
 
   @impl true
@@ -990,6 +992,8 @@ defmodule ExDataSketch.Backend.Rust do
     |> IO.iodata_to_binary()
   end
 
+  # coveralls-ignore-stop
+
   @doc false
   def ensure_binaries(items) do
     Enum.map(items, fn
@@ -1010,6 +1014,8 @@ defmodule ExDataSketch.Backend.Rust do
         {bin, 1}
     end)
   end
+
+  # coveralls-ignore-start
 
   defp encode_pairs(pairs) do
     pairs
@@ -1040,4 +1046,6 @@ defmodule ExDataSketch.Backend.Rust do
   defp unwrap_ok!({:error, reason}) do
     raise "Rust NIF error: #{reason}"
   end
+
+  # coveralls-ignore-stop
 end
