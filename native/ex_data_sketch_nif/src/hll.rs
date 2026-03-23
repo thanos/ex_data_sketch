@@ -1,8 +1,18 @@
-use rustler::{Binary, Env, Term};
+use rustler::{Binary, Env, ListIterator, Term};
+use xxhash_rust::xxh3;
 
 use crate::error;
 
 const HLL_HEADER_SIZE: usize = 4;
+const HLL_MIN_P: u8 = 4;
+const HLL_MAX_P: u8 = 16;
+
+fn validate_p(env: Env, p: u8) -> Result<usize, Term> {
+    if p < HLL_MIN_P || p > HLL_MAX_P {
+        return Err(error::error_string(env, "invalid HLL precision p, must be 4..16"));
+    }
+    Ok(1usize << p)
+}
 
 /// Count leading zeros in the top `n` bits of `value`.
 /// Matches Pure Elixir's `count_leading_zeros(value, n)` exactly.
@@ -27,7 +37,7 @@ fn alpha(m: usize) -> f64 {
 }
 
 fn hll_update_many_impl<'a>(env: Env<'a>, state_bin: Binary, hashes_bin: Binary, p: u8) -> Term<'a> {
-    let m: usize = 1 << p;
+    let m = match validate_p(env, p) { Ok(m) => m, Err(e) => return e };
     let expected_len = HLL_HEADER_SIZE + m;
 
     if state_bin.len() != expected_len {
@@ -59,7 +69,7 @@ fn hll_update_many_impl<'a>(env: Env<'a>, state_bin: Binary, hashes_bin: Binary,
 }
 
 fn hll_merge_impl<'a>(env: Env<'a>, a_bin: Binary, b_bin: Binary, p: u8) -> Term<'a> {
-    let m: usize = 1 << p;
+    let m = match validate_p(env, p) { Ok(m) => m, Err(e) => return e };
     let expected_len = HLL_HEADER_SIZE + m;
 
     if a_bin.len() != expected_len || b_bin.len() != expected_len {
@@ -80,7 +90,7 @@ fn hll_merge_impl<'a>(env: Env<'a>, a_bin: Binary, b_bin: Binary, p: u8) -> Term
 }
 
 fn hll_estimate_impl<'a>(env: Env<'a>, state_bin: Binary, p: u8) -> Term<'a> {
-    let m: usize = 1 << p;
+    let m = match validate_p(env, p) { Ok(m) => m, Err(e) => return e };
     let expected_len = HLL_HEADER_SIZE + m;
 
     if state_bin.len() != expected_len {
@@ -115,6 +125,48 @@ fn hll_estimate_impl<'a>(env: Env<'a>, state_bin: Binary, p: u8) -> Term<'a> {
     };
 
     error::ok_float(env, estimate)
+}
+
+fn hll_update_many_raw_impl<'a>(env: Env<'a>, state_bin: Binary, items: ListIterator<'a>, p: u8, seed: u64) -> Term<'a> {
+    let m = match validate_p(env, p) { Ok(m) => m, Err(e) => return e };
+    let expected_len = HLL_HEADER_SIZE + m;
+
+    if state_bin.len() != expected_len {
+        return error::error_string(env, "invalid HLL state length");
+    }
+
+    let state = state_bin.as_slice();
+    let mut result = state.to_vec();
+    let bits = 64 - p as u32;
+    let remaining_mask: u64 = (1u64 << bits) - 1;
+
+    for item_term in items {
+        let bin: Binary = match item_term.decode() {
+            Ok(b) => b,
+            Err(_) => return error::error_string(env, "all items must be binaries"),
+        };
+        let hash = xxh3::xxh3_64_with_seed(bin.as_slice(), seed);
+        let bucket = (hash >> bits) as usize;
+        let remaining = hash & remaining_mask;
+        let rank = clz_in_bits(remaining, bits) + 1;
+
+        let reg_idx = HLL_HEADER_SIZE + bucket;
+        if rank > result[reg_idx] {
+            result[reg_idx] = rank;
+        }
+    }
+
+    error::ok_binary(env, &result)
+}
+
+#[rustler::nif]
+fn hll_update_many_raw_nif<'a>(env: Env<'a>, state_bin: Binary, items: ListIterator<'a>, p: u8, seed: u64) -> Term<'a> {
+    hll_update_many_raw_impl(env, state_bin, items, p, seed)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn hll_update_many_raw_dirty_nif<'a>(env: Env<'a>, state_bin: Binary, items: ListIterator<'a>, p: u8, seed: u64) -> Term<'a> {
+    hll_update_many_raw_impl(env, state_bin, items, p, seed)
 }
 
 #[rustler::nif]

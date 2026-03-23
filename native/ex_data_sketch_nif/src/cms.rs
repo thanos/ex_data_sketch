@@ -1,9 +1,25 @@
-use rustler::{Binary, Env, Term};
+use rustler::{Binary, Env, ListIterator, Term};
+use xxhash_rust::xxh3;
 
 use crate::error;
 
 const CMS_HEADER_SIZE: usize = 9;
 const GOLDEN64: u64 = 0x9E3779B97F4A7C15;
+
+/// Validates CMS parameters, returning an error message if invalid.
+/// Requires: width > 0, depth > 0, counter_width in {32, 64}
+fn validate_cms_params(width: u32, depth: u16, counter_width: u8) -> Option<&'static str> {
+    if width == 0 {
+        return Some("width must be greater than 0");
+    }
+    if depth == 0 {
+        return Some("depth must be greater than 0");
+    }
+    if counter_width != 32 && counter_width != 64 {
+        return Some("counter_width must be 32 or 64");
+    }
+    None
+}
 
 /// Compute CMS row index matching Elixir's `cms_row_index/3` exactly.
 ///
@@ -25,6 +41,10 @@ fn cms_update_many_impl<'a>(
     depth: u16,
     counter_width: u8,
 ) -> Term<'a> {
+    if let Some(err) = validate_cms_params(width, depth, counter_width) {
+        return error::error_string(env, err);
+    }
+
     let counter_bytes = (counter_width / 8) as usize;
     let total_counters = (width as usize) * (depth as usize);
     let data_size = total_counters * counter_bytes;
@@ -98,6 +118,115 @@ fn cms_update_many_impl<'a>(
     error::ok_binary(env, &result)
 }
 
+fn cms_update_many_raw_impl<'a>(
+    env: Env<'a>,
+    state_bin: Binary,
+    items: ListIterator<'a>,
+    width: u32,
+    depth: u16,
+    counter_width: u8,
+    seed: u64,
+) -> Term<'a> {
+    if let Some(err) = validate_cms_params(width, depth, counter_width) {
+        return error::error_string(env, err);
+    }
+
+    let counter_bytes = (counter_width / 8) as usize;
+    let total_counters = (width as usize) * (depth as usize);
+    let data_size = total_counters * counter_bytes;
+    let expected_len = CMS_HEADER_SIZE + data_size;
+
+    if state_bin.len() != expected_len {
+        return error::error_string(env, "invalid CMS state length");
+    }
+
+    let state = state_bin.as_slice();
+    let header = &state[..CMS_HEADER_SIZE];
+    let counters_data = &state[CMS_HEADER_SIZE..];
+
+    let mut counters: Vec<u64> = Vec::with_capacity(total_counters);
+    match counter_bytes {
+        4 => {
+            for chunk in counters_data.chunks_exact(4) {
+                counters.push(u32::from_le_bytes(chunk.try_into().unwrap()) as u64);
+            }
+        }
+        8 => {
+            for chunk in counters_data.chunks_exact(8) {
+                counters.push(u64::from_le_bytes(chunk.try_into().unwrap()));
+            }
+        }
+        _ => return error::error_string(env, "unsupported counter width"),
+    }
+
+    let max_counter: u64 = if counter_width == 64 {
+        u64::MAX
+    } else {
+        (1u64 << counter_width) - 1
+    };
+    let w = width as usize;
+
+    for item_term in items {
+        let (bin, increment): (Binary, u32) = match item_term.decode() {
+            Ok(pair) => pair,
+            Err(_) => return error::error_string(env, "expected {binary, increment} tuple where increment is a u32 (0..4294967295)"),
+        };
+
+        let hash64 = xxh3::xxh3_64_with_seed(bin.as_slice(), seed);
+
+        for row in 0..depth {
+            let col = cms_row_index(hash64, row, width) as usize;
+            let idx = (row as usize) * w + col;
+            let new_val = counters[idx].saturating_add(increment as u64).min(max_counter);
+            counters[idx] = new_val;
+        }
+    }
+
+    let mut result = Vec::with_capacity(expected_len);
+    result.extend_from_slice(header);
+    match counter_bytes {
+        4 => {
+            for &val in &counters {
+                result.extend_from_slice(&(val as u32).to_le_bytes());
+            }
+        }
+        8 => {
+            for &val in &counters {
+                result.extend_from_slice(&val.to_le_bytes());
+            }
+        }
+        _ => unreachable!(),
+    }
+
+    error::ok_binary(env, &result)
+}
+
+#[rustler::nif]
+fn cms_update_many_raw_nif<'a>(
+    env: Env<'a>,
+    state_bin: Binary,
+    items: ListIterator<'a>,
+    width: u32,
+    depth: u16,
+    counter_width: u8,
+    seed: u64,
+) -> Term<'a> {
+    cms_update_many_raw_impl(env, state_bin, items, width, depth, counter_width, seed)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn cms_update_many_raw_dirty_nif<'a>(
+    env: Env<'a>,
+    state_bin: Binary,
+    items: ListIterator<'a>,
+    width: u32,
+    depth: u16,
+    counter_width: u8,
+    seed: u64,
+) -> Term<'a> {
+    cms_update_many_raw_impl(env, state_bin, items, width, depth, counter_width, seed)
+}
+
 fn cms_merge_impl<'a>(
     env: Env<'a>,
     a_bin: Binary,
@@ -106,6 +235,10 @@ fn cms_merge_impl<'a>(
     depth: u16,
     counter_width: u8,
 ) -> Term<'a> {
+    if let Some(err) = validate_cms_params(width, depth, counter_width) {
+        return error::error_string(env, err);
+    }
+
     let counter_bytes = (counter_width / 8) as usize;
     let total_counters = (width as usize) * (depth as usize);
     let data_size = total_counters * counter_bytes;

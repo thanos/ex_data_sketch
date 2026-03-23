@@ -66,12 +66,14 @@ defmodule ExDataSketch.HLL do
   - `:p` - precision parameter, integer #{@min_p}..#{@max_p} (default: #{@default_p}).
     Higher values use more memory but give better accuracy.
   - `:backend` - backend module (default: `ExDataSketch.Backend.Pure`).
+  - `:hash_fn` - custom hash function `(term -> non_neg_integer)`.
+  - `:seed` - hash seed (default: 0).
 
   ## Examples
 
       iex> sketch = ExDataSketch.HLL.new(p: 10)
-      iex> sketch.opts
-      [p: 10]
+      iex> sketch.opts[:p]
+      10
       iex> ExDataSketch.HLL.size_bytes(sketch)
       1028
 
@@ -81,7 +83,17 @@ defmodule ExDataSketch.HLL do
     p = Keyword.get(opts, :p, @default_p)
     validate_p!(p)
     backend = Backend.resolve(opts)
-    clean_opts = [p: p]
+    hash_fn = Keyword.get(opts, :hash_fn)
+    seed = Keyword.get(opts, :seed)
+
+    hash_strategy =
+      if hash_fn, do: :custom, else: Hash.default_hash_strategy()
+
+    clean_opts =
+      [p: p, hash_strategy: hash_strategy] ++
+        if(hash_fn, do: [hash_fn: hash_fn], else: []) ++
+        if(seed, do: [seed: seed], else: [])
+
     state = backend.hll_new(clean_opts)
     %__MODULE__{state: state, opts: clean_opts, backend: backend}
   end
@@ -101,7 +113,7 @@ defmodule ExDataSketch.HLL do
   """
   @spec update(t(), term()) :: t()
   def update(%__MODULE__{state: state, opts: opts, backend: backend} = sketch, item) do
-    hash = Hash.hash64(item)
+    hash = hash_item(item, opts)
     new_state = backend.hll_update(state, hash, opts)
     %{sketch | state: new_state}
   end
@@ -119,10 +131,39 @@ defmodule ExDataSketch.HLL do
       true
 
   """
+  @update_many_chunk_size 10_000
+
   @spec update_many(t(), Enumerable.t()) :: t()
-  def update_many(%__MODULE__{state: state, opts: opts, backend: backend} = sketch, items) do
-    hashes = Enum.map(items, &Hash.hash64/1)
-    new_state = backend.hll_update_many(state, hashes, opts)
+  def update_many(%__MODULE__{opts: opts, backend: backend} = sketch, items)
+      when backend == Backend.Pure do
+    new_state =
+      items
+      |> Stream.chunk_every(@update_many_chunk_size)
+      |> Enum.reduce(sketch.state, fn chunk, state_acc ->
+        hashes = Enum.map(chunk, &hash_item(&1, opts))
+        backend.hll_update_many(state_acc, hashes, opts)
+      end)
+
+    %{sketch | state: new_state}
+  end
+
+  def update_many(%__MODULE__{opts: opts, backend: backend} = sketch, items) do
+    use_raw =
+      backend == Backend.Rust and Keyword.get(opts, :hash_fn) == nil and
+        Keyword.get(opts, :hash_strategy) != :phash2
+
+    new_state =
+      items
+      |> Stream.chunk_every(@update_many_chunk_size)
+      |> Enum.reduce(sketch.state, fn chunk, state_acc ->
+        if use_raw do
+          Backend.Rust.hll_update_many_raw(state_acc, chunk, opts)
+        else
+          hashes = Enum.map(chunk, &hash_item(&1, opts))
+          backend.hll_update_many(state_acc, hashes, opts)
+        end
+      end)
+
     %{sketch | state: new_state}
   end
 
@@ -154,6 +195,8 @@ defmodule ExDataSketch.HLL do
       raise Errors.IncompatibleSketchesError,
         reason: "HLL precision mismatch: #{opts_a[:p]} vs #{opts_b[:p]}"
     end
+
+    Hash.validate_merge_hash_compat!(opts_a, opts_b, "HLL")
 
     new_state = backend.hll_merge(state_a, state_b, opts_a)
     %{sketch | state: new_state}
@@ -208,7 +251,8 @@ defmodule ExDataSketch.HLL do
   @spec serialize(t()) :: binary()
   def serialize(%__MODULE__{state: state, opts: opts}) do
     p = Keyword.fetch!(opts, :p)
-    params_bin = <<p::unsigned-8>>
+    hs = hash_strategy_byte(opts)
+    params_bin = <<p::unsigned-8, hs::unsigned-8>>
     Codec.encode(Codec.sketch_id_hll(), Codec.version(), params_bin, state)
   end
 
@@ -359,6 +403,20 @@ defmodule ExDataSketch.HLL do
 
   # -- Private --
 
+  @default_seed 0
+
+  defp hash_item(item, opts) do
+    case Keyword.get(opts, :hash_fn) do
+      nil ->
+        seed = Keyword.get(opts, :seed, @default_seed)
+        strategy = Keyword.get(opts, :hash_strategy)
+        Hash.hash64(item, seed: seed, hash_strategy: strategy)
+
+      hash_fn ->
+        Hash.hash64(item, hash_fn: hash_fn)
+    end
+  end
+
   defp validate_p!(p) when is_integer(p) and p >= @min_p and p <= @max_p, do: :ok
 
   defp validate_p!(p) do
@@ -375,8 +433,25 @@ defmodule ExDataSketch.HLL do
      Errors.DeserializationError.exception(reason: "expected HLL sketch ID (1), got #{id}")}
   end
 
+  # Legacy 1-byte format (no hash strategy tag)
   defp decode_params(<<p::unsigned-8>>) when p >= @min_p and p <= @max_p do
-    {:ok, [p: p]}
+    {:ok, [p: p, hash_strategy: :phash2]}
+  end
+
+  # New 2-byte format with hash strategy tag
+  defp decode_params(<<p::unsigned-8, hs::unsigned-8>>) when p >= @min_p and p <= @max_p do
+    case decode_hash_strategy(hs) do
+      :custom ->
+        {:error,
+         Errors.DeserializationError.exception(
+           reason:
+             "HLL was serialized with a custom :hash_fn which cannot be restored; " <>
+               "pass the original hash_fn when re-creating the sketch"
+         )}
+
+      strategy ->
+        {:ok, [p: p, hash_strategy: strategy]}
+    end
   end
 
   defp decode_params(<<p::unsigned-8>>) do
@@ -384,7 +459,25 @@ defmodule ExDataSketch.HLL do
      Errors.DeserializationError.exception(reason: "invalid HLL precision #{p} in params")}
   end
 
+  defp decode_params(<<p::unsigned-8, _hs::unsigned-8>>) do
+    {:error,
+     Errors.DeserializationError.exception(reason: "invalid HLL precision #{p} in params")}
+  end
+
   defp decode_params(_other) do
     {:error, Errors.DeserializationError.exception(reason: "invalid HLL params binary")}
   end
+
+  defp hash_strategy_byte(opts) do
+    case Keyword.get(opts, :hash_strategy, :phash2) do
+      :phash2 -> 0
+      :xxhash3 -> 1
+      :custom -> 2
+    end
+  end
+
+  defp decode_hash_strategy(0), do: :phash2
+  defp decode_hash_strategy(1), do: :xxhash3
+  defp decode_hash_strategy(2), do: :custom
+  defp decode_hash_strategy(_), do: :phash2
 end

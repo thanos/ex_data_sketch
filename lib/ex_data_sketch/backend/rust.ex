@@ -45,7 +45,11 @@ defmodule ExDataSketch.Backend.Rust do
 
   @behaviour ExDataSketch.Backend
 
+  import Bitwise
+
   alias ExDataSketch.Backend.Pure
+
+  @mask64 0xFFFFFFFFFFFFFFFF
 
   @default_thresholds %{
     hll_update_many: 10_000,
@@ -96,6 +100,8 @@ defmodule ExDataSketch.Backend.Rust do
     _ -> false
   end
 
+  # coveralls-ignore-start
+
   # -- HLL callbacks --
 
   @impl true
@@ -130,6 +136,22 @@ defmodule ExDataSketch.Backend.Rust do
   def hll_estimate(state_bin, opts) do
     p = Keyword.fetch!(opts, :p)
     unwrap_ok!(ExDataSketch.Nif.hll_estimate_nif(state_bin, p))
+  end
+
+  def hll_update_many_raw(state_bin, items, opts) do
+    p = Keyword.fetch!(opts, :p)
+    seed = Keyword.get(opts, :seed, 0) &&& @mask64
+    bins = ensure_binaries(items)
+    threshold = dirty_threshold(:hll_update_many, opts)
+
+    result =
+      if length(bins) > threshold do
+        ExDataSketch.Nif.hll_update_many_raw_dirty_nif(state_bin, bins, p, seed)
+      else
+        ExDataSketch.Nif.hll_update_many_raw_nif(state_bin, bins, p, seed)
+      end
+
+    unwrap_ok!(result)
   end
 
   # -- CMS callbacks --
@@ -188,6 +210,38 @@ defmodule ExDataSketch.Backend.Rust do
   @impl true
   def cms_estimate(state_bin, hash64, opts), do: Pure.cms_estimate(state_bin, hash64, opts)
 
+  def cms_update_many_raw(state_bin, items, opts) do
+    width = Keyword.fetch!(opts, :width)
+    depth = Keyword.fetch!(opts, :depth)
+    counter_width = Keyword.fetch!(opts, :counter_width)
+    seed = Keyword.get(opts, :seed, 0) &&& @mask64
+    pairs = normalize_cms_items(items)
+    threshold = dirty_threshold(:cms_update_many, opts)
+
+    result =
+      if length(pairs) > threshold do
+        ExDataSketch.Nif.cms_update_many_raw_dirty_nif(
+          state_bin,
+          pairs,
+          width,
+          depth,
+          counter_width,
+          seed
+        )
+      else
+        ExDataSketch.Nif.cms_update_many_raw_nif(
+          state_bin,
+          pairs,
+          width,
+          depth,
+          counter_width,
+          seed
+        )
+      end
+
+    unwrap_ok!(result)
+  end
+
   # -- Theta callbacks --
 
   @impl true
@@ -244,6 +298,21 @@ defmodule ExDataSketch.Backend.Rust do
 
   @impl true
   def theta_estimate(state_bin, opts), do: Pure.theta_estimate(state_bin, opts)
+
+  def theta_update_many_raw(state_bin, items, opts) do
+    seed = Keyword.get(opts, :seed, 0) &&& @mask64
+    bins = ensure_binaries(items)
+    threshold = dirty_threshold(:theta_update_many, opts)
+
+    result =
+      if length(bins) > threshold do
+        ExDataSketch.Nif.theta_update_many_raw_dirty_nif(state_bin, bins, seed)
+      else
+        ExDataSketch.Nif.theta_update_many_raw_nif(state_bin, bins, seed)
+      end
+
+    unwrap_ok!(result)
+  end
 
   @impl true
   def theta_from_components(k, theta, entries) do
@@ -877,6 +946,22 @@ defmodule ExDataSketch.Backend.Rust do
     unwrap_ok!(result)
   end
 
+  def ull_update_many_raw(state_bin, items, opts) do
+    p = Keyword.fetch!(opts, :p)
+    seed = Keyword.get(opts, :seed, 0) &&& @mask64
+    bins = ensure_binaries(items)
+    threshold = dirty_threshold(:ull_update_many, opts)
+
+    result =
+      if length(bins) > threshold do
+        ExDataSketch.Nif.ull_update_many_raw_dirty_nif(state_bin, bins, p, seed)
+      else
+        ExDataSketch.Nif.ull_update_many_raw_nif(state_bin, bins, p, seed)
+      end
+
+    unwrap_ok!(result)
+  end
+
   # -- Private helpers --
 
   defp encode_f64s(values) do
@@ -907,6 +992,31 @@ defmodule ExDataSketch.Backend.Rust do
     |> IO.iodata_to_binary()
   end
 
+  # coveralls-ignore-stop
+
+  @doc false
+  def ensure_binaries(items) do
+    Enum.map(items, fn
+      bin when is_binary(bin) -> bin
+      term -> :erlang.term_to_binary(term)
+    end)
+  end
+
+  @doc false
+  def normalize_cms_items(items) do
+    Enum.map(items, fn
+      {item, increment} when is_integer(increment) and increment > 0 ->
+        bin = if is_binary(item), do: item, else: :erlang.term_to_binary(item)
+        {bin, increment}
+
+      item ->
+        bin = if is_binary(item), do: item, else: :erlang.term_to_binary(item)
+        {bin, 1}
+    end)
+  end
+
+  # coveralls-ignore-start
+
   defp encode_pairs(pairs) do
     pairs
     |> Enum.map(fn {hash, inc} ->
@@ -936,4 +1046,6 @@ defmodule ExDataSketch.Backend.Rust do
   defp unwrap_ok!({:error, reason}) do
     raise "Rust NIF error: #{reason}"
   end
+
+  # coveralls-ignore-stop
 end

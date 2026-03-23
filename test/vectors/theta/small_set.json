@@ -1,13 +1,12 @@
 {
-  "expected": {
-    "canonical_exsk_base64": "RVhTSwEDBAAAAAAQAAChAQAAAQAQAAD//////////zIAAAA9kEdrnImBAfWFwduMjt0DyhKOhfkIOglRtlMamLTrFJQZ8FEwx98YtY8fE2m+Khri+CyHBc6kIajj8gJ8iHUrbU4acWOR3TbOyRYqbQXwOFQLhoYtJoY8gJsOcVvvhz+Qi7WycnQ7VLgXBKccc3dglJGNViRVkGS8XJbzk/MmaDvcO/qEwFBomRuSowV8P2zZSJr7UIn6cIST51tMBRxxq/k1gDn09nle4xY6ajxZfhZP+qtzQvCE0HH/sfnFP4ic2k4IpgxAiBwMHSjOWBaTLmJHG0HQupOHx1SqKmlAqM3xzAsY1vKyWQFgou3MSrPulIK/kLvdsx4jyMNrTxa0jDs//M9LxLV2raRsCQf/uzM5hGrSs9TIu8vJZt13acuIidF0GIFAzZxS411oHN7Pqb0MbAZSLNG6EJ06ScWU09BAiK19NHvV5kovKcNqGtYJVX3f5ku91wPHxKg5hbbZA1RU7hMm5NyL729871253hSjwU6sP3XuM2SU2fuqc/m1xCpxysPK+smfmF4XuOL9",
-    "estimate": 50.0,
-    "tolerance": 0
-  },
   "algorithm": "theta",
-  "vector_version": 1,
   "algorithm_opts": {
     "k": 4096
+  },
+  "expected": {
+    "canonical_exsk_base64": "RVhTSwEDBQAAAAAQAAABoQEAAAEAEAAA//////////8yAAAA6tdCfVtBogCaRjXyxMQ+ARUMxEDqDrQI/48RAB9/RgkwWE+1++BlCZM96DEXm1AKi+ixuwbqSg4b1cx3XiWLDllPaJKOLV8RbI0AUsW/jRVbrNNSRDHXFjbiIU2kRzYcfpqjZqD6zyEvCET4AKp9KaAsUuGFe3s1TDdVdC12XDie1sovt0yhOErO4AIkMCY8NQg7p4JJhj5aBzMrPhl5QOjMaaerVNdOvdisGNXDZGF6gt8ICat+dhAw7X8Zyc+A+w1XroASdYHafQVYQ6mYhVBiPtSMInSGMDBcoGjjW4eY7pYhk708k3D5URVQ7AyUqkzJgABCrpd9AcyEh7QYmMaFQ4oVOvSZ2+1VNo+Gup5gS73haqupn+AuMYR3nNeli5N7k64DK6jUxzt3rZBjqmF6KBigMjqycb+w3eM/KbOuSTc5c52Tv2zJiiuqvlDGRmg3lYWPDcr+vT382xOFygJ5+PD3kUXT4O+W8s+Yotp6AlBci4UE4BO99JC1gE/kksRwEPsZyfDm3mvfnhnz+w==",
+    "estimate": 50.0,
+    "tolerance": 0
   },
   "input_items": [
     "item_0",
@@ -60,5 +59,6 @@
     "item_47",
     "item_48",
     "item_49"
-  ]
+  ],
+  "vector_version": 1
 }

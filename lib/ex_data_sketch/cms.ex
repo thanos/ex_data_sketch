@@ -81,6 +81,8 @@ defmodule ExDataSketch.CMS do
   - `:depth` - number of rows (default: #{@default_depth}). Must be positive.
   - `:counter_width` - bits per counter, 32 or 64 (default: #{@default_counter_width}).
   - `:backend` - backend module (default: `ExDataSketch.Backend.Pure`).
+  - `:hash_fn` - custom hash function `(term -> non_neg_integer)`.
+  - `:seed` - hash seed (default: 0).
 
   ## Examples
 
@@ -100,7 +102,17 @@ defmodule ExDataSketch.CMS do
     validate_counter_width!(counter_width)
 
     backend = Backend.resolve(opts)
-    clean_opts = [width: width, depth: depth, counter_width: counter_width]
+    hash_fn = Keyword.get(opts, :hash_fn)
+    seed = Keyword.get(opts, :seed)
+
+    hash_strategy =
+      if hash_fn, do: :custom, else: Hash.default_hash_strategy()
+
+    clean_opts =
+      [width: width, depth: depth, counter_width: counter_width, hash_strategy: hash_strategy] ++
+        if(hash_fn, do: [hash_fn: hash_fn], else: []) ++
+        if(seed, do: [seed: seed], else: [])
+
     state = backend.cms_new(clean_opts)
     %__MODULE__{state: state, opts: clean_opts, backend: backend}
   end
@@ -131,7 +143,7 @@ defmodule ExDataSketch.CMS do
         increment \\ 1
       )
       when is_integer(increment) and increment > 0 do
-    hash = Hash.hash64(item)
+    hash = hash_item(item, opts)
     new_state = backend.cms_update(state, hash, increment, opts)
     %{sketch | state: new_state}
   end
@@ -149,18 +161,25 @@ defmodule ExDataSketch.CMS do
       2
 
   """
+  @update_many_chunk_size 10_000
+
   @spec update_many(t(), Enumerable.t()) :: t()
   def update_many(%__MODULE__{state: state, opts: opts, backend: backend} = sketch, items) do
-    pairs =
-      Enum.map(items, fn
-        {item, increment} when is_integer(increment) and increment > 0 ->
-          {Hash.hash64(item), increment}
+    use_raw =
+      backend == Backend.Rust and Keyword.get(opts, :hash_fn) == nil and
+        Keyword.get(opts, :hash_strategy) != :phash2
 
-        item ->
-          {Hash.hash64(item), 1}
+    new_state =
+      items
+      |> Stream.chunk_every(@update_many_chunk_size)
+      |> Enum.reduce(state, fn chunk, state_acc ->
+        if use_raw do
+          Backend.Rust.cms_update_many_raw(state_acc, chunk, opts)
+        else
+          backend.cms_update_many(state_acc, hash_pairs(chunk, opts), opts)
+        end
       end)
 
-    new_state = backend.cms_update_many(state, pairs, opts)
     %{sketch | state: new_state}
   end
 
@@ -184,10 +203,16 @@ defmodule ExDataSketch.CMS do
         %__MODULE__{state: state_a, opts: opts_a, backend: backend} = sketch,
         %__MODULE__{state: state_b, opts: opts_b}
       ) do
-    if opts_a != opts_b do
+    if opts_a[:width] != opts_b[:width] or opts_a[:depth] != opts_b[:depth] or
+         opts_a[:counter_width] != opts_b[:counter_width] do
       raise Errors.IncompatibleSketchesError,
-        reason: "CMS parameter mismatch: #{inspect(opts_a)} vs #{inspect(opts_b)}"
+        reason:
+          "CMS parameter mismatch: width=#{opts_a[:width]}/#{opts_b[:width]}, " <>
+            "depth=#{opts_a[:depth]}/#{opts_b[:depth]}, " <>
+            "counter_width=#{opts_a[:counter_width]}/#{opts_b[:counter_width]}"
     end
+
+    Hash.validate_merge_hash_compat!(opts_a, opts_b, "CMS")
 
     new_state = backend.cms_merge(state_a, state_b, opts_a)
     %{sketch | state: new_state}
@@ -208,7 +233,7 @@ defmodule ExDataSketch.CMS do
   """
   @spec estimate(t(), term()) :: non_neg_integer()
   def estimate(%__MODULE__{state: state, opts: opts, backend: backend}, item) do
-    hash = Hash.hash64(item)
+    hash = hash_item(item, opts)
     backend.cms_estimate(state, hash, opts)
   end
 
@@ -244,11 +269,13 @@ defmodule ExDataSketch.CMS do
     width = Keyword.fetch!(opts, :width)
     depth = Keyword.fetch!(opts, :depth)
     counter_width = Keyword.fetch!(opts, :counter_width)
+    hs = hash_strategy_byte(opts)
 
     params_bin = <<
       width::unsigned-little-32,
       depth::unsigned-little-16,
-      counter_width::unsigned-8
+      counter_width::unsigned-8,
+      hs::unsigned-8
     >>
 
     Codec.encode(Codec.sketch_id_cms(), Codec.version(), params_bin, state)
@@ -401,6 +428,30 @@ defmodule ExDataSketch.CMS do
 
   # -- Private --
 
+  @default_seed 0
+
+  defp hash_pairs(chunk, opts) do
+    Enum.map(chunk, fn
+      {item, increment} when is_integer(increment) and increment > 0 ->
+        {hash_item(item, opts), increment}
+
+      item ->
+        {hash_item(item, opts), 1}
+    end)
+  end
+
+  defp hash_item(item, opts) do
+    case Keyword.get(opts, :hash_fn) do
+      nil ->
+        seed = Keyword.get(opts, :seed, @default_seed)
+        strategy = Keyword.get(opts, :hash_strategy)
+        Hash.hash64(item, seed: seed, hash_strategy: strategy)
+
+      hash_fn ->
+        Hash.hash64(item, hash_fn: hash_fn)
+    end
+  end
+
   defp validate_width!(w) when is_integer(w) and w > 0, do: :ok
 
   defp validate_width!(w) do
@@ -435,12 +486,45 @@ defmodule ExDataSketch.CMS do
      Errors.DeserializationError.exception(reason: "expected CMS sketch ID (2), got #{id}")}
   end
 
+  # Legacy 7-byte format (no hash strategy tag)
   defp decode_params(<<width::unsigned-little-32, depth::unsigned-little-16, cw::unsigned-8>>)
        when width > 0 and depth > 0 and cw in [32, 64] do
-    {:ok, [width: width, depth: depth, counter_width: cw]}
+    {:ok, [width: width, depth: depth, counter_width: cw, hash_strategy: :phash2]}
+  end
+
+  # New 8-byte format with hash strategy tag
+  defp decode_params(
+         <<width::unsigned-little-32, depth::unsigned-little-16, cw::unsigned-8, hs::unsigned-8>>
+       )
+       when width > 0 and depth > 0 and cw in [32, 64] do
+    case decode_hash_strategy(hs) do
+      :custom ->
+        {:error,
+         Errors.DeserializationError.exception(
+           reason:
+             "CMS was serialized with a custom :hash_fn which cannot be restored; " <>
+               "pass the original hash_fn when re-creating the sketch"
+         )}
+
+      strategy ->
+        {:ok, [width: width, depth: depth, counter_width: cw, hash_strategy: strategy]}
+    end
   end
 
   defp decode_params(_other) do
     {:error, Errors.DeserializationError.exception(reason: "invalid CMS params binary")}
   end
+
+  defp hash_strategy_byte(opts) do
+    case Keyword.get(opts, :hash_strategy, :phash2) do
+      :phash2 -> 0
+      :xxhash3 -> 1
+      :custom -> 2
+    end
+  end
+
+  defp decode_hash_strategy(0), do: :phash2
+  defp decode_hash_strategy(1), do: :xxhash3
+  defp decode_hash_strategy(2), do: :custom
+  defp decode_hash_strategy(_), do: :phash2
 end

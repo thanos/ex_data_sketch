@@ -4,7 +4,7 @@
 # Fails if coverage drops below the configured minimum.
 
 defmodule CI.CompareCoverage do
-  @baseline_file "ci/coverage_baseline.json"
+  @default_baseline_file "ci/coverage_baseline.json"
   @default_threshold 70.0
   # Maximum allowed drop from baseline (percentage points)
   @tolerance 0.5
@@ -32,7 +32,10 @@ defmodule CI.CompareCoverage do
   end
 
   defp read_baseline_threshold do
-    case File.read(@baseline_file) do
+    baseline_file =
+      System.get_env("EX_DATA_SKETCH_COVERAGE_BASELINE") || @default_baseline_file
+
+    case File.read(baseline_file) do
       {:ok, content} ->
         case Jason.decode(content) do
           {:ok, %{"threshold" => threshold}} -> threshold
@@ -40,7 +43,7 @@ defmodule CI.CompareCoverage do
         end
 
       {:error, _} ->
-        IO.puts("No baseline file found at #{@baseline_file}, using default #{@default_threshold}%")
+        IO.puts("No baseline file found at #{baseline_file}, using default #{@default_threshold}%")
         @default_threshold
     end
   end

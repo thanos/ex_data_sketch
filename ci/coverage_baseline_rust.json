@@ -1,0 +1,5 @@
+{
+  "threshold": 90.0,
+  "updated_at": "2026-03-22",
+  "notes": "CI baseline with Rust NIF enabled. Covers raw batch NIF paths and hash-dependent vector tests."
+}

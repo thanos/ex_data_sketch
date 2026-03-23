@@ -62,32 +62,32 @@ defmodule ExDataSketch.Backend.Pure do
     p = Keyword.fetch!(opts, :p)
     m = 1 <<< p
     bits = 64 - p
+    remaining_mask = (1 <<< bits) - 1
 
     <<header::binary-size(4), registers::binary-size(^m)>> = state_bin
 
-    # Decode registers to a tuple for O(1) access
-    reg_tuple = registers |> :binary.bin_to_list() |> List.to_tuple()
-
-    # Fold over all hashes
-    remaining_mask = (1 <<< (64 - p)) - 1
-
-    reg_tuple =
-      List.foldl(hashes, reg_tuple, fn hash64, acc ->
+    # Pre-aggregate hashes into a map of {bucket => max_rank}.
+    # Avoids per-hash tuple copies from put_elem.
+    updates =
+      List.foldl(hashes, %{}, fn hash64, acc ->
         bucket = hash64 >>> (64 - p)
         remaining = hash64 &&& remaining_mask
         rank = count_leading_zeros(remaining, bits) + 1
-        old_val = elem(acc, bucket)
-
-        if rank > old_val do
-          put_elem(acc, bucket, rank)
-        else
-          acc
-        end
+        Map.update(acc, bucket, rank, &max(&1, rank))
       end)
 
-    # Re-encode tuple to binary
-    new_registers = reg_tuple |> Tuple.to_list() |> :erlang.list_to_binary()
-    <<header::binary, new_registers::binary>>
+    sorted_updates = updates |> Map.to_list() |> List.keysort(0)
+    new_registers = hll_splice_updates(registers, sorted_updates, 0, [])
+    <<header::binary, IO.iodata_to_binary(new_registers)::binary>>
+  end
+
+  defp hll_splice_updates(rest, [], _offset, acc), do: Enum.reverse([rest | acc])
+
+  defp hll_splice_updates(registers, [{bucket, new_val} | tail], offset, acc) do
+    skip = bucket - offset
+    <<before::binary-size(^skip), old_val::unsigned-8, after_bytes::binary>> = registers
+    val = max(old_val, new_val)
+    hll_splice_updates(after_bytes, tail, bucket + 1, [val, before | acc])
   end
 
   @impl true
@@ -2740,8 +2740,8 @@ defmodule ExDataSketch.Backend.Pure do
     is_shi = (m &&& @qot_shi) != 0
 
     cond do
-      is_con -> cur_q
-      not is_shi -> i
+      is_con and cur_q != nil -> cur_q
+      not is_shi and not is_con -> i
       true -> qot_trace_quotient_for(ctx, i)
     end
   end
