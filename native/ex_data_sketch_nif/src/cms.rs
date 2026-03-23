@@ -6,6 +6,21 @@ use crate::error;
 const CMS_HEADER_SIZE: usize = 9;
 const GOLDEN64: u64 = 0x9E3779B97F4A7C15;
 
+/// Validates CMS parameters, returning an error message if invalid.
+/// Requires: width > 0, depth > 0, counter_width in {32, 64}
+fn validate_cms_params(width: u32, depth: u16, counter_width: u8) -> Option<&'static str> {
+    if width == 0 {
+        return Some("width must be greater than 0");
+    }
+    if depth == 0 {
+        return Some("depth must be greater than 0");
+    }
+    if counter_width != 32 && counter_width != 64 {
+        return Some("counter_width must be 32 or 64");
+    }
+    None
+}
+
 /// Compute CMS row index matching Elixir's `cms_row_index/3` exactly.
 ///
 /// Elixir computes: `rem(hash64 + (row * @golden64 &&& @mask64), width)`
@@ -26,6 +41,10 @@ fn cms_update_many_impl<'a>(
     depth: u16,
     counter_width: u8,
 ) -> Term<'a> {
+    if let Some(err) = validate_cms_params(width, depth, counter_width) {
+        return error::error_string(env, err);
+    }
+
     let counter_bytes = (counter_width / 8) as usize;
     let total_counters = (width as usize) * (depth as usize);
     let data_size = total_counters * counter_bytes;
@@ -108,6 +127,10 @@ fn cms_update_many_raw_impl<'a>(
     counter_width: u8,
     seed: u64,
 ) -> Term<'a> {
+    if let Some(err) = validate_cms_params(width, depth, counter_width) {
+        return error::error_string(env, err);
+    }
+
     let counter_bytes = (counter_width / 8) as usize;
     let total_counters = (width as usize) * (depth as usize);
     let data_size = total_counters * counter_bytes;
@@ -212,6 +235,10 @@ fn cms_merge_impl<'a>(
     depth: u16,
     counter_width: u8,
 ) -> Term<'a> {
+    if let Some(err) = validate_cms_params(width, depth, counter_width) {
+        return error::error_string(env, err);
+    }
+
     let counter_bytes = (counter_width / 8) as usize;
     let total_counters = (width as usize) * (depth as usize);
     let data_size = total_counters * counter_bytes;
