@@ -156,16 +156,52 @@ defmodule ExDataSketch.NifAvailabilityTest do
     end
   end
 
-  describe "checksum file presence (release packaging precondition)" do
-    test "checksum-Elixir.ExDataSketch.Nif.exs exists at repo root" do
-      path = Path.join(__DIR__, "../../checksum-Elixir.ExDataSketch.Nif.exs")
-      assert File.exists?(path), "missing #{path}; required by mix.exs files/ list"
+  describe "checksum file (release packaging precondition)" do
+    # The checksum-Elixir.ExDataSketch.Nif.exs file is populated by the
+    # `publish_hex` step of .github/workflows/release.yml via
+    # `mix rustler_precompiled.download --all --print`. Pre-release the
+    # file may be absent (fresh checkouts where no release artifacts exist
+    # yet) OR present-but-empty (`%{}`) OR present-and-populated. All
+    # three states are valid mid-development; only the release pipeline
+    # asserts the file is populated at publish time.
+    #
+    # We therefore test the WEAKER contract here: "if the file exists,
+    # it parses as a map". Strict presence is enforced by Hex at
+    # `mix hex.publish` time, not by the unit-test suite.
+
+    @checksum_path Path.join(__DIR__, "../../checksum-Elixir.ExDataSketch.Nif.exs")
+
+    test "if present, the checksum file parses as a map" do
+      if File.exists?(@checksum_path) do
+        {term, _binding} = @checksum_path |> File.read!() |> Code.eval_string()
+
+        assert is_map(term),
+               "checksum file at #{@checksum_path} must contain a map " <>
+                 "(empty %{} is allowed pre-release; populated map post-release)"
+      else
+        # Fresh checkout without any release-published artifacts. The
+        # release pipeline regenerates this file before `mix hex.publish`.
+        :ok
+      end
     end
 
-    test "checksum file is a valid Elixir term (parseable as a map)" do
-      path = Path.join(__DIR__, "../../checksum-Elixir.ExDataSketch.Nif.exs")
-      {term, _binding} = path |> File.read!() |> Code.eval_string()
-      assert is_map(term), "checksum file must contain a map (empty %{} is allowed pre-release)"
+    test "if populated, every value is a {algorithm, hex_digest} pair" do
+      with true <- File.exists?(@checksum_path),
+           {term, _binding} when is_map(term) <-
+             @checksum_path |> File.read!() |> Code.eval_string() do
+        for {key, value} <- term do
+          assert is_binary(key), "checksum key must be a binary, got: #{inspect(key)}"
+
+          assert is_binary(value),
+                 "checksum value must be a hex digest binary, got: #{inspect(value)}"
+
+          assert String.starts_with?(value, "sha256:") or
+                   String.match?(value, ~r/\A[0-9a-f]+\z/),
+                 "checksum value must look like a hex digest (with or without sha256: prefix), got: #{inspect(value)}"
+        end
+      else
+        _ -> :ok
+      end
     end
   end
 
