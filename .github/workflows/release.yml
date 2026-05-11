@@ -23,6 +23,8 @@ jobs:
           - { target: x86_64-unknown-linux-musl, os: ubuntu-22.04, use-cross: true }
           - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04, use-cross: true }
           - { target: aarch64-unknown-linux-musl, os: ubuntu-22.04, use-cross: true }
+          - { target: x86_64-pc-windows-msvc, os: windows-2022 }
+          - { target: aarch64-pc-windows-msvc, os: windows-2022 }
 
     steps:
       - uses: actions/checkout@v4
@@ -39,6 +41,13 @@ jobs:
 
       - name: Add Rust target (macOS)
         if: runner.os == 'macOS'
+        run: |
+          rustup default stable
+          rustup target add ${{ matrix.job.target }}
+
+      - name: Add Rust target (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
         run: |
           rustup default stable
           rustup target add ${{ matrix.job.target }}

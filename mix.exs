@@ -39,7 +39,9 @@ defmodule ExDataSketch.MixProject do
         coveralls: :test,
         "coveralls.detail": :test,
         "coveralls.html": :test,
-        "coveralls.json": :test
+        "coveralls.json": :test,
+        "test.nif_on": :test,
+        "test.nif_off": :test
       ]
     ]
   end
@@ -168,8 +170,29 @@ defmodule ExDataSketch.MixProject do
         "run bench/ull_bench.exs",
         "run bench/xxhash3_bench.exs"
       ],
+      # Switching between NIF-on and NIF-off modes locally requires cleaning
+      # rustler_precompiled's per-env compiled config (which captures the
+      # value of EX_DATA_SKETCH_BUILD at compile time). The two aliases
+      # below do that automatically so maintainers can flip modes without
+      # remembering the underlying incantation. CI sets the env once per
+      # job and does not flip modes mid-job, so it does not need them.
+      "test.nif_on": [&clean_precompiled_marker/1, "test"],
+      "test.nif_off": [&clean_precompiled_marker/1, "test"],
       verify: &verify/1
     ]
+  end
+
+  # Invalidate the per-env rustler_precompiled build artifact so the
+  # compile-time vs runtime force_build check does not trip when toggling
+  # EX_DATA_SKETCH_BUILD between runs. Safe to call unconditionally.
+  defp clean_precompiled_marker(_args) do
+    Mix.shell().info([
+      :bright,
+      "==> cleaning rustler_precompiled to allow NIF mode switch",
+      :reset
+    ])
+
+    Mix.Task.run("deps.clean", ["rustler_precompiled", "--build"])
   end
 
   defp verify(_) do

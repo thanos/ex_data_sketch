@@ -12,6 +12,8 @@ serialization, distribution, and persistence.
 [![Hex version](https://img.shields.io/hexpm/v/ex_data_sketch.svg)](https://hex.pm/packages/ex_data_sketch)
 [![Hex docs](https://img.shields.io/badge/docs-hexdocs.pm-blue)](https://hexdocs.pm/ex_data_sketch)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Coverage Status](https://coveralls.io/repos/github/thanos/ex_data_sketch/badge.svg?branch=main)](https://coveralls.io/github/thanos/ex_data_sketch?branch=main)
+
 
 
 ## Supported Algorithms
