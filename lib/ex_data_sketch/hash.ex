@@ -112,6 +112,65 @@ defmodule ExDataSketch.Hash do
   end
 
   @doc """
+  Resolves the effective hash strategy for a sketch given user options.
+
+  Resolution precedence:
+
+  1. If `:hash_fn` is set → `:custom` (closure-based, never merge-compatible).
+  2. If the caller passed `:hash_strategy`, that value is honored.
+     Unknown values are rejected with `ArgumentError`.
+  3. Otherwise `default_algorithm/0` is used.
+
+  This is the single source of truth for sketch constructors. It exists to
+  let callers select `:murmur3` (Apache DataSketches interop) or `:phash2`
+  (BEAM-only fallback) at sketch creation time without surprising the
+  default-choice machinery.
+
+  ## Examples
+
+      iex> ExDataSketch.Hash.resolve_strategy([])
+      ExDataSketch.Hash.default_algorithm()
+
+      iex> ExDataSketch.Hash.resolve_strategy(hash_strategy: :murmur3)
+      :murmur3
+
+      iex> ExDataSketch.Hash.resolve_strategy(hash_fn: fn _ -> 0 end)
+      :custom
+
+      iex> ExDataSketch.Hash.resolve_strategy(hash_strategy: :phash2)
+      :phash2
+
+      iex> try do
+      ...>   ExDataSketch.Hash.resolve_strategy(hash_strategy: :sha256)
+      ...> rescue
+      ...>   ArgumentError -> :raised
+      ...> end
+      :raised
+
+  """
+  @spec resolve_strategy(keyword()) :: hash_strategy()
+  def resolve_strategy(opts) when is_list(opts) do
+    cond do
+      Keyword.get(opts, :hash_fn) ->
+        :custom
+
+      strategy = Keyword.get(opts, :hash_strategy) ->
+        validate_strategy!(strategy)
+
+      true ->
+        default_algorithm()
+    end
+  end
+
+  defp validate_strategy!(s) when s in [:phash2, :xxhash3, :murmur3, :custom], do: s
+
+  defp validate_strategy!(other) do
+    raise ArgumentError,
+          ":hash_strategy must be one of #{inspect(supported_algorithms())}, " <>
+            "got: #{inspect(other)}"
+  end
+
+  @doc """
   Returns the default hash algorithm for new sketches.
 
   This is the v0.8.0 successor to `default_hash_strategy/0` and uses the

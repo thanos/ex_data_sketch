@@ -18,7 +18,7 @@ defmodule ExDataSketch.Hash.Murmur3 do
   | Seedable            | Yes (`u32`)                                    |
   | Cross-platform      | Yes                                            |
   | Cross-OTP stable    | Yes — pure Elixir, no `:erlang.phash2`         |
-  | Rust acceleration   | Yes (`ExDataSketch.Nif.murmur3_x64_128_nif/2`) |
+  | Rust acceleration   | Yes (internal NIF, see `hash/2`)               |
 
   When the Rust NIF is available, `hash/2` dispatches to it. When it is not,
   the pure Elixir implementation is used. Both implementations are

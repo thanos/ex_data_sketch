@@ -144,7 +144,11 @@ defmodule ExDataSketch.MixProject do
 
   defp aliases do
     [
-      lint: ["format --check-formatted", "credo --strict", "dialyzer"],
+      lint: [
+        "format --check-formatted",
+        "credo --strict",
+        "dialyzer"
+      ],
       bench: [
         "run bench/hll_bench.exs",
         "run bench/cms_bench.exs",

@@ -34,7 +34,10 @@ fn fmix64(mut k: u64) -> u64 {
     k ^ (k >> 33)
 }
 
-fn murmur3_x64_128(data: &[u8], seed: u32) -> (u64, u64) {
+/// MurmurHash3_x64_128 — exposed for use by the hot-path raw NIFs in
+/// other modules (hll, ull, theta, cms). Returns the full 128-bit
+/// pair; callers take the high 64 bits for a stable 64-bit hash.
+pub(crate) fn murmur3_x64_128(data: &[u8], seed: u32) -> (u64, u64) {
     let seed = seed as u64;
     let mut h1: u64 = seed;
     let mut h2: u64 = seed;

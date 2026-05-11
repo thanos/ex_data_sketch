@@ -94,8 +94,7 @@ defmodule ExDataSketch.Theta do
     hash_fn = Keyword.get(opts, :hash_fn)
     seed = Keyword.get(opts, :seed)
 
-    hash_strategy =
-      if hash_fn, do: :custom, else: Hash.default_hash_strategy()
+    hash_strategy = Hash.resolve_strategy(opts)
 
     clean_opts =
       [k: k, hash_strategy: hash_strategy] ++

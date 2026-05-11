@@ -35,6 +35,12 @@ defmodule ExDataSketch.Nif do
   def hll_update_many_raw_dirty_nif(_state_bin, _items, _p, _seed),
     do: :erlang.nif_error(:not_loaded)
 
+  def hll_update_many_raw_h_nif(_state_bin, _items, _p, _seed, _algorithm),
+    do: :erlang.nif_error(:not_loaded)
+
+  def hll_update_many_raw_h_dirty_nif(_state_bin, _items, _p, _seed, _algorithm),
+    do: :erlang.nif_error(:not_loaded)
+
   def hll_merge_nif(_a_bin, _b_bin, _p), do: :erlang.nif_error(:not_loaded)
   def hll_merge_dirty_nif(_a_bin, _b_bin, _p), do: :erlang.nif_error(:not_loaded)
   def hll_estimate_nif(_state_bin, _p), do: :erlang.nif_error(:not_loaded)
@@ -52,6 +58,12 @@ defmodule ExDataSketch.Nif do
   def cms_update_many_raw_dirty_nif(_state_bin, _items, _w, _d, _cw, _seed),
     do: :erlang.nif_error(:not_loaded)
 
+  def cms_update_many_raw_h_nif(_state_bin, _items, _w, _d, _cw, _seed, _algorithm),
+    do: :erlang.nif_error(:not_loaded)
+
+  def cms_update_many_raw_h_dirty_nif(_state_bin, _items, _w, _d, _cw, _seed, _algorithm),
+    do: :erlang.nif_error(:not_loaded)
+
   def cms_merge_nif(_a_bin, _b_bin, _w, _d, _cw), do: :erlang.nif_error(:not_loaded)
   def cms_merge_dirty_nif(_a_bin, _b_bin, _w, _d, _cw), do: :erlang.nif_error(:not_loaded)
 
@@ -61,6 +73,12 @@ defmodule ExDataSketch.Nif do
   def theta_update_many_raw_nif(_state_bin, _items, _seed), do: :erlang.nif_error(:not_loaded)
 
   def theta_update_many_raw_dirty_nif(_state_bin, _items, _seed),
+    do: :erlang.nif_error(:not_loaded)
+
+  def theta_update_many_raw_h_nif(_state_bin, _items, _seed, _algorithm),
+    do: :erlang.nif_error(:not_loaded)
+
+  def theta_update_many_raw_h_dirty_nif(_state_bin, _items, _seed, _algorithm),
     do: :erlang.nif_error(:not_loaded)
 
   def theta_compact_nif(_state_bin), do: :erlang.nif_error(:not_loaded)
@@ -166,6 +184,12 @@ defmodule ExDataSketch.Nif do
     do: :erlang.nif_error(:not_loaded)
 
   def ull_update_many_raw_dirty_nif(_state_bin, _items, _p, _seed),
+    do: :erlang.nif_error(:not_loaded)
+
+  def ull_update_many_raw_h_nif(_state_bin, _items, _p, _seed, _algorithm),
+    do: :erlang.nif_error(:not_loaded)
+
+  def ull_update_many_raw_h_dirty_nif(_state_bin, _items, _p, _seed, _algorithm),
     do: :erlang.nif_error(:not_loaded)
 
   def ull_merge_nif(_a_bin, _b_bin, _p), do: :erlang.nif_error(:not_loaded)

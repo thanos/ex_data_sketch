@@ -51,6 +51,11 @@ defmodule ExDataSketch.Backend.Rust do
 
   @mask64 0xFFFFFFFFFFFFFFFF
 
+  # Hash algorithm wire bytes for the raw_h NIF dispatch family.
+  # MUST match `ExDataSketch.Hash.Metadata.algorithm_to_byte/1`.
+  @algo_xxh3 1
+  @algo_murmur3 2
+
   @default_thresholds %{
     hll_update_many: 10_000,
     cms_update_many: 10_000,
@@ -143,12 +148,21 @@ defmodule ExDataSketch.Backend.Rust do
     seed = Keyword.get(opts, :seed, 0) &&& @mask64
     bins = ensure_binaries(items)
     threshold = dirty_threshold(:hll_update_many, opts)
+    algo = raw_algorithm_byte!(opts)
 
     result =
-      if length(bins) > threshold do
-        ExDataSketch.Nif.hll_update_many_raw_dirty_nif(state_bin, bins, p, seed)
-      else
-        ExDataSketch.Nif.hll_update_many_raw_nif(state_bin, bins, p, seed)
+      cond do
+        algo == @algo_xxh3 and length(bins) > threshold ->
+          ExDataSketch.Nif.hll_update_many_raw_dirty_nif(state_bin, bins, p, seed)
+
+        algo == @algo_xxh3 ->
+          ExDataSketch.Nif.hll_update_many_raw_nif(state_bin, bins, p, seed)
+
+        length(bins) > threshold ->
+          ExDataSketch.Nif.hll_update_many_raw_h_dirty_nif(state_bin, bins, p, seed, algo)
+
+        true ->
+          ExDataSketch.Nif.hll_update_many_raw_h_nif(state_bin, bins, p, seed, algo)
       end
 
     unwrap_ok!(result)
@@ -217,26 +231,51 @@ defmodule ExDataSketch.Backend.Rust do
     seed = Keyword.get(opts, :seed, 0) &&& @mask64
     pairs = normalize_cms_items(items)
     threshold = dirty_threshold(:cms_update_many, opts)
+    algo = raw_algorithm_byte!(opts)
 
     result =
-      if length(pairs) > threshold do
-        ExDataSketch.Nif.cms_update_many_raw_dirty_nif(
-          state_bin,
-          pairs,
-          width,
-          depth,
-          counter_width,
-          seed
-        )
-      else
-        ExDataSketch.Nif.cms_update_many_raw_nif(
-          state_bin,
-          pairs,
-          width,
-          depth,
-          counter_width,
-          seed
-        )
+      cond do
+        algo == @algo_xxh3 and length(pairs) > threshold ->
+          ExDataSketch.Nif.cms_update_many_raw_dirty_nif(
+            state_bin,
+            pairs,
+            width,
+            depth,
+            counter_width,
+            seed
+          )
+
+        algo == @algo_xxh3 ->
+          ExDataSketch.Nif.cms_update_many_raw_nif(
+            state_bin,
+            pairs,
+            width,
+            depth,
+            counter_width,
+            seed
+          )
+
+        length(pairs) > threshold ->
+          ExDataSketch.Nif.cms_update_many_raw_h_dirty_nif(
+            state_bin,
+            pairs,
+            width,
+            depth,
+            counter_width,
+            seed,
+            algo
+          )
+
+        true ->
+          ExDataSketch.Nif.cms_update_many_raw_h_nif(
+            state_bin,
+            pairs,
+            width,
+            depth,
+            counter_width,
+            seed,
+            algo
+          )
       end
 
     unwrap_ok!(result)
@@ -303,12 +342,21 @@ defmodule ExDataSketch.Backend.Rust do
     seed = Keyword.get(opts, :seed, 0) &&& @mask64
     bins = ensure_binaries(items)
     threshold = dirty_threshold(:theta_update_many, opts)
+    algo = raw_algorithm_byte!(opts)
 
     result =
-      if length(bins) > threshold do
-        ExDataSketch.Nif.theta_update_many_raw_dirty_nif(state_bin, bins, seed)
-      else
-        ExDataSketch.Nif.theta_update_many_raw_nif(state_bin, bins, seed)
+      cond do
+        algo == @algo_xxh3 and length(bins) > threshold ->
+          ExDataSketch.Nif.theta_update_many_raw_dirty_nif(state_bin, bins, seed)
+
+        algo == @algo_xxh3 ->
+          ExDataSketch.Nif.theta_update_many_raw_nif(state_bin, bins, seed)
+
+        length(bins) > threshold ->
+          ExDataSketch.Nif.theta_update_many_raw_h_dirty_nif(state_bin, bins, seed, algo)
+
+        true ->
+          ExDataSketch.Nif.theta_update_many_raw_h_nif(state_bin, bins, seed, algo)
       end
 
     unwrap_ok!(result)
@@ -951,12 +999,21 @@ defmodule ExDataSketch.Backend.Rust do
     seed = Keyword.get(opts, :seed, 0) &&& @mask64
     bins = ensure_binaries(items)
     threshold = dirty_threshold(:ull_update_many, opts)
+    algo = raw_algorithm_byte!(opts)
 
     result =
-      if length(bins) > threshold do
-        ExDataSketch.Nif.ull_update_many_raw_dirty_nif(state_bin, bins, p, seed)
-      else
-        ExDataSketch.Nif.ull_update_many_raw_nif(state_bin, bins, p, seed)
+      cond do
+        algo == @algo_xxh3 and length(bins) > threshold ->
+          ExDataSketch.Nif.ull_update_many_raw_dirty_nif(state_bin, bins, p, seed)
+
+        algo == @algo_xxh3 ->
+          ExDataSketch.Nif.ull_update_many_raw_nif(state_bin, bins, p, seed)
+
+        length(bins) > threshold ->
+          ExDataSketch.Nif.ull_update_many_raw_h_dirty_nif(state_bin, bins, p, seed, algo)
+
+        true ->
+          ExDataSketch.Nif.ull_update_many_raw_h_nif(state_bin, bins, p, seed, algo)
       end
 
     unwrap_ok!(result)
@@ -1038,6 +1095,24 @@ defmodule ExDataSketch.Backend.Rust do
 
       threshold when is_integer(threshold) ->
         threshold
+    end
+  end
+
+  # Resolve the hash algorithm byte for a raw-NIF dispatch. Only the
+  # algorithms that the Rust raw NIFs accept (XXH3, Murmur3) are valid here;
+  # callers MUST pre-filter `:phash2` and `:custom` (the high-level sketch
+  # update_many already does this).
+  defp raw_algorithm_byte!(opts) do
+    case Keyword.get(opts, :hash_strategy, :xxhash3) do
+      :xxhash3 ->
+        @algo_xxh3
+
+      :murmur3 ->
+        @algo_murmur3
+
+      other ->
+        raise ArgumentError,
+              "raw NIF dispatch requires :xxhash3 or :murmur3, got: #{inspect(other)}"
     end
   end
 

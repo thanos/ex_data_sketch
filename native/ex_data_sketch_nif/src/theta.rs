@@ -4,6 +4,10 @@ use rustler::{Binary, Env, ListIterator, Term};
 use xxhash_rust::xxh3;
 
 use crate::error;
+use crate::hash::murmur3_x64_128;
+
+const ALGO_XXH3: u8 = 1;
+const ALGO_MURMUR3: u8 = 2;
 
 const THETA_HEADER_SIZE: usize = 17;
 const THETA_MAX_U64: u64 = u64::MAX;
@@ -158,6 +162,16 @@ fn theta_compact_impl<'a>(env: Env<'a>, state_bin: Binary) -> Term<'a> {
 }
 
 fn theta_update_many_raw_impl<'a>(env: Env<'a>, state_bin: Binary, items: ListIterator<'a>, seed: u64) -> Term<'a> {
+    theta_update_many_raw_impl_inner(env, state_bin, items, seed, ALGO_XXH3)
+}
+
+fn theta_update_many_raw_impl_inner<'a>(
+    env: Env<'a>,
+    state_bin: Binary,
+    items: ListIterator<'a>,
+    seed: u64,
+    algorithm: u8,
+) -> Term<'a> {
     let state = match parse_theta_state(state_bin.as_slice()) {
         Ok(s) => s,
         Err(e) => return error::error_string(env, e),
@@ -165,6 +179,7 @@ fn theta_update_many_raw_impl<'a>(env: Env<'a>, state_bin: Binary, items: ListIt
 
     let k = state.k as usize;
     let mut theta = state.theta;
+    let m3_seed = seed as u32;
 
     let mut set: BTreeSet<u64> = state.entries.into_iter().collect();
 
@@ -173,7 +188,11 @@ fn theta_update_many_raw_impl<'a>(env: Env<'a>, state_bin: Binary, items: ListIt
             Ok(b) => b,
             Err(_) => return error::error_string(env, "all items must be binaries"),
         };
-        let hash = xxh3::xxh3_64_with_seed(bin.as_slice(), seed);
+        let hash = match algorithm {
+            ALGO_XXH3 => xxh3::xxh3_64_with_seed(bin.as_slice(), seed),
+            ALGO_MURMUR3 => murmur3_x64_128(bin.as_slice(), m3_seed).0,
+            _ => return error::error_string(env, "unsupported hash algorithm byte (expected 1=xxhash3, 2=murmur3)"),
+        };
         if hash < theta {
             set.insert(hash);
         }
@@ -200,6 +219,16 @@ fn theta_update_many_raw_nif<'a>(env: Env<'a>, state_bin: Binary, items: ListIte
 #[rustler::nif(schedule = "DirtyCpu")]
 fn theta_update_many_raw_dirty_nif<'a>(env: Env<'a>, state_bin: Binary, items: ListIterator<'a>, seed: u64) -> Term<'a> {
     theta_update_many_raw_impl(env, state_bin, items, seed)
+}
+
+#[rustler::nif]
+fn theta_update_many_raw_h_nif<'a>(env: Env<'a>, state_bin: Binary, items: ListIterator<'a>, seed: u64, algorithm: u8) -> Term<'a> {
+    theta_update_many_raw_impl_inner(env, state_bin, items, seed, algorithm)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn theta_update_many_raw_h_dirty_nif<'a>(env: Env<'a>, state_bin: Binary, items: ListIterator<'a>, seed: u64, algorithm: u8) -> Term<'a> {
+    theta_update_many_raw_impl_inner(env, state_bin, items, seed, algorithm)
 }
 
 #[rustler::nif]
