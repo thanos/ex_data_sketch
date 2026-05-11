@@ -44,13 +44,29 @@ defmodule ExDataSketch.Hash do
 
   import Bitwise
 
+  alias ExDataSketch.Hash.Murmur3
+  alias ExDataSketch.Hash.Validation
+  alias ExDataSketch.Nif
+
   @type hash64 :: non_neg_integer()
-  @type hash_strategy :: :phash2 | :xxhash3 | :custom
+  @type hash_strategy :: :phash2 | :xxhash3 | :murmur3 | :custom
   @type hash_opt ::
           {:seed, non_neg_integer()}
           | {:hash_fn, (term() -> hash64())}
           | {:hash_strategy, hash_strategy()}
   @type opts :: [hash_opt()]
+
+  @typedoc """
+  Static description of a hash algorithm. Returned by `algorithm_info/1`.
+  """
+  @type algorithm_info :: %{
+          id: hash_strategy(),
+          name: String.t(),
+          output_bits: 64,
+          has_seed: boolean(),
+          available?: boolean(),
+          stability: :stable | :otp_dependent | :runtime_dependent
+        }
 
   @mask16 0xFFFF
   @mask32 0xFFFFFFFF
@@ -93,6 +109,112 @@ defmodule ExDataSketch.Hash do
   @spec default_hash_strategy() :: :xxhash3 | :phash2
   def default_hash_strategy do
     if nif_available?(), do: :xxhash3, else: :phash2
+  end
+
+  @doc """
+  Returns the default hash algorithm for new sketches.
+
+  This is the v0.8.0 successor to `default_hash_strategy/0` and uses the
+  same selection logic. Prefer this name in new code; the old name is
+  retained for backward compatibility.
+
+  ## Examples
+
+      iex> ExDataSketch.Hash.default_algorithm() in [:xxhash3, :phash2]
+      true
+
+  """
+  @spec default_algorithm() :: :xxhash3 | :phash2
+  def default_algorithm, do: default_hash_strategy()
+
+  @doc """
+  Returns the list of hash algorithm identifiers supported by this build.
+
+  `:custom` is included to indicate that user-supplied `:hash_fn` closures
+  are an accepted hash strategy, but they are NEVER returned by
+  `default_algorithm/0` and are NEVER merge-compatible across sketches.
+
+  ## Examples
+
+      iex> algos = ExDataSketch.Hash.supported_algorithms()
+      iex> Enum.all?([:phash2, :xxhash3, :murmur3, :custom], &(&1 in algos))
+      true
+
+  """
+  @spec supported_algorithms() :: [hash_strategy()]
+  def supported_algorithms, do: [:phash2, :xxhash3, :murmur3, :custom]
+
+  @doc """
+  Returns the static descriptor for a hash algorithm.
+
+  See `t:algorithm_info/0` for the returned map shape.
+
+  ## Examples
+
+      iex> info = ExDataSketch.Hash.algorithm_info(:xxhash3)
+      iex> info.id
+      :xxhash3
+      iex> info.output_bits
+      64
+
+      iex> info = ExDataSketch.Hash.algorithm_info(:murmur3)
+      iex> info.has_seed
+      true
+      iex> info.stability
+      :stable
+
+      iex> info = ExDataSketch.Hash.algorithm_info(:phash2)
+      iex> info.stability
+      :otp_dependent
+
+  """
+  @spec algorithm_info(hash_strategy()) :: algorithm_info()
+  def algorithm_info(:xxhash3) do
+    %{
+      id: :xxhash3,
+      name: "XXHash3-64",
+      output_bits: 64,
+      has_seed: true,
+      available?: nif_available?(),
+      stability: :stable
+    }
+  end
+
+  def algorithm_info(:murmur3) do
+    %{
+      id: :murmur3,
+      name: "MurmurHash3_x64_128 (high 64 bits)",
+      output_bits: 64,
+      has_seed: true,
+      available?: true,
+      stability: :stable
+    }
+  end
+
+  def algorithm_info(:phash2) do
+    %{
+      id: :phash2,
+      name: "Erlang phash2 + mix64",
+      output_bits: 64,
+      has_seed: true,
+      available?: true,
+      stability: :otp_dependent
+    }
+  end
+
+  def algorithm_info(:custom) do
+    %{
+      id: :custom,
+      name: "Caller-supplied :hash_fn closure",
+      output_bits: 64,
+      has_seed: false,
+      available?: true,
+      stability: :runtime_dependent
+    }
+  end
+
+  def algorithm_info(other) do
+    raise ArgumentError, "unknown hash algorithm: #{inspect(other)}"
   end
 
   @doc """
@@ -147,11 +269,16 @@ defmodule ExDataSketch.Hash do
   defp hash64_default(term, seed, :xxhash3) do
     if nif_available?() do
       bin = if is_binary(term), do: term, else: :erlang.term_to_binary(term)
-      ExDataSketch.Nif.xxhash3_64_seeded_nif(bin, seed &&& @mask64)
+      Nif.xxhash3_64_seeded_nif(bin, seed &&& @mask64)
     else
       raise ArgumentError,
             "hash_strategy :xxhash3 requires the Rust NIF but it is not available"
     end
+  end
+
+  defp hash64_default(term, seed, :murmur3) do
+    bin = if is_binary(term), do: term, else: :erlang.term_to_binary(term)
+    Murmur3.hash(bin, seed &&& @mask64)
   end
 
   defp hash64_default(_term, _seed, :custom) do
@@ -162,7 +289,7 @@ defmodule ExDataSketch.Hash do
   defp hash64_default(term, seed, _auto) do
     if nif_available?() do
       bin = if is_binary(term), do: term, else: :erlang.term_to_binary(term)
-      ExDataSketch.Nif.xxhash3_64_seeded_nif(bin, seed &&& @mask64)
+      Nif.xxhash3_64_seeded_nif(bin, seed &&& @mask64)
     else
       mix64(:erlang.phash2(term, 1 <<< 32), seed &&& @mask64)
     end
@@ -214,11 +341,15 @@ defmodule ExDataSketch.Hash do
 
   defp hash64_binary_default(binary, seed, :xxhash3) do
     if nif_available?() do
-      ExDataSketch.Nif.xxhash3_64_seeded_nif(binary, seed &&& @mask64)
+      Nif.xxhash3_64_seeded_nif(binary, seed &&& @mask64)
     else
       raise ArgumentError,
             "hash_strategy :xxhash3 requires the Rust NIF but it is not available"
     end
+  end
+
+  defp hash64_binary_default(binary, seed, :murmur3) do
+    Murmur3.hash(binary, seed &&& @mask64)
   end
 
   defp hash64_binary_default(_binary, _seed, :custom) do
@@ -228,7 +359,7 @@ defmodule ExDataSketch.Hash do
 
   defp hash64_binary_default(binary, seed, _auto) do
     if nif_available?() do
-      ExDataSketch.Nif.xxhash3_64_seeded_nif(binary, seed &&& @mask64)
+      Nif.xxhash3_64_seeded_nif(binary, seed &&& @mask64)
     else
       mix64(:erlang.phash2(binary, 1 <<< 32), seed &&& @mask64)
     end
@@ -278,7 +409,7 @@ defmodule ExDataSketch.Hash do
   @spec xxhash3_64(binary(), non_neg_integer()) :: hash64()
   def xxhash3_64(data, seed) when is_binary(data) and is_integer(seed) and seed >= 0 do
     clamped = seed &&& @max_u64
-    ExDataSketch.Nif.xxhash3_64_seeded_nif(data, clamped)
+    Nif.xxhash3_64_seeded_nif(data, clamped)
   rescue
     ErlangError ->
       # Fallback to phash2-based hash when NIF is not loaded
@@ -396,32 +527,14 @@ defmodule ExDataSketch.Hash do
   - Either sketch uses a custom `:hash_fn` (closures cannot be compared)
   - Hash strategies differ (e.g. `:xxhash3` vs `:phash2`)
   - Seeds differ (default is 0)
+
+  This is a backward-compatible shim over
+  `ExDataSketch.Hash.Validation.validate_options!/3`. Prefer the new module
+  in new code; this function remains stable for all v0.x sketches.
   """
   @spec validate_merge_hash_compat!(Keyword.t(), Keyword.t(), String.t()) :: :ok
   def validate_merge_hash_compat!(opts_a, opts_b, sketch_type) do
-    strategy_a = Keyword.get(opts_a, :hash_strategy, :phash2)
-    strategy_b = Keyword.get(opts_b, :hash_strategy, :phash2)
-
-    if strategy_a == :custom or strategy_b == :custom do
-      raise ExDataSketch.Errors.IncompatibleSketchesError,
-        reason:
-          "#{sketch_type} merge is not supported with custom :hash_fn (cannot verify hash compatibility)"
-    end
-
-    if strategy_a != strategy_b do
-      raise ExDataSketch.Errors.IncompatibleSketchesError,
-        reason: "#{sketch_type} hash strategy mismatch: #{strategy_a} vs #{strategy_b}"
-    end
-
-    seed_a = Keyword.get(opts_a, :seed, 0)
-    seed_b = Keyword.get(opts_b, :seed, 0)
-
-    if seed_a != seed_b do
-      raise ExDataSketch.Errors.IncompatibleSketchesError,
-        reason: "#{sketch_type} seed mismatch: #{seed_a} vs #{seed_b}"
-    end
-
-    :ok
+    Validation.validate_options!(opts_a, opts_b, sketch_type)
   end
 
   defp nif_loaded? do
