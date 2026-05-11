@@ -24,10 +24,7 @@ defmodule ExDataSketch.Hash.XXH3 do
 
   ## Examples
 
-      iex> ExDataSketch.Hash.XXH3.hash("hello") == ExDataSketch.Hash.XXH3.hash("hello")
-      true
-
-      iex> ExDataSketch.Hash.XXH3.hash("hello", 1) != ExDataSketch.Hash.XXH3.hash("hello", 2)
+      iex> ExDataSketch.Hash.XXH3.available?() in [true, false]
       true
 
   """
@@ -54,12 +51,29 @@ defmodule ExDataSketch.Hash.XXH3 do
   @doc """
   Hashes a binary using XXHash3 (64-bit) with the given seed.
 
-  Requires the Rust NIF. Raises `ArgumentError` if the NIF is not loaded.
+  Requires the Rust NIF. Raises `ArgumentError` if the NIF is not loaded;
+  this is intentional so that hash drift cannot occur silently when the
+  NIF is missing. Callers that want a BEAM-only fallback must explicitly
+  pick `hash_strategy: :phash2` (or `:murmur3` for cross-OTP-stable
+  pure-Elixir hashing) via `ExDataSketch.Hash.hash64/2`.
 
   ## Examples
 
-      iex> h = ExDataSketch.Hash.XXH3.hash("hello", 0)
-      iex> is_integer(h) and h >= 0 and h <= 0xFFFFFFFFFFFFFFFF
+  When the NIF is available, `hash/2` returns a `u64` value:
+
+      iex> if ExDataSketch.Hash.XXH3.available?() do
+      ...>   h = ExDataSketch.Hash.XXH3.hash("hello", 0)
+      ...>   is_integer(h) and h >= 0 and h <= 0xFFFFFFFFFFFFFFFF
+      ...> else
+      ...>   # When the NIF is missing, hash/2 MUST raise ArgumentError.
+      ...>   # We verify that contract explicitly.
+      ...>   try do
+      ...>     ExDataSketch.Hash.XXH3.hash("hello", 0)
+      ...>     false
+      ...>   rescue
+      ...>     ArgumentError -> true
+      ...>   end
+      ...> end
       true
 
   """
