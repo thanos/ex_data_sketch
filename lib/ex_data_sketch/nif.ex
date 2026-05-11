@@ -88,6 +88,9 @@ defmodule ExDataSketch.Nif do
   def murmur3_x64_128_nif(_data, _seed), do: :erlang.nif_error(:not_loaded)
   def murmur3_x64_128_full_nif(_data, _seed), do: :erlang.nif_error(:not_loaded)
 
+  # Binary (CRC32C / Castagnoli)
+  def crc32c_nif(_data), do: :erlang.nif_error(:not_loaded)
+
   # Bloom
   def bloom_put_many_nif(_state_bin, _hashes_bin, _hash_count, _bit_count),
     do: :erlang.nif_error(:not_loaded)

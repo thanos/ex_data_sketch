@@ -36,7 +36,7 @@ defmodule ExDataSketch.IBLT do
   count (i32), key_sum (u64), value_sum (u64), check_sum (u32).
   """
 
-  alias ExDataSketch.{Backend, Codec, Errors, Hash}
+  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -339,7 +339,10 @@ defmodule ExDataSketch.IBLT do
       <<hash_count::unsigned-8, 0::unsigned-8, seed::unsigned-little-32,
         cell_count::unsigned-little-32>>
 
-    Codec.encode(Codec.sketch_id_iblt(), Codec.version(), params_bin, state)
+    Binary.encode(
+      Binary.metadata_from_opts(Codec.sketch_id_iblt(), 1, opts),
+      Binary.build_payload(params_bin, state)
+    )
   end
 
   @doc """
@@ -357,7 +360,7 @@ defmodule ExDataSketch.IBLT do
   """
   @spec deserialize(binary()) :: {:ok, t()} | {:error, Exception.t()}
   def deserialize(binary) when is_binary(binary) do
-    with {:ok, decoded} <- Codec.decode(binary),
+    with {:ok, decoded} <- Binary.decode(binary),
          :ok <- validate_sketch_id(decoded.sketch_id),
          {:ok, opts} <- decode_params(decoded.params),
          :ok <- validate_state_header(decoded.state) do

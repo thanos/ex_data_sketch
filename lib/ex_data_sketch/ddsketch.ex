@@ -65,7 +65,7 @@ defmodule ExDataSketch.DDSketch do
   have identical `alpha` parameters to merge.
   """
 
-  alias ExDataSketch.{Backend, Codec, Errors}
+  alias ExDataSketch.{Backend, Binary, Codec, Errors}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -333,7 +333,11 @@ defmodule ExDataSketch.DDSketch do
   def serialize(%__MODULE__{state: state, opts: opts}) do
     alpha = Keyword.fetch!(opts, :alpha)
     params_bin = <<alpha::float-little-64>>
-    Codec.encode(Codec.sketch_id_ddsketch(), Codec.version(), params_bin, state)
+
+    Binary.encode(
+      Binary.metadata_from_opts(Codec.sketch_id_ddsketch(), 1, opts),
+      Binary.build_payload(params_bin, state)
+    )
   end
 
   @doc """
@@ -349,7 +353,7 @@ defmodule ExDataSketch.DDSketch do
   """
   @spec deserialize(binary()) :: {:ok, t()} | {:error, Exception.t()}
   def deserialize(binary) when is_binary(binary) do
-    with {:ok, decoded} <- Codec.decode(binary),
+    with {:ok, decoded} <- Binary.decode(binary),
          :ok <- validate_sketch_id(decoded.sketch_id),
          {:ok, opts} <- decode_params(decoded.params) do
       backend = Backend.default()

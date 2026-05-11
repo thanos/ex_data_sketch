@@ -1,16 +1,24 @@
 {
   "algorithm": "frequent_items",
-  "vector_version": 1,
   "algorithm_opts": {
     "k": 10
   },
-  "input_items": ["hello"],
   "expected": {
-    "canonical_exsk_base64": "RVhTSwEGBQAAAAoAAAAAOQAAAEZJMQABAAAACgAAAAEAAAAAAAAAAQAAAAAAAAAAAAAABQAAAGhlbGxvAQAAAAAAAAAAAAAAAAAAAA==",
+    "canonical_exsk_base64": "RVhTSwIGAQAeAAEAAAAAAAAAAAAGAQAAAABCAAAABQAAAAoAAAAARkkxAAEAAAAKAAAAAQAAAAAAAAABAAAAAAAAAAAAAAAFAAAAaGVsbG8BAAAAAAAAAAAAAAAAAAAAn0mweA==",
     "count": 1,
     "entry_count": 1,
     "top_k": [
-      {"item": "hello", "estimate": 1, "error": 0, "lower": 1, "upper": 1}
+      {
+        "error": 0,
+        "estimate": 1,
+        "item": "hello",
+        "lower": 1,
+        "upper": 1
+      }
     ]
-  }
+  },
+  "input_items": [
+    "hello"
+  ],
+  "vector_version": 2
 }

@@ -1,0 +1,13 @@
+{
+  "algorithm": "theta",
+  "algorithm_opts": {
+    "k": 4096
+  },
+  "expected": {
+    "canonical_exsk_base64": "RVhTSwEDBQAAAAAQAAABEQAAAAEAEAAA//////////8AAAAA",
+    "estimate": 0.0,
+    "tolerance": 0
+  },
+  "input_items": [],
+  "vector_version": 1
+}

@@ -58,7 +58,7 @@ defmodule ExDataSketch.CMS do
   same result, making CMS safe for parallel and distributed aggregation.
   """
 
-  alias ExDataSketch.{Backend, Codec, Errors, Hash}
+  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -278,7 +278,10 @@ defmodule ExDataSketch.CMS do
       hs::unsigned-8
     >>
 
-    Codec.encode(Codec.sketch_id_cms(), Codec.version(), params_bin, state)
+    Binary.encode(
+      Binary.metadata_from_opts(Codec.sketch_id_cms(), 1, opts),
+      Binary.build_payload(params_bin, state)
+    )
   end
 
   @doc """
@@ -294,7 +297,7 @@ defmodule ExDataSketch.CMS do
   """
   @spec deserialize(binary()) :: {:ok, t()} | {:error, Exception.t()}
   def deserialize(binary) when is_binary(binary) do
-    with {:ok, decoded} <- Codec.decode(binary),
+    with {:ok, decoded} <- Binary.decode(binary),
          :ok <- validate_sketch_id(decoded.sketch_id),
          {:ok, opts} <- decode_params(decoded.params) do
       backend = Backend.default()

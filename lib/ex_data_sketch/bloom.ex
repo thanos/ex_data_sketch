@@ -42,7 +42,7 @@ defmodule ExDataSketch.Bloom do
   can merge only if they have identical `bit_count`, `hash_count`, and `seed`.
   """
 
-  alias ExDataSketch.{Backend, Codec, Errors, Hash}
+  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -236,7 +236,10 @@ defmodule ExDataSketch.Bloom do
     params_bin =
       <<bit_count::unsigned-little-32, hash_count::unsigned-little-16, seed::unsigned-little-32>>
 
-    Codec.encode(Codec.sketch_id_bloom(), Codec.version(), params_bin, state)
+    Binary.encode(
+      Binary.metadata_from_opts(Codec.sketch_id_bloom(), 1, opts),
+      Binary.build_payload(params_bin, state)
+    )
   end
 
   @doc """
@@ -254,7 +257,7 @@ defmodule ExDataSketch.Bloom do
   """
   @spec deserialize(binary()) :: {:ok, t()} | {:error, Exception.t()}
   def deserialize(binary) when is_binary(binary) do
-    with {:ok, decoded} <- Codec.decode(binary),
+    with {:ok, decoded} <- Binary.decode(binary),
          :ok <- validate_sketch_id(decoded.sketch_id),
          {:ok, opts} <- decode_params(decoded.params),
          :ok <- validate_state_header(decoded.state, opts) do

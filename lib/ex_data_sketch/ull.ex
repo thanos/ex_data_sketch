@@ -47,7 +47,7 @@ defmodule ExDataSketch.ULL do
   same result, making ULL safe for parallel and distributed aggregation.
   """
 
-  alias ExDataSketch.{Backend, Codec, Errors, Hash}
+  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -269,7 +269,11 @@ defmodule ExDataSketch.ULL do
     p = Keyword.fetch!(opts, :p)
     hs = hash_strategy_byte(opts)
     params_bin = <<p::unsigned-8, hs::unsigned-8>>
-    Codec.encode(Codec.sketch_id_ull(), Codec.version(), params_bin, state)
+
+    Binary.encode(
+      Binary.metadata_from_opts(Codec.sketch_id_ull(), 1, opts),
+      Binary.build_payload(params_bin, state)
+    )
   end
 
   @doc """
@@ -285,7 +289,7 @@ defmodule ExDataSketch.ULL do
   """
   @spec deserialize(binary()) :: {:ok, t()} | {:error, Exception.t()}
   def deserialize(binary) when is_binary(binary) do
-    with {:ok, decoded} <- Codec.decode(binary),
+    with {:ok, decoded} <- Binary.decode(binary),
          :ok <- validate_sketch_id(decoded.sketch_id),
          {:ok, opts} <- decode_params(decoded.params),
          :ok <- validate_state(decoded.state, opts) do

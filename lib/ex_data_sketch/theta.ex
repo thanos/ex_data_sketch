@@ -51,7 +51,7 @@ defmodule ExDataSketch.Theta do
 
   import Bitwise, only: [<<<: 2, &&&: 2]
 
-  alias ExDataSketch.{Backend, Codec, Errors, Hash}
+  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash}
   alias ExDataSketch.DataSketches.CompactSketch
 
   @type t :: %__MODULE__{
@@ -275,7 +275,11 @@ defmodule ExDataSketch.Theta do
     k = Keyword.fetch!(opts, :k)
     hs = hash_strategy_byte(opts)
     params_bin = <<k::unsigned-little-32, hs::unsigned-8>>
-    Codec.encode(Codec.sketch_id_theta(), Codec.version(), params_bin, state)
+
+    Binary.encode(
+      Binary.metadata_from_opts(Codec.sketch_id_theta(), 1, opts),
+      Binary.build_payload(params_bin, state)
+    )
   end
 
   @doc """
@@ -291,7 +295,7 @@ defmodule ExDataSketch.Theta do
   """
   @spec deserialize(binary()) :: {:ok, t()} | {:error, Exception.t()}
   def deserialize(binary) when is_binary(binary) do
-    with {:ok, decoded} <- Codec.decode(binary),
+    with {:ok, decoded} <- Binary.decode(binary),
          :ok <- validate_sketch_id(decoded.sketch_id),
          {:ok, opts} <- decode_params(decoded.params) do
       backend = Backend.default()

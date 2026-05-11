@@ -42,7 +42,7 @@ defmodule ExDataSketch.CQF do
 
   import Bitwise
 
-  alias ExDataSketch.{Backend, Codec, Errors, Hash}
+  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -280,7 +280,10 @@ defmodule ExDataSketch.CQF do
 
     params_bin = <<q::unsigned-8, r::unsigned-8, seed::unsigned-little-32>>
 
-    Codec.encode(Codec.sketch_id_cqf(), Codec.version(), params_bin, state)
+    Binary.encode(
+      Binary.metadata_from_opts(Codec.sketch_id_cqf(), 1, opts),
+      Binary.build_payload(params_bin, state)
+    )
   end
 
   @doc """
@@ -298,7 +301,7 @@ defmodule ExDataSketch.CQF do
   """
   @spec deserialize(binary()) :: {:ok, t()} | {:error, Exception.t()}
   def deserialize(binary) when is_binary(binary) do
-    with {:ok, decoded} <- Codec.decode(binary),
+    with {:ok, decoded} <- Binary.decode(binary),
          :ok <- validate_sketch_id(decoded.sketch_id),
          {:ok, opts} <- decode_params(decoded.params),
          :ok <- validate_state_header(decoded.state) do
