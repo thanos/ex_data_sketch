@@ -479,16 +479,26 @@ defmodule ExDataSketch.HLL do
     {:error, Errors.DeserializationError.exception(reason: "invalid HLL params binary")}
   end
 
+  # Sketch-local hash-strategy wire bytes.
+  #
+  # NOTE: these bytes are local to the sketch's `params` segment and are
+  # INDEPENDENT of `ExDataSketch.Hash.Metadata`'s algorithm wire bytes
+  # (which use 2=murmur3, 255=custom). The sketch-local mapping was
+  # frozen in v0.7.x with 2=:custom; v0.8.0 adds :murmur3 as a new
+  # byte (3) rather than reissuing 2, to preserve backward-compatible
+  # deserialization of v0.7.x sketches.
   defp hash_strategy_byte(opts) do
     case Keyword.get(opts, :hash_strategy, :phash2) do
       :phash2 -> 0
       :xxhash3 -> 1
       :custom -> 2
+      :murmur3 -> 3
     end
   end
 
   defp decode_hash_strategy(0), do: :phash2
   defp decode_hash_strategy(1), do: :xxhash3
   defp decode_hash_strategy(2), do: :custom
+  defp decode_hash_strategy(3), do: :murmur3
   defp decode_hash_strategy(_), do: :phash2
 end

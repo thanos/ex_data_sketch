@@ -518,16 +518,21 @@ defmodule ExDataSketch.Theta do
     {:error, Errors.DeserializationError.exception(reason: "invalid Theta params binary")}
   end
 
+  # Sketch-local hash-strategy wire bytes. See HLL.hash_strategy_byte/1
+  # for the rationale; the byte set is identical across HLL/ULL/Theta/CMS
+  # and intentionally distinct from `ExDataSketch.Hash.Metadata`'s bytes.
   defp hash_strategy_byte(opts) do
     case Keyword.get(opts, :hash_strategy, :phash2) do
       :phash2 -> 0
       :xxhash3 -> 1
       :custom -> 2
+      :murmur3 -> 3
     end
   end
 
   defp decode_hash_strategy(0), do: :phash2
   defp decode_hash_strategy(1), do: :xxhash3
   defp decode_hash_strategy(2), do: :custom
+  defp decode_hash_strategy(3), do: :murmur3
   defp decode_hash_strategy(_), do: :phash2
 end
