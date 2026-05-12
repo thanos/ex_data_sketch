@@ -65,7 +65,7 @@ defmodule ExDataSketch.FrequentItems do
   - `:backend` - backend module (default: `ExDataSketch.Backend.Pure`).
   """
 
-  alias ExDataSketch.{Backend, Codec, Errors}
+  alias ExDataSketch.{Backend, Binary, Codec, Errors}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -340,7 +340,11 @@ defmodule ExDataSketch.FrequentItems do
     k = Keyword.fetch!(opts, :k)
     flags = Keyword.fetch!(opts, :flags)
     params_bin = <<k::unsigned-little-32, flags::unsigned-8>>
-    Codec.encode(Codec.sketch_id_fi(), Codec.version(), params_bin, state)
+
+    Binary.encode(
+      Binary.metadata_from_opts(Codec.sketch_id_fi(), 1, opts),
+      Binary.build_payload(params_bin, state)
+    )
   end
 
   @doc """
@@ -356,7 +360,7 @@ defmodule ExDataSketch.FrequentItems do
   """
   @spec deserialize(binary()) :: {:ok, t()} | {:error, Exception.t()}
   def deserialize(binary) when is_binary(binary) do
-    with {:ok, decoded} <- Codec.decode(binary),
+    with {:ok, decoded} <- Binary.decode(binary),
          :ok <- validate_sketch_id(decoded.sketch_id),
          {:ok, opts} <- decode_params(decoded.params),
          :ok <- validate_state_header(decoded.state, opts) do

@@ -85,12 +85,12 @@ defmodule ExDataSketch.FilterChain do
   """
   @spec add_stage(t(), struct()) :: t()
   def add_stage(%__MODULE__{} = chain, %IBLT{} = filter) do
-    %{chain | adjuncts: chain.adjuncts ++ [filter]}
+    %{chain | adjuncts: Enum.reverse([filter | Enum.reverse(chain.adjuncts)])}
   end
 
   def add_stage(%__MODULE__{} = chain, filter) do
     validate_add_stage!(chain, filter)
-    %{chain | stages: chain.stages ++ [filter]}
+    %{chain | stages: Enum.reverse([filter | Enum.reverse(chain.stages)])}
   end
 
   @doc """
@@ -388,12 +388,11 @@ defmodule ExDataSketch.FilterChain do
     end
   end
 
-  defp has_xor_terminal?(%__MODULE__{stages: stages}) do
-    case List.last(stages) do
-      %XorFilter{} -> true
-      _ -> false
-    end
-  end
+  defp has_xor_terminal?(%__MODULE__{stages: stages}), do: last_is_xor?(stages)
+
+  defp last_is_xor?([%XorFilter{}]), do: true
+  defp last_is_xor?([_ | rest]), do: last_is_xor?(rest)
+  defp last_is_xor?([]), do: false
 
   # -- Private: validation --
 

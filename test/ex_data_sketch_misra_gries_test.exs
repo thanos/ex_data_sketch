@@ -212,10 +212,11 @@ defmodule ExDataSketch.MisraGriesTest do
       assert MisraGries.estimate(restored, "a") == MisraGries.estimate(sketch, "a")
     end
 
-    test "EXSK header is correct" do
+    test "EXSK v2 header is correct" do
       sketch = MisraGries.new()
       binary = MisraGries.serialize(sketch)
-      <<"EXSK", 1, 14, _rest::binary>> = binary
+      # v2 frame: magic | version=2 | family=14 (MisraGries) | family_version=1 | flags=0
+      <<"EXSK", 2, 14, 1, 0, _rest::binary>> = binary
     end
 
     test "deserialize rejects wrong sketch ID" do

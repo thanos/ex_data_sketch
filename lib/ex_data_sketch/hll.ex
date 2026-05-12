@@ -44,7 +44,7 @@ defmodule ExDataSketch.HLL do
   same result, making HLL safe for parallel and distributed aggregation.
   """
 
-  alias ExDataSketch.{Backend, Codec, Errors, Hash}
+  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -86,8 +86,7 @@ defmodule ExDataSketch.HLL do
     hash_fn = Keyword.get(opts, :hash_fn)
     seed = Keyword.get(opts, :seed)
 
-    hash_strategy =
-      if hash_fn, do: :custom, else: Hash.default_hash_strategy()
+    hash_strategy = Hash.resolve_strategy(opts)
 
     clean_opts =
       [p: p, hash_strategy: hash_strategy] ++
@@ -236,14 +235,20 @@ defmodule ExDataSketch.HLL do
   @doc """
   Serializes the sketch to the ExDataSketch-native EXSK binary format.
 
-  The serialized binary includes magic bytes, version, sketch type,
-  parameters, and state. See `ExDataSketch.Codec` for format details.
+  As of `ex_data_sketch` v0.8.0 the produced frame is **EXSK v2**: a
+  versioned, CRC32C-checked binary wrapping the sketch's params and
+  state together with an `ExDataSketch.Hash.Metadata` block recording
+  the exact hashing identity used to produce the sketch. v1 frames
+  remain decodable via `deserialize/1`.
+
+  See `ExDataSketch.Binary` for the high-level frame contract and
+  `ExDataSketch.Binary.Header` for the byte-level layout.
 
   ## Examples
 
       iex> sketch = ExDataSketch.HLL.new(p: 10)
       iex> binary = ExDataSketch.HLL.serialize(sketch)
-      iex> <<"EXSK", _rest::binary>> = binary
+      iex> <<"EXSK", 2, _rest::binary>> = binary
       iex> byte_size(binary) > 0
       true
 
@@ -253,11 +258,17 @@ defmodule ExDataSketch.HLL do
     p = Keyword.fetch!(opts, :p)
     hs = hash_strategy_byte(opts)
     params_bin = <<p::unsigned-8, hs::unsigned-8>>
-    Codec.encode(Codec.sketch_id_hll(), Codec.version(), params_bin, state)
+    metadata = Binary.metadata_from_opts(Codec.sketch_id_hll(), 1, opts)
+    Binary.encode(metadata, Binary.build_payload(params_bin, state))
   end
 
   @doc """
   Deserializes an EXSK binary into an HLL sketch.
+
+  Accepts both EXSK v1 (legacy, pre-v0.8.0) and EXSK v2 frames; the
+  version is sniffed from the magic-prefixed header. v2 frames carry a
+  CRC32C trailer that is verified before decoding; corruption is
+  reported as a structured `DeserializationError`.
 
   Returns `{:ok, sketch}` on success or `{:error, reason}` on failure.
 
@@ -269,7 +280,7 @@ defmodule ExDataSketch.HLL do
   """
   @spec deserialize(binary()) :: {:ok, t()} | {:error, Exception.t()}
   def deserialize(binary) when is_binary(binary) do
-    with {:ok, decoded} <- Codec.decode(binary),
+    with {:ok, decoded} <- Binary.decode(binary),
          :ok <- validate_sketch_id(decoded.sketch_id),
          {:ok, opts} <- decode_params(decoded.params) do
       backend = Backend.default()
@@ -468,16 +479,26 @@ defmodule ExDataSketch.HLL do
     {:error, Errors.DeserializationError.exception(reason: "invalid HLL params binary")}
   end
 
+  # Sketch-local hash-strategy wire bytes.
+  #
+  # NOTE: these bytes are local to the sketch's `params` segment and are
+  # INDEPENDENT of `ExDataSketch.Hash.Metadata`'s algorithm wire bytes
+  # (which use 2=murmur3, 255=custom). The sketch-local mapping was
+  # frozen in v0.7.x with 2=:custom; v0.8.0 adds :murmur3 as a new
+  # byte (3) rather than reissuing 2, to preserve backward-compatible
+  # deserialization of v0.7.x sketches.
   defp hash_strategy_byte(opts) do
     case Keyword.get(opts, :hash_strategy, :phash2) do
       :phash2 -> 0
       :xxhash3 -> 1
       :custom -> 2
+      :murmur3 -> 3
     end
   end
 
   defp decode_hash_strategy(0), do: :phash2
   defp decode_hash_strategy(1), do: :xxhash3
   defp decode_hash_strategy(2), do: :custom
+  defp decode_hash_strategy(3), do: :murmur3
   defp decode_hash_strategy(_), do: :phash2
 end

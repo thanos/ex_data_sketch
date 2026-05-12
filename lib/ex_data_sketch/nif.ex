@@ -16,7 +16,9 @@ defmodule ExDataSketch.Nif do
         "x86_64-unknown-linux-gnu",
         "x86_64-unknown-linux-musl",
         "aarch64-unknown-linux-gnu",
-        "aarch64-unknown-linux-musl"
+        "aarch64-unknown-linux-musl",
+        "x86_64-pc-windows-msvc",
+        "aarch64-pc-windows-msvc"
       ]
   end
 
@@ -33,6 +35,12 @@ defmodule ExDataSketch.Nif do
     do: :erlang.nif_error(:not_loaded)
 
   def hll_update_many_raw_dirty_nif(_state_bin, _items, _p, _seed),
+    do: :erlang.nif_error(:not_loaded)
+
+  def hll_update_many_raw_h_nif(_state_bin, _items, _p, _seed, _algorithm),
+    do: :erlang.nif_error(:not_loaded)
+
+  def hll_update_many_raw_h_dirty_nif(_state_bin, _items, _p, _seed, _algorithm),
     do: :erlang.nif_error(:not_loaded)
 
   def hll_merge_nif(_a_bin, _b_bin, _p), do: :erlang.nif_error(:not_loaded)
@@ -52,6 +60,12 @@ defmodule ExDataSketch.Nif do
   def cms_update_many_raw_dirty_nif(_state_bin, _items, _w, _d, _cw, _seed),
     do: :erlang.nif_error(:not_loaded)
 
+  def cms_update_many_raw_h_nif(_state_bin, _items, _w, _d, _cw, _seed, _algorithm),
+    do: :erlang.nif_error(:not_loaded)
+
+  def cms_update_many_raw_h_dirty_nif(_state_bin, _items, _w, _d, _cw, _seed, _algorithm),
+    do: :erlang.nif_error(:not_loaded)
+
   def cms_merge_nif(_a_bin, _b_bin, _w, _d, _cw), do: :erlang.nif_error(:not_loaded)
   def cms_merge_dirty_nif(_a_bin, _b_bin, _w, _d, _cw), do: :erlang.nif_error(:not_loaded)
 
@@ -61,6 +75,12 @@ defmodule ExDataSketch.Nif do
   def theta_update_many_raw_nif(_state_bin, _items, _seed), do: :erlang.nif_error(:not_loaded)
 
   def theta_update_many_raw_dirty_nif(_state_bin, _items, _seed),
+    do: :erlang.nif_error(:not_loaded)
+
+  def theta_update_many_raw_h_nif(_state_bin, _items, _seed, _algorithm),
+    do: :erlang.nif_error(:not_loaded)
+
+  def theta_update_many_raw_h_dirty_nif(_state_bin, _items, _seed, _algorithm),
     do: :erlang.nif_error(:not_loaded)
 
   def theta_compact_nif(_state_bin), do: :erlang.nif_error(:not_loaded)
@@ -83,6 +103,13 @@ defmodule ExDataSketch.Nif do
   # Hash (XXHash3)
   def xxhash3_64_nif(_data), do: :erlang.nif_error(:not_loaded)
   def xxhash3_64_seeded_nif(_data, _seed), do: :erlang.nif_error(:not_loaded)
+
+  # Hash (MurmurHash3_x64_128)
+  def murmur3_x64_128_nif(_data, _seed), do: :erlang.nif_error(:not_loaded)
+  def murmur3_x64_128_full_nif(_data, _seed), do: :erlang.nif_error(:not_loaded)
+
+  # Binary (CRC32C / Castagnoli)
+  def crc32c_nif(_data), do: :erlang.nif_error(:not_loaded)
 
   # Bloom
   def bloom_put_many_nif(_state_bin, _hashes_bin, _hash_count, _bit_count),
@@ -159,6 +186,12 @@ defmodule ExDataSketch.Nif do
     do: :erlang.nif_error(:not_loaded)
 
   def ull_update_many_raw_dirty_nif(_state_bin, _items, _p, _seed),
+    do: :erlang.nif_error(:not_loaded)
+
+  def ull_update_many_raw_h_nif(_state_bin, _items, _p, _seed, _algorithm),
+    do: :erlang.nif_error(:not_loaded)
+
+  def ull_update_many_raw_h_dirty_nif(_state_bin, _items, _p, _seed, _algorithm),
     do: :erlang.nif_error(:not_loaded)
 
   def ull_merge_nif(_a_bin, _b_bin, _p), do: :erlang.nif_error(:not_loaded)

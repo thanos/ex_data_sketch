@@ -12,6 +12,8 @@ serialization, distribution, and persistence.
 [![Hex version](https://img.shields.io/hexpm/v/ex_data_sketch.svg)](https://hex.pm/packages/ex_data_sketch)
 [![Hex docs](https://img.shields.io/badge/docs-hexdocs.pm-blue)](https://hexdocs.pm/ex_data_sketch)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Coverage Status](https://coveralls.io/repos/github/thanos/ex_data_sketch/badge.svg?branch=main)](https://coveralls.io/github/thanos/ex_data_sketch?branch=main)
+
 
 
 ## Supported Algorithms
@@ -63,7 +65,7 @@ Add `ex_data_sketch` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:ex_data_sketch, "~> 0.7.1"}
+    {:ex_data_sketch, "~> 0.8.0"}
   ]
 end
 ```
@@ -154,8 +156,15 @@ mix docs
 | v0.6.0 | REQ sketch, Misra-Gries, XXHash3, Rust NIF parity for all membership filters | Released |
 | v0.7.0 | ULL (UltraLogLog) -- improved cardinality estimation with Pure + Rust NIF | Released |
 | v0.7.1 | NIF batch hashing, hash customization, quotient filter fix, merge safety | Released |
-| v0.8.0 | Massive Static Data & Industry Interop -- Binary Fuse Filters, Ribbon Filter, Apache DataSketches Interop | Planned |
-| v0.9.0 | Dequantized HLL and Sphinx (Succinct Perfect Hash Index) | Planned |
+| v0.8.0 | Deterministic Foundations -- pluggable hash registry (XXHash3 + Murmur3), binary stability and corruption detection, HLL hot-path optimization, precompiled NIFs, property-based validation | Released |
+| v0.9.0 | Streaming Integrations -- `ExDataSketch.Stream`, Broadway / GenStage support, ETS / DETS / CubDB persistence, `:telemetry` + OpenTelemetry instrumentation | Planned |
+| v0.10.0 | Apache Interoperability -- full cross-language KLL and HLL exchange, golden binary corpus, validation suite | Planned |
+| v0.11.0 | New Sketch Families -- CPC (Compressed Probabilistic Counting), Tuple Sketch (weighted distinct counting) | Planned |
+| v0.12.0 | Similarity & Sampling -- MinHash, Weighted MinHash, VarOpt sampling | Planned |
+| v1.0.0 | Stable Binary Contract -- locked EXSK format, full benchmark suite, Nx / Arrow ecosystem integrations | Planned |
+
+See [`guides/roadmap.md`](guides/roadmap.md) for the next-release preview.
+The long-form strategic roadmap is in [`plans/next_steps.md`](plans/next_steps.md).
 
 ## License
 

@@ -58,7 +58,7 @@ defmodule ExDataSketch.CMS do
   same result, making CMS safe for parallel and distributed aggregation.
   """
 
-  alias ExDataSketch.{Backend, Codec, Errors, Hash}
+  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -105,8 +105,7 @@ defmodule ExDataSketch.CMS do
     hash_fn = Keyword.get(opts, :hash_fn)
     seed = Keyword.get(opts, :seed)
 
-    hash_strategy =
-      if hash_fn, do: :custom, else: Hash.default_hash_strategy()
+    hash_strategy = Hash.resolve_strategy(opts)
 
     clean_opts =
       [width: width, depth: depth, counter_width: counter_width, hash_strategy: hash_strategy] ++
@@ -278,7 +277,10 @@ defmodule ExDataSketch.CMS do
       hs::unsigned-8
     >>
 
-    Codec.encode(Codec.sketch_id_cms(), Codec.version(), params_bin, state)
+    Binary.encode(
+      Binary.metadata_from_opts(Codec.sketch_id_cms(), 1, opts),
+      Binary.build_payload(params_bin, state)
+    )
   end
 
   @doc """
@@ -294,7 +296,7 @@ defmodule ExDataSketch.CMS do
   """
   @spec deserialize(binary()) :: {:ok, t()} | {:error, Exception.t()}
   def deserialize(binary) when is_binary(binary) do
-    with {:ok, decoded} <- Codec.decode(binary),
+    with {:ok, decoded} <- Binary.decode(binary),
          :ok <- validate_sketch_id(decoded.sketch_id),
          {:ok, opts} <- decode_params(decoded.params) do
       backend = Backend.default()
@@ -515,16 +517,21 @@ defmodule ExDataSketch.CMS do
     {:error, Errors.DeserializationError.exception(reason: "invalid CMS params binary")}
   end
 
+  # Sketch-local hash-strategy wire bytes. See HLL.hash_strategy_byte/1
+  # for the rationale; the byte set is identical across HLL/ULL/Theta/CMS
+  # and intentionally distinct from `ExDataSketch.Hash.Metadata`'s bytes.
   defp hash_strategy_byte(opts) do
     case Keyword.get(opts, :hash_strategy, :phash2) do
       :phash2 -> 0
       :xxhash3 -> 1
       :custom -> 2
+      :murmur3 -> 3
     end
   end
 
   defp decode_hash_strategy(0), do: :phash2
   defp decode_hash_strategy(1), do: :xxhash3
   defp decode_hash_strategy(2), do: :custom
+  defp decode_hash_strategy(3), do: :murmur3
   defp decode_hash_strategy(_), do: :phash2
 end

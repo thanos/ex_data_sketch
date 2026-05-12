@@ -57,7 +57,7 @@ defmodule ExDataSketch.MisraGries do
   `k` parameter. Count (`n`) is always exactly additive.
   """
 
-  alias ExDataSketch.{Backend, Codec, Errors}
+  alias ExDataSketch.{Backend, Binary, Codec, Errors}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -315,7 +315,11 @@ defmodule ExDataSketch.MisraGries do
     key_encoding = Keyword.get(opts, :key_encoding, :binary)
     enc_byte = encode_key_encoding(key_encoding)
     params_bin = <<k::unsigned-little-32, enc_byte::unsigned-8>>
-    Codec.encode(Codec.sketch_id_mg(), Codec.version(), params_bin, state)
+
+    Binary.encode(
+      Binary.metadata_from_opts(Codec.sketch_id_mg(), 1, opts),
+      Binary.build_payload(params_bin, state)
+    )
   end
 
   @doc """
@@ -331,7 +335,7 @@ defmodule ExDataSketch.MisraGries do
   """
   @spec deserialize(binary()) :: {:ok, t()} | {:error, Exception.t()}
   def deserialize(binary) when is_binary(binary) do
-    with {:ok, decoded} <- Codec.decode(binary),
+    with {:ok, decoded} <- Binary.decode(binary),
          :ok <- validate_sketch_id(decoded.sketch_id),
          {:ok, opts} <- decode_params(decoded.params),
          :ok <- validate_state_header(decoded.state) do

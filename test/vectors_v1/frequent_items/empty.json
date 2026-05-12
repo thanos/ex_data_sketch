@@ -1,0 +1,14 @@
+{
+  "algorithm": "frequent_items",
+  "vector_version": 1,
+  "algorithm_opts": {
+    "k": 10
+  },
+  "input_items": [],
+  "expected": {
+    "canonical_exsk_base64": "RVhTSwEGBQAAAAoAAAAAIAAAAEZJMQABAAAACgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "count": 0,
+    "entry_count": 0,
+    "top_k": []
+  }
+}

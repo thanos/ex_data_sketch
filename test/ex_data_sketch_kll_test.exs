@@ -300,11 +300,16 @@ defmodule ExDataSketch.KLLTest do
   describe "serialize/1" do
     test "encodes k as u32 LE params" do
       sketch = KLL.new(k: 200)
+      binary = KLL.serialize(sketch)
 
-      <<"EXSK", 1, 4, 4::unsigned-little-32, k_bin::binary-size(4), _rest::binary>> =
-        KLL.serialize(sketch)
+      # v2 magic + version, with KLL family byte = 4.
+      assert <<"EXSK", 2, 4, _rest::binary>> = binary
 
-      <<k::unsigned-little-32>> = k_bin
+      # Decode through the public Binary facade to access the params segment.
+      assert {:ok, decoded} = ExDataSketch.Binary.decode(binary)
+      assert decoded.sketch_id == 4
+      assert decoded.version == 2
+      <<k::unsigned-little-32>> = decoded.params
       assert k == 200
     end
   end
@@ -315,7 +320,6 @@ defmodule ExDataSketch.KLLTest do
     end
 
     test "wrong sketch ID returns error" do
-      # Build an HLL binary and try to deserialize as KLL
       hll = ExDataSketch.HLL.new()
       binary = ExDataSketch.HLL.serialize(hll)
       assert {:error, %DeserializationError{}} = KLL.deserialize(binary)

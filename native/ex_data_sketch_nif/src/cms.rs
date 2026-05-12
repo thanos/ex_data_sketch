@@ -2,9 +2,12 @@ use rustler::{Binary, Env, ListIterator, Term};
 use xxhash_rust::xxh3;
 
 use crate::error;
+use crate::hash::murmur3_x64_128;
 
 const CMS_HEADER_SIZE: usize = 9;
 const GOLDEN64: u64 = 0x9E3779B97F4A7C15;
+const ALGO_XXH3: u8 = 1;
+const ALGO_MURMUR3: u8 = 2;
 
 /// Validates CMS parameters, returning an error message if invalid.
 /// Requires: width > 0, depth > 0, counter_width in {32, 64}
@@ -127,6 +130,19 @@ fn cms_update_many_raw_impl<'a>(
     counter_width: u8,
     seed: u64,
 ) -> Term<'a> {
+    cms_update_many_raw_impl_inner(env, state_bin, items, width, depth, counter_width, seed, ALGO_XXH3)
+}
+
+fn cms_update_many_raw_impl_inner<'a>(
+    env: Env<'a>,
+    state_bin: Binary,
+    items: ListIterator<'a>,
+    width: u32,
+    depth: u16,
+    counter_width: u8,
+    seed: u64,
+    algorithm: u8,
+) -> Term<'a> {
     if let Some(err) = validate_cms_params(width, depth, counter_width) {
         return error::error_string(env, err);
     }
@@ -165,6 +181,7 @@ fn cms_update_many_raw_impl<'a>(
         (1u64 << counter_width) - 1
     };
     let w = width as usize;
+    let m3_seed = seed as u32;
 
     for item_term in items {
         let (bin, increment): (Binary, u32) = match item_term.decode() {
@@ -172,7 +189,11 @@ fn cms_update_many_raw_impl<'a>(
             Err(_) => return error::error_string(env, "expected {binary, increment} tuple where increment is a u32 (0..4294967295)"),
         };
 
-        let hash64 = xxh3::xxh3_64_with_seed(bin.as_slice(), seed);
+        let hash64 = match algorithm {
+            ALGO_XXH3 => xxh3::xxh3_64_with_seed(bin.as_slice(), seed),
+            ALGO_MURMUR3 => murmur3_x64_128(bin.as_slice(), m3_seed).0,
+            _ => return error::error_string(env, "unsupported hash algorithm byte (expected 1=xxhash3, 2=murmur3)"),
+        };
 
         for row in 0..depth {
             let col = cms_row_index(hash64, row, width) as usize;
@@ -225,6 +246,34 @@ fn cms_update_many_raw_dirty_nif<'a>(
     seed: u64,
 ) -> Term<'a> {
     cms_update_many_raw_impl(env, state_bin, items, width, depth, counter_width, seed)
+}
+
+#[rustler::nif]
+fn cms_update_many_raw_h_nif<'a>(
+    env: Env<'a>,
+    state_bin: Binary,
+    items: ListIterator<'a>,
+    width: u32,
+    depth: u16,
+    counter_width: u8,
+    seed: u64,
+    algorithm: u8,
+) -> Term<'a> {
+    cms_update_many_raw_impl_inner(env, state_bin, items, width, depth, counter_width, seed, algorithm)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn cms_update_many_raw_h_dirty_nif<'a>(
+    env: Env<'a>,
+    state_bin: Binary,
+    items: ListIterator<'a>,
+    width: u32,
+    depth: u16,
+    counter_width: u8,
+    seed: u64,
+    algorithm: u8,
+) -> Term<'a> {
+    cms_update_many_raw_impl_inner(env, state_bin, items, width, depth, counter_width, seed, algorithm)
 }
 
 fn cms_merge_impl<'a>(

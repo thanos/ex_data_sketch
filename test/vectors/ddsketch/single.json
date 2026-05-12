@@ -1,18 +1,20 @@
 {
   "algorithm": "ddsketch",
-  "vector_version": 1,
   "algorithm_opts": {
     "alpha": 0.01
   },
-  "input_items": [42.0],
   "expected": {
-    "canonical_exsk_base64": "RVhTSwEFCAAAAHsUrkfheoQ/YAAAAEREUzEBAAAAexSuR+F6hD/9SoFav1LwP30FnQUOe5Q/AQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAARUAAAAAAAABFQAEAAAAAAAAAAAAAAAAAAAC6AAAAAQAAAA==",
+    "canonical_exsk_base64": "RVhTSwIFAQAeAAEAAAAAAAAAAAAFAQAAAABsAAAACAAAAHsUrkfheoQ/RERTMQEAAAB7FK5H4XqEP/1KgVq/UvA/fQWdBQ57lD8BAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAABFQAAAAAAAAEVAAQAAAAAAAAAAAAAAAAAAALoAAAABAAAA0fczPw==",
     "count": 1,
-    "min": 42.0,
     "max": 42.0,
+    "min": 42.0,
     "quantile_estimates": {
       "0.5": 41.68220663297845
     },
     "tolerance": 0
-  }
+  },
+  "input_items": [
+    42.0
+  ],
+  "vector_version": 2
 }

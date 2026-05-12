@@ -319,10 +319,11 @@ defmodule ExDataSketch.REQTest do
       assert REQ.count(restored) == 50
     end
 
-    test "EXSK header is correct" do
+    test "EXSK v2 header is correct" do
       sketch = REQ.new()
       binary = REQ.serialize(sketch)
-      <<"EXSK", 1, 13, _rest::binary>> = binary
+      # v2 frame: magic | version=2 | family=13 (REQ) | family_version=1 | flags=0
+      <<"EXSK", 2, 13, 1, 0, _rest::binary>> = binary
     end
 
     test "deserialize rejects invalid binary" do

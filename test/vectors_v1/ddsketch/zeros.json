@@ -1,0 +1,21 @@
+{
+  "algorithm": "ddsketch",
+  "vector_version": 1,
+  "algorithm_opts": {
+    "alpha": 0.01
+  },
+  "input_items": [0.0, 0.0, 1.0, 2.0],
+  "expected": {
+    "canonical_exsk_base64": "RVhTSwEFCAAAAHsUrkfheoQ/aAAAAEREUzEBAAAAexSuR+F6hD/9SoFav1LwP30FnQUOe5Q/AQAAAAAAAAAEAAAAAAAAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAIAAAAAAAAAAAAAAAAAAAAAAAAAAQAAACIAAAABAAAA",
+    "count": 4,
+    "min": 0.0,
+    "max": 2.0,
+    "quantile_estimates": {
+      "0.25": 0.0,
+      "0.5": 0.0,
+      "0.75": 1.01,
+      "0.9": 1.9936617014173446
+    },
+    "tolerance": 0
+  }
+}

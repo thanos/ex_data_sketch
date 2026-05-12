@@ -417,7 +417,9 @@ defmodule ExDataSketch.FrequentItemsTest do
 
   describe "frequent/2" do
     test "returns items above threshold" do
-      sketch = FrequentItems.from_enumerable(List.duplicate("a", 100) ++ ["b"], k: 10)
+      sketch =
+        FrequentItems.from_enumerable(Enum.reverse(["b" | List.duplicate("a", 100)]), k: 10)
+
       frequent = FrequentItems.frequent(sketch, 50)
       items = Enum.map(frequent, & &1.item)
       assert "a" in items

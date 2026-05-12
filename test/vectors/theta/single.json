@@ -4,12 +4,12 @@
     "k": 4096
   },
   "expected": {
-    "canonical_exsk_base64": "RVhTSwEDBQAAAAAQAAABGQAAAAEAEAAA//////////8BAAAA/dxiXFXoVZU=",
+    "canonical_exsk_base64": "RVhTSwIDAQAeAAEBAAAAAAAAAAADAQAAAAAiAAAABQAAAAAQAAABAQAQAAD//////////wEAAAD93GJcVehVlQpzldg=",
     "estimate": 1.0,
     "tolerance": 0
   },
   "input_items": [
     "hello"
   ],
-  "vector_version": 1
+  "vector_version": 2
 }

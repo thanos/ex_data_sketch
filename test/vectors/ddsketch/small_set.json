@@ -1,15 +1,13 @@
 {
   "algorithm": "ddsketch",
-  "vector_version": 1,
   "algorithm_opts": {
     "alpha": 0.01
   },
-  "input_items": [1.0, 1.0, 2.0, 3.0, 5.0, 8.0, 13.0, 21.0, 34.0, 55.0, 89.0, 144.0, 1.0, 1.0, 2.0, 3.0],
   "expected": {
-    "canonical_exsk_base64": "RVhTSwEFCAAAAHsUrkfheoQ/sAAAAEREUzEBAAAAexSuR+F6hD/9SoFav1LwP30FnQUOe5Q/AQAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAA8D8AAAAAAABiQAsAAAAAAAAAAAAAAAAAAAAAAAAABAAAACIAAAACAAAANgAAAAIAAABQAAAAAQAAAGcAAAABAAAAgAAAAAEAAACYAAAAAQAAALAAAAABAAAAyAAAAAEAAADgAAAAAQAAAPgAAAABAAAA",
+    "canonical_exsk_base64": "RVhTSwIFAQAeAAEAAAAAAAAAAAAFAQAAAAC8AAAACAAAAHsUrkfheoQ/RERTMQEAAAB7FK5H4XqEP/1KgVq/UvA/fQWdBQ57lD8BAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAADwPwAAAAAAAGJACwAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAIgAAAAIAAAA2AAAAAgAAAFAAAAABAAAAZwAAAAEAAACAAAAAAQAAAJgAAAABAAAAsAAAAAEAAADIAAAAAQAAAOAAAAABAAAA+AAAAAEAAACGRtrN",
     "count": 16,
-    "min": 1.0,
     "max": 144.0,
+    "min": 1.0,
     "quantile_estimates": {
       "0.25": 1.01,
       "0.5": 2.9742334234767016,
@@ -18,5 +16,24 @@
       "0.99": 144.0435485161402
     },
     "tolerance": 0
-  }
+  },
+  "input_items": [
+    1.0,
+    1.0,
+    2.0,
+    3.0,
+    5.0,
+    8.0,
+    13.0,
+    21.0,
+    34.0,
+    55.0,
+    89.0,
+    144.0,
+    1.0,
+    1.0,
+    2.0,
+    3.0
+  ],
+  "vector_version": 2
 }

@@ -1,6 +1,7 @@
 mod bloom;
 mod cms;
 mod cqf;
+mod crc;
 mod cuckoo;
 mod iblt;
 mod quotient;
