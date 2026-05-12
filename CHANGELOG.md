@@ -47,20 +47,28 @@ Release theme: **Deterministic Foundations.** Transforms ex_data_sketch from a c
     - Bloom / XorFilter / Cuckoo no-false-negative guarantees.
     - Binary v2 bit-flip corruption never silently propagates to a sketch.
 
-- **Plans and reviewer documentation.**
-  - `plans/hash_infrastructure.md`, `plans/hash_binary_contract.md`
-  - `plans/binary_contract.md`, `plans/corruption_detection.md`
-  - `plans/hll_hot_path.md`, `plans/hll_scheduler_safety.md`
-  - `plans/precompiled_nifs.md`
-  - `plans/property_testing.md`
-  - `plans/0.8.0_implementation_plan.md`, `plans/0.8.0_phase{1..5}_reviewer_checklist.md`
-  - `plans/0.8.0-risks.md` (31-risk consolidated register)
+- **User-facing release guides** (shipped to HexDocs):
+  - `guides/v0.8.0_migration_notes.md` — v0.7.x to v0.8.0 upgrade guide.
+  - `guides/v0.8.0_architecture.md` — layered architecture overview.
+  - `guides/serialization_compatibility.md` — the v0.x EXSK stability contract.
+  - `guides/hash_strategies.md` — choosing between phash2, XXH3, Murmur3, and custom.
+  - `guides/hll_performance.md` — HLL hot-path architecture, benchmark numbers, and external-library context.
+  - `guides/precompiled_nifs.md` — platform matrix, release pipeline, and source-build fallback.
+  - `guides/roadmap.md` — v0.9.0 preview.
+- **Internal plans and reviewer checklists** (repo-only, not packaged):
+  - [`plans/hash_binary_contract.md`](https://github.com/thanos/ex_data_sketch/blob/main/plans/hash_binary_contract.md)
+  - [`plans/binary_contract.md`](https://github.com/thanos/ex_data_sketch/blob/main/plans/binary_contract.md), [`plans/corruption_detection.md`](https://github.com/thanos/ex_data_sketch/blob/main/plans/corruption_detection.md)
+  - [`plans/hll_scheduler_safety.md`](https://github.com/thanos/ex_data_sketch/blob/main/plans/hll_scheduler_safety.md)
+  - [`plans/property_testing.md`](https://github.com/thanos/ex_data_sketch/blob/main/plans/property_testing.md)
+  - [`plans/0.8.0_implementation_plan.md`](https://github.com/thanos/ex_data_sketch/blob/main/plans/0.8.0_implementation_plan.md), Phase 1-5 reviewer checklists
+  - [`plans/0.8.0-risks.md`](https://github.com/thanos/ex_data_sketch/blob/main/plans/0.8.0-risks.md) (31-risk consolidated register)
+  - [`plans/0.8.0-review.md`](https://github.com/thanos/ex_data_sketch/blob/main/plans/0.8.0-review.md) (pre-release code review)
 
 ### Changed
 
 - **EXSK serialization format bumped to v2.** Every sketch's `serialize/1` now produces an EXSK v2 frame (magic + version 2 + sketch family + family version + flags + header_size + 16-byte hash metadata block + payload size + payload + CRC32C trailer). v0.7.x EXSK v1 frames remain decodable via `Binary.decode/1`'s version sniffing; `ExDataSketch.Codec` is preserved as the legacy v1 path.
 - **Golden vectors regenerated as v2** under `test/vectors/`. The previous v1 vectors are preserved under `test/vectors_v1/` and exercised by `test/ex_data_sketch_v1_compat_test.exs` as a permanent regression guard.
-- **`README.md` roadmap rewritten** to match the strategic roadmap in `plans/next_steps.md`: v0.8.0 = Deterministic Foundations; v0.9.0 = Streaming Integrations; v0.10.0 = Apache Interoperability; v0.11.0 = New Sketch Families (CPC, Tuple); v0.12.0 = Similarity & Sampling (MinHash, VarOpt); v1.0.0 = Stable Binary Contract.
+- **`README.md` roadmap rewritten** to match the strategic roadmap in [`plans/next_steps.md`](https://github.com/thanos/ex_data_sketch/blob/main/plans/next_steps.md): v0.8.0 = Deterministic Foundations; v0.9.0 = Streaming Integrations; v0.10.0 = Apache Interoperability; v0.11.0 = New Sketch Families (CPC, Tuple); v0.12.0 = Similarity & Sampling (MinHash, VarOpt); v1.0.0 = Stable Binary Contract.
 - **`ExDataSketch.Hash.validate_merge_hash_compat!/3`** is preserved as a backward-compatible shim that delegates to `ExDataSketch.Hash.Validation.validate_options!/3`.
 
 ### Fixed
@@ -70,7 +78,7 @@ Release theme: **Deterministic Foundations.** Transforms ex_data_sketch from a c
 
 ### Migration
 
-See `plans/0.8.0_migration_notes.md` for the full v0.7.x -> v0.8.0 migration guide. Key points:
+See `guides/v0.8.0_migration_notes.md` (shipped in HexDocs) for the full v0.7.x -> v0.8.0 migration guide. Key points:
 
 - **No code changes required for most users.** EXSK v1 frames are still decoded; the `serialize/1` output format changes but downstream code that uses round-trip serialization sees no API difference.
 - **One-way upgrade for persisted sketches.** v0.7.x cannot read v0.8.0-produced binaries. Stage your rollout: deploy v0.8.0 readers first, then producers.
@@ -78,10 +86,16 @@ See `plans/0.8.0_migration_notes.md` for the full v0.7.x -> v0.8.0 migration gui
 
 ### Documentation
 
-- `plans/0.8.0_architectural_summary.md` — consolidated Phase 1-5 design overview.
-- `plans/0.8.0_serialization_compatibility.md` — the v0.x stability contract.
-- `plans/0.9.0_roadmap_preview.md` — preview of the next release's streaming-integration scope.
-- `plans/0.8.0-risks.md` — open risk register at release time.
+User-facing guides (shipped to HexDocs and the Hex package):
+
+- `guides/v0.8.0_architecture.md` — consolidated Phase 1-5 design overview.
+- `guides/serialization_compatibility.md` — the v0.x stability contract.
+- `guides/roadmap.md` — preview of the next release's streaming-integration scope.
+
+Internal documentation (repo-only; linked from the user guides):
+
+- [`plans/0.8.0-risks.md`](https://github.com/thanos/ex_data_sketch/blob/main/plans/0.8.0-risks.md) — open risk register at release time.
+- [`plans/0.8.0-review.md`](https://github.com/thanos/ex_data_sketch/blob/main/plans/0.8.0-review.md) — pre-release code review.
 
 ### Stats
 

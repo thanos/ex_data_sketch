@@ -163,7 +163,8 @@ mix docs
 | v0.12.0 | Similarity & Sampling -- MinHash, Weighted MinHash, VarOpt sampling | Planned |
 | v1.0.0 | Stable Binary Contract -- locked EXSK format, full benchmark suite, Nx / Arrow ecosystem integrations | Planned |
 
-The full strategic roadmap is in [`plans/next_steps.md`](plans/next_steps.md).
+See [`guides/roadmap.md`](guides/roadmap.md) for the next-release preview.
+The long-form strategic roadmap is in [`plans/next_steps.md`](plans/next_steps.md).
 
 ## License
 
