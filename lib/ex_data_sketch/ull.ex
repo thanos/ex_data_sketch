@@ -48,6 +48,7 @@ defmodule ExDataSketch.ULL do
   """
 
   alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash}
+  alias ExDataSketch.Errors.DeserializationError
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -403,8 +404,7 @@ defmodule ExDataSketch.ULL do
   defp validate_sketch_id(15), do: :ok
 
   defp validate_sketch_id(id) do
-    {:error,
-     Errors.DeserializationError.exception(reason: "expected ULL sketch ID (15), got #{id}")}
+    {:error, DeserializationError.exception(reason: "expected ULL sketch ID (15), got #{id}")}
   end
 
   # Legacy 1-byte format (no hash strategy tag)
@@ -417,7 +417,7 @@ defmodule ExDataSketch.ULL do
     case decode_hash_strategy(hs) do
       :custom ->
         {:error,
-         Errors.DeserializationError.exception(
+         DeserializationError.exception(
            reason:
              "ULL was serialized with a custom :hash_fn which cannot be restored; " <>
                "pass the original hash_fn when re-creating the sketch"
@@ -429,17 +429,15 @@ defmodule ExDataSketch.ULL do
   end
 
   defp decode_params(<<p::unsigned-8>>) do
-    {:error,
-     Errors.DeserializationError.exception(reason: "invalid ULL precision #{p} in params")}
+    {:error, DeserializationError.exception(reason: "invalid ULL precision #{p} in params")}
   end
 
   defp decode_params(<<p::unsigned-8, _hs::unsigned-8>>) do
-    {:error,
-     Errors.DeserializationError.exception(reason: "invalid ULL precision #{p} in params")}
+    {:error, DeserializationError.exception(reason: "invalid ULL precision #{p} in params")}
   end
 
   defp decode_params(_other) do
-    {:error, Errors.DeserializationError.exception(reason: "invalid ULL params binary")}
+    {:error, DeserializationError.exception(reason: "invalid ULL params binary")}
   end
 
   # Sketch-local hash-strategy wire bytes. See HLL.hash_strategy_byte/1
@@ -471,25 +469,25 @@ defmodule ExDataSketch.ULL do
     cond do
       version != 1 ->
         {:error,
-         Errors.DeserializationError.exception(
+         DeserializationError.exception(
            reason: "unsupported ULL state version #{version}, expected 1"
          )}
 
       flags != 0 ->
         {:error,
-         Errors.DeserializationError.exception(
+         DeserializationError.exception(
            reason: "unsupported ULL state flags #{flags}, expected 0"
          )}
 
       state_p != p ->
         {:error,
-         Errors.DeserializationError.exception(
+         DeserializationError.exception(
            reason: "ULL state precision #{state_p} does not match params precision #{p}"
          )}
 
       byte_size(state) != expected_size ->
         {:error,
-         Errors.DeserializationError.exception(
+         DeserializationError.exception(
            reason:
              "ULL state size #{byte_size(state)} does not match expected #{expected_size} for p=#{p}"
          )}
@@ -501,8 +499,6 @@ defmodule ExDataSketch.ULL do
 
   defp validate_state(_other, _opts) do
     {:error,
-     Errors.DeserializationError.exception(
-       reason: "invalid ULL state header, expected ULL1 magic"
-     )}
+     DeserializationError.exception(reason: "invalid ULL state header, expected ULL1 magic")}
   end
 end

@@ -69,7 +69,7 @@ defmodule ExDataSketch.Backend.Pure do
     # Pre-aggregate hashes into a map of {bucket => max_rank}.
     # Avoids per-hash tuple copies from put_elem.
     updates =
-      List.foldl(hashes, %{}, fn hash64, acc ->
+      Enum.reduce(hashes, %{}, fn hash64, acc ->
         bucket = hash64 >>> (64 - p)
         remaining = hash64 &&& remaining_mask
         rank = count_leading_zeros(remaining, bits) + 1
@@ -244,7 +244,7 @@ defmodule ExDataSketch.Backend.Pure do
     counter_tuple = decode_counters_to_tuple(counters, counter_bytes)
 
     counter_tuple =
-      List.foldl(pairs, counter_tuple, fn {hash64, increment}, acc ->
+      Enum.reduce(pairs, counter_tuple, fn {hash64, increment}, acc ->
         Enum.reduce(0..(depth - 1), acc, fn row, inner_acc ->
           col = cms_row_index(hash64, row, width)
           idx = row * width + col
@@ -714,7 +714,7 @@ defmodule ExDataSketch.Backend.Pure do
       cdf_values = Enum.map(split_points, fn sp -> kll_query_rank(sorted_view, state.n, sp) end)
 
       # PMF returns m+1 bins: (-inf, s1], (s1, s2], ..., (sm, +inf)
-      cdf_with_bounds = [0.0] ++ cdf_values ++ [1.0]
+      cdf_with_bounds = [0.0 | Enum.reverse([1.0 | Enum.reverse(cdf_values)])]
 
       cdf_with_bounds
       |> Enum.chunk_every(2, 1, :discard)
@@ -922,8 +922,8 @@ defmodule ExDataSketch.Backend.Pure do
     new_num_levels = state.num_levels + 1
 
     # Extend levels and sizes with empty new top level
-    new_levels = state.levels ++ [[]]
-    new_level_sizes = state.level_sizes ++ [0]
+    new_levels = Enum.reverse([[] | Enum.reverse(state.levels)])
+    new_level_sizes = Enum.reverse([0 | Enum.reverse(state.level_sizes)])
 
     # Extend compaction bits if needed
     new_parity_bytes = div(new_num_levels + 7, 8)
@@ -2120,11 +2120,13 @@ defmodule ExDataSketch.Backend.Pure do
   # -- FrequentItems private helpers --
 
   defp fi_apply_weighted_update(entries, k, item_bytes, weight) do
+    entry_count = length(entries)
+
     case List.keyfind(entries, item_bytes, 0) do
       {^item_bytes, {count, error}} ->
         List.keyreplace(entries, item_bytes, 0, {item_bytes, {count + weight, error}})
 
-      nil when length(entries) < k ->
+      nil when entry_count < k ->
         [{item_bytes, {weight, 0}} | entries]
         |> Enum.sort_by(fn {ib, _} -> ib end)
 
@@ -3034,7 +3036,6 @@ defmodule ExDataSketch.Backend.Pure do
     end
   end
 
-  # Insert a fingerprint with a specific count (used by merge).
   # Inserts the remainder once, then adds (count-1) duplicate copies.
   defp cqf_insert_with_count(ctx, fq, fr, count) do
     was_occ = qot_occ?(ctx, fq)
@@ -3165,7 +3166,6 @@ defmodule ExDataSketch.Backend.Pure do
       count = cqf_read_counter(ctx, pos, fr)
 
       if count == 1 do
-        # Remove the remainder entirely (like QOT delete)
         ctx = qot_do_delete(ctx, fq, pos)
 
         %{
@@ -3420,7 +3420,6 @@ defmodule ExDataSketch.Backend.Pure do
       # Position is no longer degree-1, skip it
       xor_peel_loop(rest, degrees, sets, stack, peeled, n, seed, seg_size)
     else
-      # Get the single hash at this position
       hash_set = elem(sets, pos)
       hash = MapSet.to_list(hash_set) |> hd()
 
@@ -3457,7 +3456,6 @@ defmodule ExDataSketch.Backend.Pure do
       {h0, h1, h2} = xor_hash_positions(hash, seed, seg_size)
       fp = xor_fingerprint(hash, fp_bits)
 
-      # Get the other two positions
       [other1, other2] = Enum.reject([h0, h1, h2], &(&1 == peel_pos))
 
       value = bxor(bxor(fp, elem(b, other1)), elem(b, other2))
@@ -4300,7 +4298,7 @@ defmodule ExDataSketch.Backend.Pure do
     else
       sorted_view = req_build_sorted_view(state)
       cdf_values = Enum.map(split_points, fn sp -> kll_query_rank(sorted_view, state.n, sp) end)
-      cdf_with_bounds = [0.0] ++ cdf_values ++ [1.0]
+      cdf_with_bounds = [0.0 | Enum.reverse([1.0 | Enum.reverse(cdf_values)])]
 
       cdf_with_bounds
       |> Enum.chunk_every(2, 1, :discard)
@@ -4505,8 +4503,8 @@ defmodule ExDataSketch.Backend.Pure do
 
   defp req_grow_levels(state) do
     new_num_levels = state.num_levels + 1
-    new_levels = state.levels ++ [[]]
-    new_level_sizes = state.level_sizes ++ [0]
+    new_levels = Enum.reverse([[] | Enum.reverse(state.levels)])
+    new_level_sizes = Enum.reverse([0 | Enum.reverse(state.level_sizes)])
 
     new_parity_bytes = div(new_num_levels + 7, 8)
     old_parity_bytes = byte_size(state.compaction_bits)
@@ -4706,7 +4704,7 @@ defmodule ExDataSketch.Backend.Pure do
     # This avoids materializing the full register array as a tuple,
     # which would OOM at high precision values (e.g. p=26 => 67M registers).
     updates =
-      List.foldl(hashes, %{}, fn hash64, acc ->
+      Enum.reduce(hashes, %{}, fn hash64, acc ->
         bucket = hash64 >>> (64 - p)
         reg_value = ull_register_value(hash64, p)
         Map.update(acc, bucket, reg_value, &max(&1, reg_value))

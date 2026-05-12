@@ -320,7 +320,6 @@ defmodule ExDataSketch.KLLTest do
     end
 
     test "wrong sketch ID returns error" do
-      # Build an HLL binary and try to deserialize as KLL
       hll = ExDataSketch.HLL.new()
       binary = ExDataSketch.HLL.serialize(hll)
       assert {:error, %DeserializationError{}} = KLL.deserialize(binary)

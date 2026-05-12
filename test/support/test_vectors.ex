@@ -1,6 +1,9 @@
 defmodule ExDataSketch.TestVectors do
   @moduledoc false
 
+  alias ExDataSketch.{CMS, DDSketch, FrequentItems, KLL}
+  alias ExUnit.Assertions
+
   @vectors_dir Path.join([__DIR__, "..", "vectors"])
 
   @doc """
@@ -40,7 +43,7 @@ defmodule ExDataSketch.TestVectors do
     expected_bytes = Base.decode64!(expected["canonical_exsk_base64"])
     serialized = sketch_mod.serialize(sketch)
 
-    ExUnit.Assertions.assert(
+    Assertions.assert(
       serialized == expected_bytes,
       "Serialized bytes mismatch for #{context}"
     )
@@ -67,7 +70,7 @@ defmodule ExDataSketch.TestVectors do
     expected_bytes = Base.decode64!(merge_expected["canonical_exsk_base64"])
     serialized = sketch_mod.serialize(merged)
 
-    ExUnit.Assertions.assert(
+    Assertions.assert(
       serialized == expected_bytes,
       "Merged serialized bytes mismatch for #{context}"
     )
@@ -129,15 +132,15 @@ defmodule ExDataSketch.TestVectors do
 
   defp build_sketch(mod, opts, items), do: mod.from_enumerable(items, opts)
 
-  defp assert_estimate(ExDataSketch.KLL, sketch, expected, _vector, context) do
+  defp assert_estimate(KLL, sketch, expected, _vector, context) do
     tolerance = expected["tolerance"] || 0
     delta = max(tolerance, 1.0e-9)
 
     # Assert count
     if expected["count"] do
-      actual_count = ExDataSketch.KLL.count(sketch)
+      actual_count = KLL.count(sketch)
 
-      ExUnit.Assertions.assert(
+      Assertions.assert(
         actual_count == expected["count"],
         "KLL count mismatch for #{context}: expected #{expected["count"]}, got #{actual_count}"
       )
@@ -145,18 +148,18 @@ defmodule ExDataSketch.TestVectors do
 
     # Assert min/max
     if Map.has_key?(expected, "min") do
-      actual_min = ExDataSketch.KLL.min_value(sketch)
+      actual_min = KLL.min_value(sketch)
 
-      ExUnit.Assertions.assert(
+      Assertions.assert(
         actual_min == expected["min"],
         "KLL min mismatch for #{context}: expected #{inspect(expected["min"])}, got #{inspect(actual_min)}"
       )
     end
 
     if Map.has_key?(expected, "max") do
-      actual_max = ExDataSketch.KLL.max_value(sketch)
+      actual_max = KLL.max_value(sketch)
 
-      ExUnit.Assertions.assert(
+      Assertions.assert(
         actual_max == expected["max"],
         "KLL max mismatch for #{context}: expected #{inspect(expected["max"])}, got #{inspect(actual_max)}"
       )
@@ -167,9 +170,9 @@ defmodule ExDataSketch.TestVectors do
       estimates when is_map(estimates) and map_size(estimates) > 0 ->
         for {rank_str, expected_val} <- estimates do
           rank = String.to_float(rank_str)
-          actual = ExDataSketch.KLL.quantile(sketch, rank)
+          actual = KLL.quantile(sketch, rank)
 
-          ExUnit.Assertions.assert_in_delta(
+          Assertions.assert_in_delta(
             actual,
             expected_val,
             delta,
@@ -183,32 +186,32 @@ defmodule ExDataSketch.TestVectors do
     end
   end
 
-  defp assert_estimate(ExDataSketch.DDSketch, sketch, expected, _vector, context) do
+  defp assert_estimate(DDSketch, sketch, expected, _vector, context) do
     tolerance = expected["tolerance"] || 0
     delta = max(tolerance, 1.0e-9)
 
     if expected["count"] do
-      actual_count = ExDataSketch.DDSketch.count(sketch)
+      actual_count = DDSketch.count(sketch)
 
-      ExUnit.Assertions.assert(
+      Assertions.assert(
         actual_count == expected["count"],
         "DDSketch count mismatch for #{context}: expected #{expected["count"]}, got #{actual_count}"
       )
     end
 
     if Map.has_key?(expected, "min") do
-      actual_min = ExDataSketch.DDSketch.min_value(sketch)
+      actual_min = DDSketch.min_value(sketch)
 
-      ExUnit.Assertions.assert(
+      Assertions.assert(
         actual_min == expected["min"],
         "DDSketch min mismatch for #{context}: expected #{inspect(expected["min"])}, got #{inspect(actual_min)}"
       )
     end
 
     if Map.has_key?(expected, "max") do
-      actual_max = ExDataSketch.DDSketch.max_value(sketch)
+      actual_max = DDSketch.max_value(sketch)
 
-      ExUnit.Assertions.assert(
+      Assertions.assert(
         actual_max == expected["max"],
         "DDSketch max mismatch for #{context}: expected #{inspect(expected["max"])}, got #{inspect(actual_max)}"
       )
@@ -218,9 +221,9 @@ defmodule ExDataSketch.TestVectors do
       estimates when is_map(estimates) and map_size(estimates) > 0 ->
         for {rank_str, expected_val} <- estimates do
           rank = String.to_float(rank_str)
-          actual = ExDataSketch.DDSketch.quantile(sketch, rank)
+          actual = DDSketch.quantile(sketch, rank)
 
-          ExUnit.Assertions.assert_in_delta(
+          Assertions.assert_in_delta(
             actual,
             expected_val,
             delta,
@@ -234,14 +237,14 @@ defmodule ExDataSketch.TestVectors do
     end
   end
 
-  defp assert_estimate(ExDataSketch.CMS, sketch, expected, _vector, context) do
+  defp assert_estimate(CMS, sketch, expected, _vector, context) do
     # CMS vectors include point query estimates
     case expected do
       %{"point_estimates" => point_estimates} ->
         for {item, expected_count} <- point_estimates do
-          actual = ExDataSketch.CMS.estimate(sketch, item)
+          actual = CMS.estimate(sketch, item)
 
-          ExUnit.Assertions.assert(
+          Assertions.assert(
             actual == expected_count,
             "CMS estimate mismatch for item #{inspect(item)} in #{context}: " <>
               "expected #{expected_count}, got #{actual}"
@@ -259,20 +262,20 @@ defmodule ExDataSketch.TestVectors do
     end
   end
 
-  defp assert_estimate(ExDataSketch.FrequentItems, sketch, expected, _vector, context) do
+  defp assert_estimate(FrequentItems, sketch, expected, _vector, context) do
     if expected["count"] do
-      actual_count = ExDataSketch.FrequentItems.count(sketch)
+      actual_count = FrequentItems.count(sketch)
 
-      ExUnit.Assertions.assert(
+      Assertions.assert(
         actual_count == expected["count"],
         "FrequentItems count mismatch for #{context}: expected #{expected["count"]}, got #{actual_count}"
       )
     end
 
     if expected["entry_count"] do
-      actual_ec = ExDataSketch.FrequentItems.entry_count(sketch)
+      actual_ec = FrequentItems.entry_count(sketch)
 
-      ExUnit.Assertions.assert(
+      Assertions.assert(
         actual_ec == expected["entry_count"],
         "FrequentItems entry_count mismatch for #{context}: expected #{expected["entry_count"]}, got #{actual_ec}"
       )
@@ -280,23 +283,23 @@ defmodule ExDataSketch.TestVectors do
 
     case expected["top_k"] do
       [_ | _] = expected_top ->
-        actual_top = ExDataSketch.FrequentItems.top_k(sketch)
+        actual_top = FrequentItems.top_k(sketch)
 
         for {expected_entry, i} <- Enum.with_index(expected_top) do
           actual_entry = Enum.at(actual_top, i)
 
-          ExUnit.Assertions.assert(
+          Assertions.assert(
             actual_entry != nil,
             "FrequentItems top_k[#{i}] missing for #{context}"
           )
 
-          ExUnit.Assertions.assert(
+          Assertions.assert(
             actual_entry.item == expected_entry["item"],
             "FrequentItems top_k[#{i}].item mismatch for #{context}: " <>
               "expected #{inspect(expected_entry["item"])}, got #{inspect(actual_entry.item)}"
           )
 
-          ExUnit.Assertions.assert(
+          Assertions.assert(
             actual_entry.estimate == expected_entry["estimate"],
             "FrequentItems top_k[#{i}].estimate mismatch for #{context}: " <>
               "expected #{expected_entry["estimate"]}, got #{actual_entry.estimate}"
@@ -320,7 +323,7 @@ defmodule ExDataSketch.TestVectors do
         # exact float equality across libm/OTP/Rust versions.
         delta = max(tolerance, 1.0e-9)
 
-        ExUnit.Assertions.assert_in_delta(
+        Assertions.assert_in_delta(
           actual,
           expected_estimate,
           delta,

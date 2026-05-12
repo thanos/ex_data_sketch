@@ -15,8 +15,10 @@
       parse_timeout: 5000,
       color: true,
       checks: %{
+
         enabled: [
           # Consistency
+
           {Credo.Check.Consistency.ExceptionNames, []},
           {Credo.Check.Consistency.LineEndings, []},
           {Credo.Check.Consistency.ParameterPatternMatching, []},
@@ -74,7 +76,84 @@
           {Credo.Check.Warning.UnusedPathOperation, []},
           {Credo.Check.Warning.UnusedRegexOperation, []},
           {Credo.Check.Warning.UnusedStringOperation, []},
-          {Credo.Check.Warning.UnusedTupleOperation, []}
+          {Credo.Check.Warning.UnusedTupleOperation, []},
+
+
+          # Catches length(list) == 0 (traverses entire list) → use list == [] or Enum.empty?/1
+          {Credo.Check.Warning.ExpensiveEmptyEnumCheck, []},
+
+          # Catches acc ++ [item] (O(n²) append) → use [item | acc] then Enum.reverse
+          {Credo.Check.Refactor.AppendSingleItem, []},
+
+          # Catches !!var (double negation) — LLMs use this to "cast to boolean"
+          {Credo.Check.Refactor.DoubleBooleanNegation, []},
+
+          # Catches case x do true -> a; false -> b end → if/else
+          {Credo.Check.Refactor.CondStatements, []},
+
+          # Catches Enum.map |> Enum.map → single Enum.map
+          {Credo.Check.Refactor.MapMap, []},
+
+          # Catches Enum.filter |> Enum.filter → single Enum.filter
+          {Credo.Check.Refactor.FilterFilter, []},
+
+          # Catches Enum.reject |> Enum.reject → single Enum.reject
+          {Credo.Check.Refactor.RejectReject, []},
+
+          # Catches Enum.count(enum) > 0 → Enum.any?/1
+          {Credo.Check.Refactor.FilterCount, []},
+
+          # Catches negated conditions in unless → rewrite with positive condition
+          {Credo.Check.Refactor.NegatedConditionsInUnless, []},
+
+          # Catches unless x do .. else .. end → if/else (clearer)
+          {Credo.Check.Refactor.UnlessWithElse, []},
+
+
+          {ExSlop.Check.Warning.BlanketRescue, []},
+          {ExSlop.Check.Warning.RescueWithoutReraise, []},
+          {ExSlop.Check.Warning.RepoAllThenFilter, []},
+          {ExSlop.Check.Warning.QueryInEnumMap, []},
+          {ExSlop.Check.Warning.GenserverAsKvStore, []},
+          {ExSlop.Check.Warning.PathExpandPriv, []},
+          {ExSlop.Check.Warning.DualKeyAccess, []},
+
+          {ExSlop.Check.Refactor.FilterNil, []},
+          {ExSlop.Check.Refactor.RejectNil, []},
+          {ExSlop.Check.Refactor.ReduceAsMap, []},
+          {ExSlop.Check.Refactor.MapIntoLiteral, []},
+          {ExSlop.Check.Refactor.IdentityPassthrough, []},
+          {ExSlop.Check.Refactor.IdentityMap, []},
+          {ExSlop.Check.Refactor.CaseTrueFalse, []},
+          {ExSlop.Check.Refactor.TryRescueWithSafeAlternative, []},
+          {ExSlop.Check.Refactor.WithIdentityElse, []},
+          {ExSlop.Check.Refactor.WithIdentityDo, []},
+          {ExSlop.Check.Refactor.SortThenReverse, []},
+          {ExSlop.Check.Refactor.StringConcatInReduce, []},
+          {ExSlop.Check.Refactor.ReduceMapPut, []},
+          {ExSlop.Check.Refactor.RedundantBooleanIf, []},
+          {ExSlop.Check.Refactor.FlatMapFilter, []},
+          {ExSlop.Check.Refactor.RedundantEnumJoinSeparator, []},
+          {ExSlop.Check.Refactor.UseMapJoin, []},
+          {ExSlop.Check.Refactor.PreferEnumSlice, []},
+          {ExSlop.Check.Refactor.GraphemesLength, []},
+          {ExSlop.Check.Refactor.ManualStringReverse, []},
+          {ExSlop.Check.Refactor.SortThenAt, []},
+          {ExSlop.Check.Refactor.SortForTopK, []},
+          {ExSlop.Check.Refactor.ListFold, []},
+          {ExSlop.Check.Refactor.ListLast, []},
+          {ExSlop.Check.Refactor.LengthInGuard, []},
+          {ExSlop.Check.Refactor.ExplicitSumReduce, []},
+          {ExSlop.Check.Readability.NarratorDoc, []},
+          {ExSlop.Check.Readability.DocFalseOnPublicFunction, []},
+          {ExSlop.Check.Readability.BoilerplateDocParams, []},
+          {ExSlop.Check.Readability.ObviousComment, [additional_keywords: []]},
+          {ExSlop.Check.Readability.StepComment, []},
+          {ExSlop.Check.Readability.NarratorComment, []},
+          {ExSlop.Check.Readability.UnaliasedModuleUse, []}
+
+
+
         ]
       }
     }

@@ -180,6 +180,7 @@ defmodule ExDataSketch.Binary.Header do
          :ok <- check_magic_and_version(bin),
          {:ok, parts} <- parse_layout(bin),
          :ok <- verify_crc(parts, bin),
+         :ok <- check_flags(parts),
          {:ok, metadata, <<>>} <- Metadata.decode(parts.meta_bin),
          :ok <- check_family_consistency(parts, metadata) do
       {:ok,
@@ -320,6 +321,15 @@ defmodule ExDataSketch.Binary.Header do
       true ->
         :ok
     end
+  end
+
+  defp check_flags(%{flags: 0}), do: :ok
+
+  defp check_flags(%{flags: flags}) do
+    {:error,
+     DeserializationError.exception(
+       reason: "unsupported EXSK v2 flags 0x#{Integer.to_string(flags, 16)}"
+     )}
   end
 
   defp validate_flags!(flags) when is_integer(flags) and flags >= 0 and flags <= 255, do: :ok

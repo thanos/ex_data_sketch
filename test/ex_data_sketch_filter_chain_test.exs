@@ -183,7 +183,6 @@ defmodule ExDataSketch.FilterChainTest do
     end
 
     test "returns {:error, :full} when Cuckoo is full" do
-      # Create a tiny Cuckoo that will fill quickly
       cuckoo = Cuckoo.new(capacity: 4)
       chain = FilterChain.new() |> FilterChain.add_stage(cuckoo)
 
@@ -412,7 +411,7 @@ defmodule ExDataSketch.FilterChainTest do
   describe "lifecycle tier: Cuckoo -> XorFilter" do
     test "hot Cuckoo + cold XorFilter" do
       shared = ["shared_a", "shared_b"]
-      {:ok, xor} = XorFilter.build(shared ++ ["old_only"])
+      {:ok, xor} = XorFilter.build(Enum.reverse(["old_only" | Enum.reverse(shared)]))
       {:ok, cuckoo} = Cuckoo.new() |> Cuckoo.put("shared_a")
       {:ok, cuckoo} = Cuckoo.put(cuckoo, "shared_b")
       {:ok, cuckoo} = Cuckoo.put(cuckoo, "new_only")

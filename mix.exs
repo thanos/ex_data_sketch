@@ -67,7 +67,8 @@ defmodule ExDataSketch.MixProject do
       {:dialyxir, "~> 1.4", only: :dev, runtime: false},
       {:jason, "~> 1.4"},
       {:excoveralls, "~> 0.18", only: :test, runtime: false},
-      {:mox, "~> 1.0", only: :test}
+      {:mox, "~> 1.0", only: :test},
+      {:ex_slop, "~> 0.1", only: [:dev, :test], runtime: false}
     ]
   end
 

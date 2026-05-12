@@ -45,8 +45,7 @@ defmodule ExDataSketch.HotPathTest do
 
       hashes_bin =
         items
-        |> Enum.map(&Murmur3.hash(&1, 0))
-        |> Enum.map(&<<&1::unsigned-little-64>>)
+        |> Enum.map(fn item -> <<Murmur3.hash(item, 0)::unsigned-little-64>> end)
         |> IO.iodata_to_binary()
 
       via_elixir_hashed = Nif.hll_update_many_nif(sketch.state, hashes_bin, 12)
@@ -80,8 +79,7 @@ defmodule ExDataSketch.HotPathTest do
 
         hashes_bin =
           bin_items
-          |> Enum.map(&Murmur3.hash(&1, seed))
-          |> Enum.map(&<<&1::unsigned-little-64>>)
+          |> Enum.map(fn item -> <<Murmur3.hash(item, seed)::unsigned-little-64>> end)
           |> IO.iodata_to_binary()
 
         elixir_hashed = Nif.hll_update_many_nif(sketch.state, hashes_bin, 10)
@@ -108,8 +106,7 @@ defmodule ExDataSketch.HotPathTest do
 
       hashes_bin =
         items
-        |> Enum.map(&Murmur3.hash(&1, 0))
-        |> Enum.map(&<<&1::unsigned-little-64>>)
+        |> Enum.map(fn item -> <<Murmur3.hash(item, 0)::unsigned-little-64>> end)
         |> IO.iodata_to_binary()
 
       via_elixir_hashed = Nif.ull_update_many_nif(sketch.state, hashes_bin, 12)
@@ -135,8 +132,7 @@ defmodule ExDataSketch.HotPathTest do
 
       hashes_bin =
         items
-        |> Enum.map(&Murmur3.hash(&1, 0))
-        |> Enum.map(&<<&1::unsigned-little-64>>)
+        |> Enum.map(fn item -> <<Murmur3.hash(item, 0)::unsigned-little-64>> end)
         |> IO.iodata_to_binary()
 
       via_elixir_hashed = Nif.theta_update_many_nif(sketch.state, hashes_bin)

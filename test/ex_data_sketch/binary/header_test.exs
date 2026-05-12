@@ -183,6 +183,13 @@ defmodule ExDataSketch.Binary.HeaderTest do
       assert {:error, %DeserializationError{message: msg}} = Header.decode(bloated)
       assert msg =~ "trailing bytes"
     end
+
+    test "rejects non-zero reserved flags" do
+      meta = Metadata.new(:xxhash3, 0, 1, 1, :rust)
+      bin = Header.encode(meta, <<1, 2, 3>>, flags: 255)
+      assert {:error, %DeserializationError{message: msg}} = Header.decode(bin)
+      assert msg =~ "unsupported EXSK v2 flags"
+    end
   end
 
   describe "fuzz / corruption resistance" do
