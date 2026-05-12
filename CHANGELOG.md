@@ -7,6 +7,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-05-12
+
+Release theme: **Deterministic Foundations.** Transforms ex_data_sketch from a collection of probabilistic algorithms into a production-grade probabilistic runtime for the BEAM. Focus: deterministic hashing, binary stability, corruption detection, hot-path performance, and installation reliability.
+
+### Added
+
+- **Deterministic hashing infrastructure (Phase 1).**
+  - `ExDataSketch.Hash.XXH3` — focused XXHash3-64 wrapper. Raises `ArgumentError` when the Rust NIF is unavailable so hash drift cannot occur silently.
+  - `ExDataSketch.Hash.Murmur3` — full `MurmurHash3_x64_128` returning the high 64 bits (Apache DataSketches convention). Pure Elixir and Rust NIF implementations are byte-identical, verified by property-based parity (200 random inputs per CI run) and against canonical Python `mmh3` regression vectors.
+  - `ExDataSketch.Hash.Metadata` — 16-byte versioned binary block recording `(algorithm, seed, sketch_family, sketch_family_version, backend)` with a forward-compatible extension trailer. The building block for the EXSK v2 binary header.
+  - `ExDataSketch.Hash.Validation` — centralized merge-compatibility checks (`validate_options!/3`, `validate_metadata!/3`, `compatible_options?/2`).
+  - Public registry API on `ExDataSketch.Hash`: `default_algorithm/0`, `supported_algorithms/0`, `algorithm_info/1`.
+  - `ExDataSketch.Hash.resolve_strategy/1` — single source of truth for sketch constructors. Honors a user-supplied `:hash_strategy` or falls back to `default_algorithm/0`.
+  - HLL, ULL, Theta, CMS `new/1` now respect user-supplied `:hash_strategy` (`:xxhash3 | :murmur3 | :phash2`). The option was silently overridden in v0.7.x.
+
+- **Binary stability and corruption detection (Phase 2).**
+  - `ExDataSketch.Binary` — public facade for the EXSK v2 frame (`encode/3`, `decode/1`, `peek_version/1`, `build_payload/2`, `metadata_from_opts/3`).
+  - `ExDataSketch.Binary.Header` — EXSK v2 frame encoder/decoder. Layout: magic + version + sketch_family + family_version + flags + header_size + `Hash.Metadata` block + payload_size + payload + CRC32C trailer.
+  - `ExDataSketch.Binary.Validator` — discrete defensive check helpers (`check_minimum_v2_size`, `check_magic`, `check_version`, `check_crc`).
+  - `ExDataSketch.Binary.CRC` — CRC32C (Castagnoli polynomial, reflected, init `0xFFFFFFFF`, final XOR `0xFFFFFFFF`). Pure Elixir and Rust NIF implementations are byte-identical, verified against the standard `"123456789" -> 0xE3069283` check vector and Python `crc32c` regression vectors.
+  - Rust `crc32c_nif` — table-driven CRC32C, ~1 GB/s on commodity hardware.
+
+- **HLL hot-path generalization (Phase 3).**
+  - 8 new Rust NIFs: `{hll, ull, theta, cms}_update_many_raw_h_nif/_dirty_nif`. Each accepts an `algorithm: u8` parameter (`1 = xxhash3`, `2 = murmur3`) and shares a single `Murmur3_x64_128` implementation via `pub(crate)` export from `hash.rs`.
+  - End-to-end Murmur3 acceleration: `:murmur3` callers now hit the in-Rust hashing fast path instead of falling off to the Elixir-side hash.
+  - `bench/hll_hot_path_bench.exs` — comprehensive benchmark across Pure phash2 / Pure xxhash3 / Rust raw XXH3 / Rust raw_h Murmur3 at 10k / 100k / 1M items.
+
+- **Precompiled NIF platform matrix (Phase 4).**
+  - Two Windows targets added: `x86_64-pc-windows-msvc` and `aarch64-pc-windows-msvc`. Release matrix is now 8 targets × 2 NIF versions = 16 artifacts per tagged release.
+  - `mix test.nif_on` and `mix test.nif_off` aliases automatically reset the per-env `rustler_precompiled :force_build` state between local NIF-mode flips.
+  - `test/ex_data_sketch/nif_availability_test.exs` — 18 contract tests asserting `Hash.nif_available?/0` stability, default-algorithm reflection, registry availability flags, `XXH3.hash/2` failure mode, Murmur3 NIF-less fallback, checksum file shape, and `nif.ex` ↔ `release.yml` target-list alignment.
+
+- **Property-based validation (Phase 5).**
+  - `test/property_guarantees_test.exs` — 14 new properties locking:
+    - HLL / ULL cardinality monotonicity and error bounds within published RSE.
+    - KLL / REQ rank monotonicity and quantile/rank inversion within published epsilon.
+    - CMS overestimation-only (`estimate(item) >= true_count(item)`).
+    - Bloom / XorFilter / Cuckoo no-false-negative guarantees.
+    - Binary v2 bit-flip corruption never silently propagates to a sketch.
+
+- **Plans and reviewer documentation.**
+  - `plans/hash_infrastructure.md`, `plans/hash_binary_contract.md`
+  - `plans/binary_contract.md`, `plans/corruption_detection.md`
+  - `plans/hll_hot_path.md`, `plans/hll_scheduler_safety.md`
+  - `plans/precompiled_nifs.md`
+  - `plans/property_testing.md`
+  - `plans/0.8.0_implementation_plan.md`, `plans/0.8.0_phase{1..5}_reviewer_checklist.md`
+  - `plans/0.8.0-risks.md` (31-risk consolidated register)
+
+### Changed
+
+- **EXSK serialization format bumped to v2.** Every sketch's `serialize/1` now produces an EXSK v2 frame (magic + version 2 + sketch family + family version + flags + header_size + 16-byte hash metadata block + payload size + payload + CRC32C trailer). v0.7.x EXSK v1 frames remain decodable via `Binary.decode/1`'s version sniffing; `ExDataSketch.Codec` is preserved as the legacy v1 path.
+- **Golden vectors regenerated as v2** under `test/vectors/`. The previous v1 vectors are preserved under `test/vectors_v1/` and exercised by `test/ex_data_sketch_v1_compat_test.exs` as a permanent regression guard.
+- **`README.md` roadmap rewritten** to match the strategic roadmap in `plans/next_steps.md`: v0.8.0 = Deterministic Foundations; v0.9.0 = Streaming Integrations; v0.10.0 = Apache Interoperability; v0.11.0 = New Sketch Families (CPC, Tuple); v0.12.0 = Similarity & Sampling (MinHash, VarOpt); v1.0.0 = Stable Binary Contract.
+- **`ExDataSketch.Hash.validate_merge_hash_compat!/3`** is preserved as a backward-compatible shim that delegates to `ExDataSketch.Hash.Validation.validate_options!/3`.
+
+### Fixed
+
+- `ExDataSketch.Hash.XXH3` doctests are now NIF-safe: they exercise the success path when the NIF is available and explicitly verify the documented `ArgumentError` contract when the NIF is unavailable, removing a CI failure on the `EX_DATA_SKETCH_SKIP_NIF=true` lane.
+- `test/ex_data_sketch/nif_availability_test.exs` checksum-file assertions softened to "if present, parses as a map" so fresh checkouts (where `checksum-Elixir.ExDataSketch.Nif.exs` has not been populated by the release pipeline) pass CI.
+
+### Migration
+
+See `plans/0.8.0_migration_notes.md` for the full v0.7.x -> v0.8.0 migration guide. Key points:
+
+- **No code changes required for most users.** EXSK v1 frames are still decoded; the `serialize/1` output format changes but downstream code that uses round-trip serialization sees no API difference.
+- **One-way upgrade for persisted sketches.** v0.7.x cannot read v0.8.0-produced binaries. Stage your rollout: deploy v0.8.0 readers first, then producers.
+- **Opt-in Murmur3.** New `:murmur3` strategy is opt-in via `hash_strategy: :murmur3` at sketch construction. Default remains `:xxhash3`.
+
+### Documentation
+
+- `plans/0.8.0_architectural_summary.md` — consolidated Phase 1-5 design overview.
+- `plans/0.8.0_serialization_compatibility.md` — the v0.x stability contract.
+- `plans/0.9.0_roadmap_preview.md` — preview of the next release's streaming-integration scope.
+- `plans/0.8.0-risks.md` — open risk register at release time.
+
+### Stats
+
+- **+10 new modules**: `Hash.XXH3`, `Hash.Murmur3`, `Hash.Metadata`, `Hash.Validation`, `Binary`, `Binary.Header`, `Binary.Validator`, `Binary.CRC` (Elixir); 2 Rust NIF entry points (`hash`, `crc`).
+- **+11 Rust NIFs**: `murmur3_x64_128_nif`, `murmur3_x64_128_full_nif`, `crc32c_nif`, 4 × `*_update_many_raw_h_nif` + 4 × `*_dirty_nif`.
+- **+92 tests, +33 doctests, +19 properties** since v0.7.1.
+- **Full suite (NIF on)**: 1,317 tests, 202 doctests, 171 properties, 0 failures.
+- **Full suite (NIF off)**: 1,088 tests, 202 doctests, 128 properties, 0 failures.
+- **Coverage**: 92.7% line coverage (target was 70%).
+- **HLL throughput**: 25-34 M items/sec at p=14 (XXH3, Rust raw); ~15x faster than the Pure path.
+
 ## [0.7.1] - 2026-03-22
 
 ### Added

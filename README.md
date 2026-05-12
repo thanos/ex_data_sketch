@@ -65,7 +65,7 @@ Add `ex_data_sketch` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:ex_data_sketch, "~> 0.7.1"}
+    {:ex_data_sketch, "~> 0.8.0"}
   ]
 end
 ```
@@ -156,7 +156,7 @@ mix docs
 | v0.6.0 | REQ sketch, Misra-Gries, XXHash3, Rust NIF parity for all membership filters | Released |
 | v0.7.0 | ULL (UltraLogLog) -- improved cardinality estimation with Pure + Rust NIF | Released |
 | v0.7.1 | NIF batch hashing, hash customization, quotient filter fix, merge safety | Released |
-| v0.8.0 | Deterministic Foundations -- pluggable hash registry (XXHash3 + Murmur3), binary stability and corruption detection, HLL hot-path optimization, precompiled NIFs, property-based validation | In Progress |
+| v0.8.0 | Deterministic Foundations -- pluggable hash registry (XXHash3 + Murmur3), binary stability and corruption detection, HLL hot-path optimization, precompiled NIFs, property-based validation | Released |
 | v0.9.0 | Streaming Integrations -- `ExDataSketch.Stream`, Broadway / GenStage support, ETS / DETS / CubDB persistence, `:telemetry` + OpenTelemetry instrumentation | Planned |
 | v0.10.0 | Apache Interoperability -- full cross-language KLL and HLL exchange, golden binary corpus, validation suite | Planned |
 | v0.11.0 | New Sketch Families -- CPC (Compressed Probabilistic Counting), Tuple Sketch (weighted distinct counting) | Planned |
