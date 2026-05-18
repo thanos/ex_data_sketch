@@ -160,17 +160,19 @@ defmodule ExDataSketch.CMS do
       2
 
   """
-  @update_many_chunk_size 10_000
+  @default_update_many_chunk_size 10_000
 
   @spec update_many(t(), Enumerable.t()) :: t()
   def update_many(%__MODULE__{state: state, opts: opts, backend: backend} = sketch, items) do
+    chunk_size = Keyword.get(opts, :update_many_chunk_size, @default_update_many_chunk_size)
+
     use_raw =
       backend == Backend.Rust and Keyword.get(opts, :hash_fn) == nil and
         Keyword.get(opts, :hash_strategy) != :phash2
 
     new_state =
       items
-      |> Stream.chunk_every(@update_many_chunk_size)
+      |> Stream.chunk_every(chunk_size)
       |> Enum.reduce(state, fn chunk, state_acc ->
         if use_raw do
           Backend.Rust.cms_update_many_raw(state_acc, chunk, opts)

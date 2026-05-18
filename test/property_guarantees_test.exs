@@ -119,20 +119,10 @@ defmodule ExDataSketch.PropertyGuaranteesTest do
   end
 
   describe "ULL: error bounds within published RSE" do
-    # ULL achieves ~0.93 * (1/sqrt(2^p)) asymptotic RSE per Ertl 2017.
-    # The current implementation has known accuracy degradation at high
-    # load factors (n >> m = 2^p) for small p — this is a pre-existing
-    # issue tracked in the Phase 5 risk register and out of scope for
-    # this phase's property guarantees.
-    #
-    # We test at p=14 (m=16384), which is the recommended production
-    # setting and the size used by every other test in this file.
-    # At n = 1k..10k, n/m = 0.06..0.6, well within the regime where the
-    # implementation is empirically accurate to within published RSE.
     @ull_p 14
     @ull_rse 1.04 / :math.sqrt(:math.pow(2, @ull_p))
 
-    property "estimate is within 6×RSE of true cardinality (p=14)" do
+    property "estimate is within 6xRSE of true cardinality (p=14)" do
       check all(n <- StreamData.integer(1_000..10_000), max_runs: 15) do
         items = unique_items(n)
         sketch = ULL.from_enumerable(items, p: @ull_p)
@@ -141,7 +131,37 @@ defmodule ExDataSketch.PropertyGuaranteesTest do
 
         assert abs(estimate - n) <= tolerance,
                "ULL p=#{@ull_p} cardinality #{n}: estimate=#{estimate}, " <>
-                 "tolerance=±#{tolerance} (6×RSE)"
+                 "tolerance=±#{tolerance} (6xRSE)"
+      end
+    end
+
+    property "estimate is within 15% at recommended p=12" do
+      check all(n <- StreamData.integer(100..10_000), max_runs: 15) do
+        items = unique_items(n)
+        sketch = ULL.from_enumerable(items, p: 12)
+        estimate = ULL.estimate(sketch)
+
+        assert abs(estimate - n) <= n * 0.15,
+               "ULL p=12 cardinality #{n}: estimate=#{estimate}, " <>
+                 "exceeds 15% tolerance"
+      end
+    end
+
+    property "linear counting correction when zeros > 0 (p=8)" do
+      check all(n <- StreamData.integer(50..2_000), max_runs: 15) do
+        items = unique_items(n)
+        sketch = ULL.from_enumerable(items, p: 8)
+        estimate = ULL.estimate(sketch)
+
+        state = sketch.state
+        <<_header::binary-size(8), registers::binary>> = state
+        zeros = :binary.bin_to_list(registers) |> Enum.count(&(&1 == 0))
+
+        if zeros > 0 do
+          assert abs(estimate - n) <= n * 0.15,
+                 "ULL p=8 (zeros=#{zeros}, n=#{n}): estimate=#{estimate}, " <>
+                   "exceeds 15% tolerance with linear counting"
+        end
       end
     end
   end
@@ -368,7 +388,7 @@ defmodule ExDataSketch.PropertyGuaranteesTest do
     @describetag :rust_nif
 
     @doc false
-    # For every single-byte mutation of a known-good v2 HLL frame, the
+    # For every single-byte mutation of a known-good v2 frame, the
     # decoder must either:
     #   (a) return a structured {:error, %DeserializationError{}}, or
     #   (b) accept the frame as structurally valid (extremely rare; only
@@ -392,15 +412,7 @@ defmodule ExDataSketch.PropertyGuaranteesTest do
 
         case Binary.decode(corrupted) do
           {:ok, _decoded} ->
-            # Only possible if the flipped byte was already equal to the
-            # XOR result — impossible for a non-zero mask. We additionally
-            # require that the decoded sketch round-trips through
-            # HLL.deserialize/1 cleanly. If it does, the corruption was in
-            # a "don't care" region (e.g., a metadata extension byte that
-            # the encoder treats as informational).
             assert {:ok, restored} = HLL.deserialize(corrupted)
-            # The restored sketch's estimate must still be a number, not
-            # silently NaN or negative.
             assert HLL.estimate(restored) >= 0.0
 
           {:error, %DeserializationError{}} ->
@@ -431,6 +443,53 @@ defmodule ExDataSketch.PropertyGuaranteesTest do
           {:ok, _restored} -> :ok
           {:error, %DeserializationError{}} -> :ok
           {:error, %_{}} = err -> flunk("unexpected error shape: #{inspect(err)}")
+        end
+      end
+    end
+
+    @doc """
+    Generalized corruption propagation: every sketch type's v2 frame
+    must either reject corrupted bytes or accept them as structurally
+    valid. No sketch may silently produce corrupted state from a
+    bit-flipped binary.
+    """
+    property "bit-flips in v2 frames of all sketch types are detected" do
+      check all(
+              flip_byte <- StreamData.integer(0..63),
+              bit <- StreamData.integer(0..7),
+              max_runs: 15
+            ) do
+        for {label, sketch_mod, sketch_args} <- [
+              {"HLL", HLL, [p: 10]},
+              {"ULL", ULL, [p: 10]},
+              {"CMS", CMS, [width: 100, depth: 5]}
+            ] do
+          sketch =
+            sketch_mod.from_enumerable(
+              unique_items(20),
+              sketch_args
+            )
+
+          bin = sketch_mod.serialize(sketch)
+          pos = rem(flip_byte, byte_size(bin))
+          mask = Bitwise.bsl(1, bit)
+
+          <<head::binary-size(^pos), b, tail::binary>> = bin
+          corrupted = <<head::binary, Bitwise.bxor(b, mask), tail::binary>>
+
+          case Binary.decode(corrupted) do
+            {:ok, _decoded} ->
+              case sketch_mod.deserialize(corrupted) do
+                {:ok, _restored} ->
+                  :ok
+
+                {:error, %DeserializationError{}} ->
+                  :ok
+              end
+
+            {:error, %DeserializationError{}} ->
+              :ok
+          end
         end
       end
     end

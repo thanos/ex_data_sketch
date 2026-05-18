@@ -21,6 +21,34 @@ defmodule ExDataSketch.ULL do
   | 14 | 16,384    | ~16 KiB | 0.65%        | 0.81%        |
   | 16 | 65,536    | ~64 KiB | 0.33%        | 0.41%        |
 
+  ## Estimation Strategy
+
+  The ULL estimator uses three correction strategies depending on the register
+  state, similar to HLL:
+
+  1. **Linear counting** (when empty registers exist): When at least one
+     register is zero, the linear counting formula `m * ln(m / zeros)` provides
+     accurate estimates. This is the preferred method for sparse sketches and
+     is essential for accuracy at low precision (small `p`).
+
+  2. **FGRA estimator** (Ertl 2017): The Flajolet-style geometric rank
+     aggregation with sigma/tau convergence. This is used when all registers
+     are non-empty. Accuracy degrades at high load factors (`n >> m`) with
+     small `p` (p < 12). For production use, `p >= 12` is recommended.
+
+  3. **Large range correction**: When the FGRA estimate exceeds `2^64 / 30`,
+     a hash-space bias correction is applied. This is effectively
+     unreachable with 64-bit hashes.
+
+  ## Recommended Precision
+
+  - `p >= 12` is recommended for production use. Below `p = 12`, accuracy
+    degrades when the cardinality significantly exceeds `2^p` (i.e., when all
+    registers are non-empty).
+  - When `p < 12` and the sketch has empty registers, linear counting provides
+    reliable estimates. Accuracy degrades primarily when `n > 5 * 2^p` at
+    small `p` values.
+
   ## Binary State Layout (ULL1)
 
   All multi-byte fields are little-endian.
@@ -134,14 +162,16 @@ defmodule ExDataSketch.ULL do
       true
 
   """
-  @update_many_chunk_size 10_000
+  @default_update_many_chunk_size 10_000
 
   @spec update_many(t(), Enumerable.t()) :: t()
   def update_many(%__MODULE__{opts: opts, backend: backend} = sketch, items)
       when backend == Backend.Pure do
+    chunk_size = Keyword.get(opts, :update_many_chunk_size, @default_update_many_chunk_size)
+
     new_state =
       items
-      |> Stream.chunk_every(@update_many_chunk_size)
+      |> Stream.chunk_every(chunk_size)
       |> Enum.reduce(sketch.state, fn chunk, state_acc ->
         hashes = Enum.map(chunk, &hash_item(&1, opts))
         backend.ull_update_many(state_acc, hashes, opts)
@@ -151,13 +181,15 @@ defmodule ExDataSketch.ULL do
   end
 
   def update_many(%__MODULE__{opts: opts, backend: backend} = sketch, items) do
+    chunk_size = Keyword.get(opts, :update_many_chunk_size, @default_update_many_chunk_size)
+
     use_raw =
       backend == Backend.Rust and Keyword.get(opts, :hash_fn) == nil and
         Keyword.get(opts, :hash_strategy) != :phash2
 
     new_state =
       items
-      |> Stream.chunk_every(@update_many_chunk_size)
+      |> Stream.chunk_every(chunk_size)
       |> Enum.reduce(sketch.state, fn chunk, state_acc ->
         if use_raw do
           Backend.Rust.ull_update_many_raw(state_acc, chunk, opts)

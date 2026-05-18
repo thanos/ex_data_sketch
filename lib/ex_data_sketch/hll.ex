@@ -130,14 +130,16 @@ defmodule ExDataSketch.HLL do
       true
 
   """
-  @update_many_chunk_size 10_000
+  @default_update_many_chunk_size 10_000
 
   @spec update_many(t(), Enumerable.t()) :: t()
   def update_many(%__MODULE__{opts: opts, backend: backend} = sketch, items)
       when backend == Backend.Pure do
+    chunk_size = Keyword.get(opts, :update_many_chunk_size, @default_update_many_chunk_size)
+
     new_state =
       items
-      |> Stream.chunk_every(@update_many_chunk_size)
+      |> Stream.chunk_every(chunk_size)
       |> Enum.reduce(sketch.state, fn chunk, state_acc ->
         hashes = Enum.map(chunk, &hash_item(&1, opts))
         backend.hll_update_many(state_acc, hashes, opts)
@@ -147,13 +149,15 @@ defmodule ExDataSketch.HLL do
   end
 
   def update_many(%__MODULE__{opts: opts, backend: backend} = sketch, items) do
+    chunk_size = Keyword.get(opts, :update_many_chunk_size, @default_update_many_chunk_size)
+
     use_raw =
       backend == Backend.Rust and Keyword.get(opts, :hash_fn) == nil and
         Keyword.get(opts, :hash_strategy) != :phash2
 
     new_state =
       items
-      |> Stream.chunk_every(@update_many_chunk_size)
+      |> Stream.chunk_every(chunk_size)
       |> Enum.reduce(sketch.state, fn chunk, state_acc ->
         if use_raw do
           Backend.Rust.hll_update_many_raw(state_acc, chunk, opts)
@@ -244,6 +248,12 @@ defmodule ExDataSketch.HLL do
   See `ExDataSketch.Binary` for the high-level frame contract and
   `ExDataSketch.Binary.Header` for the byte-level layout.
 
+  Accepts an optional keyword list with the following keys:
+
+  - `:format` - serialization format: `:v2` (default, EXSK v2 with CRC32C)
+    or `:v1` (legacy EXSK v1, compatible with v0.7.x readers). The v1
+    format is only valid for sketches using `:phash2` hash strategy.
+
   ## Examples
 
       iex> sketch = ExDataSketch.HLL.new(p: 10)
@@ -252,16 +262,36 @@ defmodule ExDataSketch.HLL do
       iex> byte_size(binary) > 0
       true
 
+      iex> sketch = ExDataSketch.HLL.new(p: 10, hash_strategy: :phash2)
+      iex> binary = ExDataSketch.HLL.serialize(sketch, format: :v1)
+      iex> <<"EXSK", 1, 1, _rest::binary>> = binary
+
   """
-  @spec serialize(t()) :: binary()
-  def serialize(%__MODULE__{state: state, opts: opts}) do
+  @spec serialize(t(), keyword()) :: binary()
+  def serialize(%__MODULE__{state: state, opts: opts}, serialize_opts \\ []) do
+    format = Keyword.get(serialize_opts, :format, :v2)
     start_time = System.monotonic_time()
 
-    p = Keyword.fetch!(opts, :p)
-    hs = hash_strategy_byte(opts)
-    params_bin = <<p::unsigned-8, hs::unsigned-8>>
-    metadata = Binary.metadata_from_opts(Codec.sketch_id_hll(), 1, opts)
-    binary = Binary.encode(metadata, Binary.build_payload(params_bin, state))
+    binary =
+      case format do
+        :v2 ->
+          p = Keyword.fetch!(opts, :p)
+          hs = hash_strategy_byte(opts)
+          params_bin = <<p::unsigned-8, hs::unsigned-8>>
+          metadata = Binary.metadata_from_opts(Codec.sketch_id_hll(), 1, opts)
+          Binary.encode(metadata, Binary.build_payload(params_bin, state))
+
+        :v1 ->
+          unless Keyword.get(opts, :hash_strategy, :phash2) == :phash2 do
+            raise ArgumentError,
+                  "v1 serialization requires :phash2 hash strategy, " <>
+                    "got: #{inspect(Keyword.get(opts, :hash_strategy))}"
+          end
+
+          p = Keyword.fetch!(opts, :p)
+          params_bin = <<p::unsigned-8>>
+          Codec.encode(Codec.sketch_id_hll(), 1, params_bin, state)
+      end
 
     :ok =
       Telemetry.execute(
