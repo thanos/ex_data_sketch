@@ -20,20 +20,22 @@ defmodule Mix.Tasks.ExDataSketch.Gen.Migration do
 
   @impl Mix.Task
   def run(args) do
-    {opts, _, _} = OptionParser.parse(args, switches: [repo: :atom])
+    {opts, _, _} = OptionParser.parse(args, switches: [repo: :string])
 
     repo =
       Keyword.get(opts, :repo) ||
         Mix.raise("Expected --repo to be given, for example: --repo MyApp.Repo")
 
-    migration_dir = Path.join([priv_dir(repo), "migrations"])
+    repo_module = String.to_atom("Elixir." <> repo)
+
+    migration_dir = Path.join([priv_dir(repo_module), "migrations"])
     File.mkdir_p!(migration_dir)
 
     timestamp = timestamp()
     migration_file = Path.join(migration_dir, "#{timestamp}_add_ex_data_sketch_sketches.exs")
 
     migration_content = """
-    defmodule #{inspect(repo)}.Migrations.AddExDataSketchSketches do
+    defmodule #{inspect(repo_module)}.Migrations.AddExDataSketchSketches do
       use Ecto.Migration
 
       def up do
@@ -58,7 +60,8 @@ defmodule Mix.Tasks.ExDataSketch.Gen.Migration do
     repo.config()[:priv] || "priv/#{repo |> Module.split() |> List.last() |> Macro.underscore()}"
   end
 
-  defp timestamp do
+  @doc false
+  def timestamp do
     {{year, month, day}, {hour, minute, second}} = :calendar.local_time()
 
     String.pad_leading("#{year}", 4, "0") <>

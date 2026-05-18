@@ -171,22 +171,23 @@ defmodule ExDataSketch.Storage.CubDB do
   def merge(sketch, db, key) do
     Integration.require_cubdb!()
     sketch_module = sketch.__struct__
+    tx_mod = CubDB.Tx
 
     CubDB.transaction(db, fn tx ->
-      # credo:disable-for-lines:4 Credo.Check.Readability.FullyQualifiedCall
-      cubdb_tx = CubDB.Tx
+      tx =
+        case tx_mod.get(tx, key) do
+          nil ->
+            binary = sketch_module.serialize(sketch)
+            tx_mod.put(tx, key, binary)
 
-      case cubdb_tx.get(tx, key) do
-        nil ->
-          binary = sketch_module.serialize(sketch)
-          cubdb_tx.put(tx, key, binary)
+          binary ->
+            {:ok, existing} = sketch_module.deserialize(binary)
+            merged = sketch_module.merge(existing, sketch)
+            merged_binary = sketch_module.serialize(merged)
+            tx_mod.put(tx, key, merged_binary)
+        end
 
-        binary ->
-          {:ok, existing} = sketch_module.deserialize(binary)
-          merged = sketch_module.merge(existing, sketch)
-          merged_binary = sketch_module.serialize(merged)
-          cubdb_tx.put(tx, key, merged_binary)
-      end
+      {:commit, tx, :ok}
     end)
   end
 
