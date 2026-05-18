@@ -19,18 +19,20 @@ defmodule ExDataSketch.Storage.DETS do
 
   ## Examples
 
-      # Open a DETS table (application concern)
-      {:ok, _} = :dets.open_file(:sketches, [type: :set])
+     # Open a DETS table (application concern)
+     {:ok, _} = :dets.open_file(:sketches, [type: :set])
 
-      # Save a sketch
-      :ok = ExDataSketch.Storage.DETS.save(sketch, :sketches, "cardinality:2024-01")
+     # Save a sketch
+     :ok = ExDataSketch.Storage.DETS.save(sketch, :sketches, "cardinality:2024-01")
 
-      # Load a sketch
-      {:ok, sketch} = ExDataSketch.Storage.DETS.load(ExDataSketch.HLL, :sketches, "cardinality:2024-01")
+     # Load a sketch
+     {:ok, sketch} = ExDataSketch.Storage.DETS.load(ExDataSketch.HLL, :sketches, "cardinality:2024-01")
 
-      # Close when done
-      :ok = :dets.close(:sketches)
+     # Close when done
+  :ok = :dets.close(:sketches)
   """
+
+  alias ExDataSketch.Telemetry
 
   @doc """
   Persists a sketch under the given key in the DETS table.
@@ -59,8 +61,19 @@ defmodule ExDataSketch.Storage.DETS do
   """
   @spec save(struct(), atom(), ExDataSketch.Storage.key()) :: :ok | {:error, term()}
   def save(sketch, table, key) do
+    start_time = System.monotonic_time()
     binary = sketch.__struct__.serialize(sketch)
-    :dets.insert(table, {key, binary})
+    result = :dets.insert(table, {key, binary})
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:persistence, :save),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: Telemetry.sketch_type(sketch), backend: :dets, key: key},
+        :persistence
+      )
+
+    result
   end
 
   @doc """
@@ -99,16 +112,29 @@ defmodule ExDataSketch.Storage.DETS do
   @spec load(module(), atom(), ExDataSketch.Storage.key()) ::
           {:ok, struct()} | {:error, :not_found | term()}
   def load(sketch_module, table, key) do
-    case :dets.lookup(table, key) do
-      [{^key, binary}] ->
-        sketch_module.deserialize(binary)
+    start_time = System.monotonic_time()
 
-      [] ->
-        {:error, :not_found}
+    result =
+      case :dets.lookup(table, key) do
+        [{^key, binary}] ->
+          sketch_module.deserialize(binary)
 
-      {:error, reason} ->
-        {:error, reason}
-    end
+        [] ->
+          {:error, :not_found}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:persistence, :load),
+        %{duration: System.monotonic_time() - start_time},
+        %{sketch_type: sketch_type_from_module(sketch_module), backend: :dets, key: key},
+        :persistence
+      )
+
+    result
   end
 
   @doc """
@@ -146,21 +172,33 @@ defmodule ExDataSketch.Storage.DETS do
   """
   @spec merge(struct(), atom(), ExDataSketch.Storage.key()) :: :ok | {:error, term()}
   def merge(sketch, table, key) do
+    start_time = System.monotonic_time()
     sketch_module = sketch.__struct__
 
-    case :dets.lookup(table, key) do
-      [{^key, binary}] ->
-        {:ok, existing} = sketch_module.deserialize(binary)
-        merged = sketch_module.merge(existing, sketch)
-        merged_binary = sketch_module.serialize(merged)
-        :dets.insert(table, {key, merged_binary})
+    result =
+      case :dets.lookup(table, key) do
+        [{^key, binary}] ->
+          {:ok, existing} = sketch_module.deserialize(binary)
+          merged = sketch_module.merge(existing, sketch)
+          merged_binary = sketch_module.serialize(merged)
+          :dets.insert(table, {key, merged_binary})
 
-      [] ->
-        save(sketch, table, key)
+        [] ->
+          save(sketch, table, key)
 
-      {:error, reason} ->
-        {:error, reason}
-    end
+        {:error, reason} ->
+          {:error, reason}
+      end
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:persistence, :merge),
+        %{duration: System.monotonic_time() - start_time},
+        %{sketch_type: Telemetry.sketch_type(sketch), backend: :dets, key: key},
+        :persistence
+      )
+
+    result
   end
 
   @doc """
@@ -191,7 +229,25 @@ defmodule ExDataSketch.Storage.DETS do
   """
   @spec delete(atom(), ExDataSketch.Storage.key()) :: :ok
   def delete(table, key) do
+    start_time = System.monotonic_time()
     :dets.delete(table, key)
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:persistence, :delete),
+        %{duration: System.monotonic_time() - start_time},
+        %{backend: :dets, key: key},
+        :persistence
+      )
+
     :ok
+  end
+
+  defp sketch_type_from_module(module) do
+    module
+    |> Module.split()
+    |> List.last()
+    |> Macro.underscore()
+    |> String.to_atom()
   end
 end

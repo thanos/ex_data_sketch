@@ -42,7 +42,7 @@ defmodule ExDataSketch.Bloom do
   can merge only if they have identical `bit_count`, `hash_count`, and `seed`.
   """
 
-  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash}
+  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash, Telemetry}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -212,7 +212,13 @@ defmodule ExDataSketch.Bloom do
   """
   @spec merge_many(Enumerable.t()) :: t()
   def merge_many(blooms) do
-    Enum.reduce(blooms, fn bloom, acc -> merge(acc, bloom) end)
+    Telemetry.span(
+      Telemetry.event_name(:sketch, :merge),
+      %{merge_count: Enum.count(blooms)},
+      %{sketch_type: :bloom},
+      :sketch,
+      fn -> Enum.reduce(blooms, fn bloom, acc -> merge(acc, bloom) end) end
+    )
   end
 
   @doc """
@@ -339,7 +345,14 @@ defmodule ExDataSketch.Bloom do
   """
   @spec from_enumerable(Enumerable.t(), keyword()) :: t()
   def from_enumerable(enumerable, opts \\ []) do
-    new(opts) |> put_many(enumerable)
+    Telemetry.span_with_result(
+      Telemetry.event_name(:sketch, :ingest),
+      %{},
+      %{sketch_type: :bloom},
+      :sketch,
+      fn -> new(opts) |> put_many(enumerable) end,
+      fn _sketch -> %{} end
+    )
   end
 
   @doc """

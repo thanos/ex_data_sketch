@@ -58,7 +58,7 @@ defmodule ExDataSketch.CMS do
   same result, making CMS safe for parallel and distributed aggregation.
   """
 
-  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash}
+  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash, Telemetry}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -374,7 +374,14 @@ defmodule ExDataSketch.CMS do
   """
   @spec from_enumerable(Enumerable.t(), keyword()) :: t()
   def from_enumerable(enumerable, opts \\ []) do
-    new(opts) |> update_many(enumerable)
+    Telemetry.span_with_result(
+      Telemetry.event_name(:sketch, :ingest),
+      %{},
+      %{sketch_type: :cms},
+      :sketch,
+      fn -> new(opts) |> update_many(enumerable) end,
+      fn _sketch -> %{} end
+    )
   end
 
   @doc """
@@ -393,7 +400,13 @@ defmodule ExDataSketch.CMS do
   """
   @spec merge_many(Enumerable.t()) :: t()
   def merge_many(sketches) do
-    Enum.reduce(sketches, fn sketch, acc -> merge(acc, sketch) end)
+    Telemetry.span(
+      Telemetry.event_name(:sketch, :merge),
+      %{merge_count: Enum.count(sketches)},
+      %{sketch_type: :cms},
+      :sketch,
+      fn -> Enum.reduce(sketches, fn sketch, acc -> merge(acc, sketch) end) end
+    )
   end
 
   @doc """

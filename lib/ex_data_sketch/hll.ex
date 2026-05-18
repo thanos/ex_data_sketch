@@ -44,7 +44,7 @@ defmodule ExDataSketch.HLL do
   same result, making HLL safe for parallel and distributed aggregation.
   """
 
-  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash}
+  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash, Telemetry}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -255,11 +255,23 @@ defmodule ExDataSketch.HLL do
   """
   @spec serialize(t()) :: binary()
   def serialize(%__MODULE__{state: state, opts: opts}) do
+    start_time = System.monotonic_time()
+
     p = Keyword.fetch!(opts, :p)
     hs = hash_strategy_byte(opts)
     params_bin = <<p::unsigned-8, hs::unsigned-8>>
     metadata = Binary.metadata_from_opts(Codec.sketch_id_hll(), 1, opts)
-    Binary.encode(metadata, Binary.build_payload(params_bin, state))
+    binary = Binary.encode(metadata, Binary.build_payload(params_bin, state))
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:sketch, :serialize),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: :hll},
+        :sketch
+      )
+
+    binary
   end
 
   @doc """
@@ -280,18 +292,31 @@ defmodule ExDataSketch.HLL do
   """
   @spec deserialize(binary()) :: {:ok, t()} | {:error, Exception.t()}
   def deserialize(binary) when is_binary(binary) do
-    with {:ok, decoded} <- Binary.decode(binary),
-         :ok <- validate_sketch_id(decoded.sketch_id),
-         {:ok, opts} <- decode_params(decoded.params) do
-      backend = Backend.default()
+    start_time = System.monotonic_time()
 
-      {:ok,
-       %__MODULE__{
-         state: decoded.state,
-         opts: opts,
-         backend: backend
-       }}
-    end
+    result =
+      with {:ok, decoded} <- Binary.decode(binary),
+           :ok <- validate_sketch_id(decoded.sketch_id),
+           {:ok, opts} <- decode_params(decoded.params) do
+        backend = Backend.default()
+
+        {:ok,
+         %__MODULE__{
+           state: decoded.state,
+           opts: opts,
+           backend: backend
+         }}
+      end
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:sketch, :deserialize),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: :hll},
+        :sketch
+      )
+
+    result
   end
 
   @doc """
@@ -358,7 +383,14 @@ defmodule ExDataSketch.HLL do
   """
   @spec from_enumerable(Enumerable.t(), keyword()) :: t()
   def from_enumerable(enumerable, opts \\ []) do
-    new(opts) |> update_many(enumerable)
+    Telemetry.span_with_result(
+      Telemetry.event_name(:sketch, :ingest),
+      %{},
+      %{sketch_type: :hll},
+      :sketch,
+      fn -> new(opts) |> update_many(enumerable) end,
+      fn sketch -> %{count: size_bytes(sketch)} end
+    )
   end
 
   @doc """
@@ -377,7 +409,13 @@ defmodule ExDataSketch.HLL do
   """
   @spec merge_many(Enumerable.t()) :: t()
   def merge_many(sketches) do
-    Enum.reduce(sketches, fn sketch, acc -> merge(acc, sketch) end)
+    Telemetry.span(
+      Telemetry.event_name(:sketch, :merge),
+      %{merge_count: Enum.count(sketches)},
+      %{sketch_type: :hll},
+      :sketch,
+      fn -> Enum.reduce(sketches, fn sketch, acc -> merge(acc, sketch) end) end
+    )
   end
 
   @doc """

@@ -31,12 +31,14 @@ defmodule ExDataSketch.Integration do
   | Mnesia      | OTP (always)      | Yes               |
   | ETS         | OTP (always)      | Yes               |
   | DETS        | OTP (always)      | Yes               |
+  | OpenTelemetry | `:opentelemetry_api` | No            |
   """
 
   @broadway_available Code.ensure_loaded?(Broadway)
   @flow_available Code.ensure_loaded?(Flow)
   @cubdb_available Code.ensure_loaded?(CubDB)
   @ecto_available Code.ensure_loaded?(Ecto.Adapters.SQL)
+  @opentelemetry_available Code.ensure_loaded?(OpenTelemetry)
 
   @doc """
   Returns whether the Broadway library is available.
@@ -122,6 +124,45 @@ defmodule ExDataSketch.Integration do
       true -> true
       false -> false
       other -> other
+    end
+  end
+
+  @doc """
+  Returns whether the OpenTelemetry API library is available.
+
+  Checks compile-time availability and runtime configuration.
+
+  ## Examples
+
+      iex> is_boolean(ExDataSketch.Integration.opentelemetry_available?())
+      true
+  """
+  @spec opentelemetry_available?() :: boolean()
+  def opentelemetry_available? do
+    configured?(:opentelemetry, @opentelemetry_available)
+  end
+
+  @doc """
+  Raises an error if OpenTelemetry is not available.
+
+  Provides a clear error message directing the user to add the dependency.
+
+  ## Examples
+
+      iex> ExDataSketch.Integration.require_opentelemetry!()
+      :ok
+
+      # When OpenTelemetry is not available:
+      # ** (RuntimeError) OpenTelemetry integration requires the :opentelemetry_api dependency.
+      # Add {:opentelemetry_api, "~> 1.0"} to your mix.exs dependencies.
+  """
+  @spec require_opentelemetry!() :: :ok
+  def require_opentelemetry! do
+    if opentelemetry_available?() do
+      :ok
+    else
+      raise "OpenTelemetry integration requires the :opentelemetry_api dependency. " <>
+              "Add {:opentelemetry_api, \"~> 1.0\"} to your mix.exs dependencies."
     end
   end
 

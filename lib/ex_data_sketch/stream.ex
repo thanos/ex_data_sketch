@@ -48,6 +48,7 @@ defmodule ExDataSketch.Stream do
     MisraGries,
     Quotient,
     REQ,
+    Telemetry,
     Theta,
     ULL
   }
@@ -324,9 +325,26 @@ defmodule ExDataSketch.Stream do
     {partitions, sketch_opts} = Keyword.pop(opts, :partitions, System.schedulers_online())
     chunk_size = max(1, div(10_000, partitions))
 
-    enumerable
-    |> Stream.chunk_every(chunk_size)
-    |> Enum.map(fn chunk -> module.from_enumerable(chunk, sketch_opts) end)
-    |> module.merge_many()
+    Telemetry.span_with_result(
+      Telemetry.event_name(:stream, :partition_merge),
+      %{partition_count: partitions},
+      %{sketch_type: sketch_type_from_module(module)},
+      :stream,
+      fn ->
+        enumerable
+        |> Stream.chunk_every(chunk_size)
+        |> Enum.map(fn chunk -> module.from_enumerable(chunk, sketch_opts) end)
+        |> module.merge_many()
+      end,
+      fn _result -> %{} end
+    )
+  end
+
+  defp sketch_type_from_module(module) do
+    module
+    |> Module.split()
+    |> List.last()
+    |> Macro.underscore()
+    |> String.to_atom()
   end
 end

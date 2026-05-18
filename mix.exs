@@ -69,6 +69,8 @@ defmodule ExDataSketch.MixProject do
       {:excoveralls, "~> 0.18", only: :test, runtime: false},
       {:mox, "~> 1.0", only: :test},
       {:ex_slop, "~> 0.1", only: [:dev, :test], runtime: false},
+      {:telemetry, "~> 1.0"},
+      {:opentelemetry_api, "~> 1.0", optional: true},
       {:broadway, "~> 1.0", optional: true},
       {:flow, "~> 1.2", optional: true},
       {:cubdb, "~> 2.0", optional: true},
@@ -114,6 +116,8 @@ defmodule ExDataSketch.MixProject do
         "guides/genstage_integration.md",
         "guides/flow_integration.md",
         "guides/persistence.md",
+        "guides/telemetry.md",
+        "guides/observability.md",
         "guides/hash_strategies.md",
         "guides/hll_performance.md",
         "guides/precompiled_nifs.md",
@@ -174,7 +178,9 @@ defmodule ExDataSketch.MixProject do
           ExDataSketch.Codec,
           ExDataSketch.Backend,
           ExDataSketch.Backend.Pure,
-          ExDataSketch.Backend.Rust
+          ExDataSketch.Backend.Rust,
+          ExDataSketch.Telemetry,
+          ExDataSketch.Telemetry.OpenTelemetry
         ],
         Errors: [
           ExDataSketch.Errors

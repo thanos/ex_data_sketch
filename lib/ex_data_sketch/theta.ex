@@ -51,7 +51,7 @@ defmodule ExDataSketch.Theta do
 
   import Bitwise, only: [<<<: 2, &&&: 2]
 
-  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash}
+  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash, Telemetry}
   alias ExDataSketch.DataSketches.CompactSketch
 
   @type t :: %__MODULE__{
@@ -379,7 +379,14 @@ defmodule ExDataSketch.Theta do
   """
   @spec from_enumerable(Enumerable.t(), keyword()) :: t()
   def from_enumerable(enumerable, opts \\ []) do
-    new(opts) |> update_many(enumerable)
+    Telemetry.span_with_result(
+      Telemetry.event_name(:sketch, :ingest),
+      %{},
+      %{sketch_type: :theta},
+      :sketch,
+      fn -> new(opts) |> update_many(enumerable) end,
+      fn _sketch -> %{} end
+    )
   end
 
   @doc """
@@ -398,7 +405,13 @@ defmodule ExDataSketch.Theta do
   """
   @spec merge_many(Enumerable.t()) :: t()
   def merge_many(sketches) do
-    Enum.reduce(sketches, fn sketch, acc -> merge(acc, sketch) end)
+    Telemetry.span(
+      Telemetry.event_name(:sketch, :merge),
+      %{merge_count: Enum.count(sketches)},
+      %{sketch_type: :theta},
+      :sketch,
+      fn -> Enum.reduce(sketches, fn sketch, acc -> merge(acc, sketch) end) end
+    )
   end
 
   @doc """

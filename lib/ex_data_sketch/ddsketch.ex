@@ -65,7 +65,7 @@ defmodule ExDataSketch.DDSketch do
   have identical `alpha` parameters to merge.
   """
 
-  alias ExDataSketch.{Backend, Binary, Codec, Errors}
+  alias ExDataSketch.{Backend, Binary, Codec, Errors, Telemetry}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -191,7 +191,13 @@ defmodule ExDataSketch.DDSketch do
   """
   @spec merge_many(Enumerable.t()) :: t()
   def merge_many(sketches) do
-    Enum.reduce(sketches, fn sketch, acc -> merge(acc, sketch) end)
+    Telemetry.span(
+      Telemetry.event_name(:sketch, :merge),
+      %{merge_count: Enum.count(sketches)},
+      %{sketch_type: :ddsketch},
+      :sketch,
+      fn -> Enum.reduce(sketches, fn sketch, acc -> merge(acc, sketch) end) end
+    )
   end
 
   @doc """
@@ -385,7 +391,14 @@ defmodule ExDataSketch.DDSketch do
   """
   @spec from_enumerable(Enumerable.t(), keyword()) :: t()
   def from_enumerable(enumerable, opts \\ []) do
-    new(opts) |> update_many(enumerable)
+    Telemetry.span_with_result(
+      Telemetry.event_name(:sketch, :ingest),
+      %{},
+      %{sketch_type: :ddsketch},
+      :sketch,
+      fn -> new(opts) |> update_many(enumerable) end,
+      fn _sketch -> %{} end
+    )
   end
 
   @doc """

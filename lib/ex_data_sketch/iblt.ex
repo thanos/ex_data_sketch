@@ -36,7 +36,7 @@ defmodule ExDataSketch.IBLT do
   count (i32), key_sum (u64), value_sum (u64), check_sum (u32).
   """
 
-  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash}
+  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash, Telemetry}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -314,7 +314,13 @@ defmodule ExDataSketch.IBLT do
   """
   @spec merge_many(Enumerable.t()) :: t()
   def merge_many(iblts) do
-    Enum.reduce(iblts, fn iblt, acc -> merge(acc, iblt) end)
+    Telemetry.span(
+      Telemetry.event_name(:sketch, :merge),
+      %{merge_count: Enum.count(iblts)},
+      %{sketch_type: :iblt},
+      :sketch,
+      fn -> Enum.reduce(iblts, fn iblt, acc -> merge(acc, iblt) end) end
+    )
   end
 
   @doc """
@@ -441,7 +447,14 @@ defmodule ExDataSketch.IBLT do
   """
   @spec from_enumerable(Enumerable.t(), keyword()) :: t()
   def from_enumerable(enumerable, opts \\ []) do
-    new(opts) |> put_many(enumerable)
+    Telemetry.span_with_result(
+      Telemetry.event_name(:sketch, :ingest),
+      %{},
+      %{sketch_type: :iblt},
+      :sketch,
+      fn -> new(opts) |> put_many(enumerable) end,
+      fn _sketch -> %{} end
+    )
   end
 
   @doc """

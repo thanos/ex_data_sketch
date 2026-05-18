@@ -37,6 +37,8 @@ defmodule ExDataSketch.Storage.ETS do
 
   @table_type_error "ETS table must be :set or :ordered_set type"
 
+  alias ExDataSketch.Telemetry
+
   @doc """
   Persists a sketch under the given key in the ETS table.
 
@@ -68,9 +70,20 @@ defmodule ExDataSketch.Storage.ETS do
   """
   @spec save(struct(), atom(), ExDataSketch.Storage.key()) :: :ok
   def save(sketch, table, key) do
+    start_time = System.monotonic_time()
+
     validate_table_type!(table)
     binary = sketch.__struct__.serialize(sketch)
     :ets.insert(table, {key, binary})
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:persistence, :save),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: Telemetry.sketch_type(sketch), backend: :ets, key: key},
+        :persistence
+      )
+
     :ok
   end
 
@@ -109,13 +122,26 @@ defmodule ExDataSketch.Storage.ETS do
   @spec load(module(), atom(), ExDataSketch.Storage.key()) ::
           {:ok, struct()} | {:error, :not_found | term()}
   def load(sketch_module, table, key) do
-    case :ets.lookup(table, key) do
-      [{^key, binary}] ->
-        sketch_module.deserialize(binary)
+    start_time = System.monotonic_time()
 
-      [] ->
-        {:error, :not_found}
-    end
+    result =
+      case :ets.lookup(table, key) do
+        [{^key, binary}] ->
+          sketch_module.deserialize(binary)
+
+        [] ->
+          {:error, :not_found}
+      end
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:persistence, :load),
+        %{duration: System.monotonic_time() - start_time},
+        %{sketch_type: sketch_type_from_module(sketch_module), backend: :ets, key: key},
+        :persistence
+      )
+
+    result
   end
 
   @doc """
@@ -154,19 +180,31 @@ defmodule ExDataSketch.Storage.ETS do
   """
   @spec merge(struct(), atom(), ExDataSketch.Storage.key()) :: :ok
   def merge(sketch, table, key) do
+    start_time = System.monotonic_time()
     sketch_module = sketch.__struct__
 
-    case :ets.lookup(table, key) do
-      [{^key, binary}] ->
-        {:ok, existing} = sketch_module.deserialize(binary)
-        merged = sketch_module.merge(existing, sketch)
-        merged_binary = sketch_module.serialize(merged)
-        :ets.insert(table, {key, merged_binary})
-        :ok
+    result =
+      case :ets.lookup(table, key) do
+        [{^key, binary}] ->
+          {:ok, existing} = sketch_module.deserialize(binary)
+          merged = sketch_module.merge(existing, sketch)
+          merged_binary = sketch_module.serialize(merged)
+          :ets.insert(table, {key, merged_binary})
+          :ok
 
-      [] ->
-        save(sketch, table, key)
-    end
+        [] ->
+          save(sketch, table, key)
+      end
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:persistence, :merge),
+        %{duration: System.monotonic_time() - start_time},
+        %{sketch_type: Telemetry.sketch_type(sketch), backend: :ets, key: key},
+        :persistence
+      )
+
+    result
   end
 
   @doc """
@@ -196,7 +234,17 @@ defmodule ExDataSketch.Storage.ETS do
   """
   @spec delete(atom(), ExDataSketch.Storage.key()) :: :ok
   def delete(table, key) do
+    start_time = System.monotonic_time()
     :ets.delete(table, key)
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:persistence, :delete),
+        %{duration: System.monotonic_time() - start_time},
+        %{backend: :ets, key: key},
+        :persistence
+      )
+
     :ok
   end
 
@@ -214,5 +262,13 @@ defmodule ExDataSketch.Storage.ETS do
       _other ->
         raise ArgumentError, @table_type_error
     end
+  end
+
+  defp sketch_type_from_module(module) do
+    module
+    |> Module.split()
+    |> List.last()
+    |> Macro.underscore()
+    |> String.to_atom()
   end
 end
