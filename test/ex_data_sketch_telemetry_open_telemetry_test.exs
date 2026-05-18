@@ -8,11 +8,6 @@ defmodule ExDataSketch.Telemetry.OpenTelemetryTest do
   describe "setup/0" do
     @tag :opentelemetry
     test "attaches handlers for all event names when opentelemetry is available" do
-      unless ExDataSketch.Integration.opentelemetry_available?() do
-        :telemetry.attach({@handler_id, [:ex_data_sketch, :sketch, :ingest]}, &IO.puts/4, nil)
-        :telemetry.detach({@handler_id, [:ex_data_sketch, :sketch, :ingest]})
-      end
-
       if ExDataSketch.Integration.opentelemetry_available?() do
         :ok = OpenTelemetry.setup()
 
