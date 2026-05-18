@@ -1,7 +1,7 @@
 defmodule ExDataSketch.MixProject do
   use Mix.Project
 
-  @version "0.8.0"
+  @version "0.9.0"
   @source_url "https://github.com/thanos/ex_data_sketch"
 
   def project do
@@ -105,6 +105,7 @@ defmodule ExDataSketch.MixProject do
         "guides/quick_start.md",
         "guides/usage_guide.md",
         "guides/integrations.md",
+        "guides/streaming_sketches.md",
         "guides/hash_strategies.md",
         "guides/hll_performance.md",
         "guides/precompiled_nifs.md",
@@ -137,6 +138,9 @@ defmodule ExDataSketch.MixProject do
           ExDataSketch.MisraGries,
           ExDataSketch.ULL,
           ExDataSketch.Quantiles
+        ],
+        "Stream Integration": [
+          ExDataSketch.Stream
         ],
         Infrastructure: [
           ExDataSketch.Hash,
@@ -176,7 +180,8 @@ defmodule ExDataSketch.MixProject do
         "run bench/req_bench.exs",
         "run bench/misra_gries_bench.exs",
         "run bench/ull_bench.exs",
-        "run bench/xxhash3_bench.exs"
+        "run bench/xxhash3_bench.exs",
+        "run bench/stream_ingestion_bench.exs"
       ],
       # Switching between NIF-on and NIF-off modes locally requires cleaning
       # rustler_precompiled's per-env compiled config (which captures the
