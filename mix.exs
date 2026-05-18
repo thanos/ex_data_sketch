@@ -28,7 +28,7 @@ defmodule ExDataSketch.MixProject do
       # Dialyzer
       dialyzer: [
         plt_file: {:no_warn, "priv/plts/dialyzer.plt"},
-        plt_add_apps: [:mix, :ex_unit]
+        plt_add_apps: [:mix, :ex_unit, :mnesia, :cubdb, :ecto_sql]
       ]
     ]
   end
@@ -48,7 +48,7 @@ defmodule ExDataSketch.MixProject do
 
   def application do
     [
-      extra_applications: [:logger]
+      extra_applications: [:logger, :mnesia]
     ]
   end
 
@@ -68,7 +68,11 @@ defmodule ExDataSketch.MixProject do
       {:jason, "~> 1.4"},
       {:excoveralls, "~> 0.18", only: :test, runtime: false},
       {:mox, "~> 1.0", only: :test},
-      {:ex_slop, "~> 0.1", only: [:dev, :test], runtime: false}
+      {:ex_slop, "~> 0.1", only: [:dev, :test], runtime: false},
+      {:broadway, "~> 1.0", optional: true},
+      {:flow, "~> 1.2", optional: true},
+      {:cubdb, "~> 2.0", optional: true},
+      {:ecto_sql, "~> 3.0", optional: true}
     ]
   end
 
@@ -106,6 +110,10 @@ defmodule ExDataSketch.MixProject do
         "guides/usage_guide.md",
         "guides/integrations.md",
         "guides/streaming_sketches.md",
+        "guides/broadway_integration.md",
+        "guides/genstage_integration.md",
+        "guides/flow_integration.md",
+        "guides/persistence.md",
         "guides/hash_strategies.md",
         "guides/hll_performance.md",
         "guides/precompiled_nifs.md",
@@ -141,6 +149,25 @@ defmodule ExDataSketch.MixProject do
         ],
         "Stream Integration": [
           ExDataSketch.Stream
+        ],
+        "Dataflow Integration": [
+          ExDataSketch.Broadway,
+          ExDataSketch.Broadway.PeriodicAggregator,
+          ExDataSketch.GenStage,
+          ExDataSketch.GenStage.SketchConsumer,
+          ExDataSketch.GenStage.SketchProducer,
+          ExDataSketch.GenStage.SketchStage,
+          ExDataSketch.Flow
+        ],
+        Persistence: [
+          ExDataSketch.Storage,
+          ExDataSketch.Storage.ETS,
+          ExDataSketch.Storage.DETS,
+          ExDataSketch.Storage.CubDB,
+          ExDataSketch.Storage.Mnesia,
+          ExDataSketch.Storage.Ecto,
+          ExDataSketch.Storage.Ecto.Schema,
+          ExDataSketch.Storage.Ecto.Migration
         ],
         Infrastructure: [
           ExDataSketch.Hash,
