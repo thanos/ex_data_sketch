@@ -30,7 +30,7 @@ defmodule ExDataSketch.Storage.CubDB do
       :ok = ExDataSketch.Storage.CubDB.merge(partial, db, "cardinality:2024-01")
   """
 
-  alias ExDataSketch.Integration
+  alias ExDataSketch.{Integration, Telemetry}
 
   @cubdb_available Code.ensure_loaded?(CubDB)
 
@@ -78,9 +78,20 @@ defmodule ExDataSketch.Storage.CubDB do
   """
   @spec save(struct(), pid() | atom(), ExDataSketch.Storage.key()) :: :ok
   def save(sketch, db, key) do
+    start_time = System.monotonic_time()
     Integration.require_cubdb!()
     binary = sketch.__struct__.serialize(sketch)
-    CubDB.put(db, key, binary)
+    :ok = CubDB.put(db, key, binary)
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:persistence, :save),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: Telemetry.sketch_type(sketch), backend: :cubdb, key: key},
+        :persistence
+      )
+
+    :ok
   end
 
   @doc """
@@ -123,12 +134,24 @@ defmodule ExDataSketch.Storage.CubDB do
   @spec load(module(), pid() | atom(), ExDataSketch.Storage.key()) ::
           {:ok, struct()} | {:error, :not_found | term()}
   def load(sketch_module, db, key) do
+    start_time = System.monotonic_time()
     Integration.require_cubdb!()
 
-    case CubDB.get(db, key) do
-      nil -> {:error, :not_found}
-      binary -> sketch_module.deserialize(binary)
-    end
+    result =
+      case CubDB.get(db, key) do
+        nil -> {:error, :not_found}
+        binary -> sketch_module.deserialize(binary)
+      end
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:persistence, :load),
+        %{duration: System.monotonic_time() - start_time},
+        %{sketch_type: sketch_type_from_module(sketch_module), backend: :cubdb, key: key},
+        :persistence
+      )
+
+    result
   end
 
   @doc """
@@ -169,26 +192,38 @@ defmodule ExDataSketch.Storage.CubDB do
   """
   @spec merge(struct(), pid() | atom(), ExDataSketch.Storage.key()) :: :ok
   def merge(sketch, db, key) do
+    start_time = System.monotonic_time()
     Integration.require_cubdb!()
     sketch_module = sketch.__struct__
     tx_mod = CubDB.Tx
 
-    CubDB.transaction(db, fn tx ->
-      tx =
-        case tx_mod.get(tx, key) do
-          nil ->
-            binary = sketch_module.serialize(sketch)
-            tx_mod.put(tx, key, binary)
+    result =
+      CubDB.transaction(db, fn tx ->
+        tx =
+          case tx_mod.get(tx, key) do
+            nil ->
+              binary = sketch_module.serialize(sketch)
+              tx_mod.put(tx, key, binary)
 
-          binary ->
-            {:ok, existing} = sketch_module.deserialize(binary)
-            merged = sketch_module.merge(existing, sketch)
-            merged_binary = sketch_module.serialize(merged)
-            tx_mod.put(tx, key, merged_binary)
-        end
+            binary ->
+              {:ok, existing} = sketch_module.deserialize(binary)
+              merged = sketch_module.merge(existing, sketch)
+              merged_binary = sketch_module.serialize(merged)
+              tx_mod.put(tx, key, merged_binary)
+          end
 
-      {:commit, tx, :ok}
-    end)
+        {:commit, tx, :ok}
+      end)
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:persistence, :merge),
+        %{duration: System.monotonic_time() - start_time},
+        %{sketch_type: Telemetry.sketch_type(sketch), backend: :cubdb, key: key},
+        :persistence
+      )
+
+    result
   end
 
   @doc """
@@ -219,8 +254,18 @@ defmodule ExDataSketch.Storage.CubDB do
   """
   @spec delete(pid() | atom(), ExDataSketch.Storage.key()) :: :ok
   def delete(db, key) do
+    start_time = System.monotonic_time()
     Integration.require_cubdb!()
     CubDB.delete(db, key)
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:persistence, :delete),
+        %{duration: System.monotonic_time() - start_time},
+        %{backend: :cubdb, key: key},
+        :persistence
+      )
+
     :ok
   end
 
@@ -233,5 +278,13 @@ defmodule ExDataSketch.Storage.CubDB do
       true -> true
       false -> false
     end
+  end
+
+  defp sketch_type_from_module(module) do
+    module
+    |> Module.split()
+    |> List.last()
+    |> Macro.underscore()
+    |> String.to_atom()
   end
 end

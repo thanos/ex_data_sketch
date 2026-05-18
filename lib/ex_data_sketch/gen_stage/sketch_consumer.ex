@@ -36,6 +36,8 @@ defmodule ExDataSketch.GenStage.SketchConsumer do
 
   use GenStage
 
+  alias ExDataSketch.Telemetry
+
   @type state :: %{
           sketch_module: module(),
           sketch_opts: keyword(),
@@ -203,6 +205,15 @@ defmodule ExDataSketch.GenStage.SketchConsumer do
   def handle_call(:flush, _from, state) do
     flushed = state.current
     new_sketch = state.sketch_module.new(state.sketch_opts)
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:pipeline, :periodic_flush),
+        %{duration: 0},
+        %{sketch_type: Telemetry.sketch_type(flushed)},
+        :pipeline
+      )
+
     {:reply, flushed, [], %{state | current: new_sketch}}
   end
 

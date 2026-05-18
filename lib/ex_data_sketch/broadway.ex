@@ -42,7 +42,7 @@ defmodule ExDataSketch.Broadway do
   loaded at runtime.
   """
 
-  alias ExDataSketch.Integration
+  alias ExDataSketch.{Integration, Telemetry}
 
   @doc """
   Accumulates sketch data from a list of Broadway messages.
@@ -79,8 +79,16 @@ defmodule ExDataSketch.Broadway do
 
     {key_fn, sketch_opts} = Keyword.pop(opts, :key_fn, fn msg -> msg.data end)
 
-    values = Enum.map(messages, key_fn)
-    sketch_module.from_enumerable(values, sketch_opts)
+    Telemetry.span(
+      Telemetry.event_name(:pipeline, :accumulate),
+      %{count: length(messages)},
+      %{sketch_type: Telemetry.sketch_type(sketch_module.new()), batch_size: length(messages)},
+      :pipeline,
+      fn ->
+        values = Enum.map(messages, key_fn)
+        sketch_module.from_enumerable(values, sketch_opts)
+      end
+    )
   end
 
   @doc """
@@ -112,13 +120,17 @@ defmodule ExDataSketch.Broadway do
 
     {key_fn, _rest} = Keyword.pop(opts, :key_fn, fn msg -> msg.data end)
 
-    values = Enum.map(messages, key_fn)
-    sketch_module = sketch.__struct__
+    Telemetry.span(
+      Telemetry.event_name(:pipeline, :accumulate),
+      %{count: length(messages)},
+      %{sketch_type: Telemetry.sketch_type(sketch), batch_size: length(messages)},
+      :pipeline,
+      fn ->
+        values = Enum.map(messages, key_fn)
+        sketch_module = sketch.__struct__
 
-    new_items =
-      values
-      |> Enum.reduce(sketch, fn value, acc -> sketch_module.update(acc, value) end)
-
-    new_items
+        Enum.reduce(values, sketch, fn value, acc -> sketch_module.update(acc, value) end)
+      end
+    )
   end
 end

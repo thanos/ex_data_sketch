@@ -1,5 +1,8 @@
 defmodule ExDataSketch.Storage.Mnesia do
   @compile {:no_warn_undefined, :mnesia}
+
+  alias ExDataSketch.Telemetry
+
   @moduledoc """
   Mnesia-backed persistence for sketches.
 
@@ -107,13 +110,25 @@ defmodule ExDataSketch.Storage.Mnesia do
   """
   @spec save(struct(), atom(), ExDataSketch.Storage.key()) :: :ok | {:error, term()}
   def save(sketch, table, key) do
+    start_time = System.monotonic_time()
     binary = sketch.__struct__.serialize(sketch)
     record = {table, key, binary}
 
-    case :mnesia.transaction(fn -> :mnesia.write(record) end) do
-      {:atomic, :ok} -> :ok
-      {:aborted, reason} -> {:error, reason}
-    end
+    result =
+      case :mnesia.transaction(fn -> :mnesia.write(record) end) do
+        {:atomic, :ok} -> :ok
+        {:aborted, reason} -> {:error, reason}
+      end
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:persistence, :save),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: Telemetry.sketch_type(sketch), backend: :mnesia, key: key},
+        :persistence
+      )
+
+    result
   end
 
   @doc """
@@ -146,16 +161,29 @@ defmodule ExDataSketch.Storage.Mnesia do
   @spec load(module(), atom(), ExDataSketch.Storage.key()) ::
           {:ok, struct()} | {:error, :not_found | term()}
   def load(sketch_module, table, key) do
-    case :mnesia.transaction(fn -> :mnesia.read(table, key) end) do
-      {:atomic, [{^table, ^key, binary}]} ->
-        sketch_module.deserialize(binary)
+    start_time = System.monotonic_time()
 
-      {:atomic, []} ->
-        {:error, :not_found}
+    result =
+      case :mnesia.transaction(fn -> :mnesia.read(table, key) end) do
+        {:atomic, [{^table, ^key, binary}]} ->
+          sketch_module.deserialize(binary)
 
-      {:aborted, reason} ->
-        {:error, reason}
-    end
+        {:atomic, []} ->
+          {:error, :not_found}
+
+        {:aborted, reason} ->
+          {:error, reason}
+      end
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:persistence, :load),
+        %{duration: System.monotonic_time() - start_time},
+        %{sketch_type: sketch_type_from_module(sketch_module), backend: :mnesia, key: key},
+        :persistence
+      )
+
+    result
   end
 
   @doc """
@@ -189,17 +217,24 @@ defmodule ExDataSketch.Storage.Mnesia do
   """
   @spec merge(struct(), atom(), ExDataSketch.Storage.key()) :: :ok | {:error, term()}
   def merge(sketch, table, key) do
+    start_time = System.monotonic_time()
     sketch_module = sketch.__struct__
 
     result =
-      :mnesia.transaction(fn ->
-        do_merge(sketch, sketch_module, table, key)
-      end)
+      case :mnesia.transaction(fn -> do_merge(sketch, sketch_module, table, key) end) do
+        {:atomic, :ok} -> :ok
+        {:aborted, reason} -> {:error, reason}
+      end
 
-    case result do
-      {:atomic, :ok} -> :ok
-      {:aborted, reason} -> {:error, reason}
-    end
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:persistence, :merge),
+        %{duration: System.monotonic_time() - start_time},
+        %{sketch_type: Telemetry.sketch_type(sketch), backend: :mnesia, key: key},
+        :persistence
+      )
+
+    result
   end
 
   defp do_merge(sketch, sketch_module, table, key) do
@@ -241,7 +276,17 @@ defmodule ExDataSketch.Storage.Mnesia do
   """
   @spec delete(atom(), ExDataSketch.Storage.key()) :: :ok
   def delete(table, key) do
+    start_time = System.monotonic_time()
     :mnesia.transaction(fn -> :mnesia.delete(table, key, :write) end)
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:persistence, :delete),
+        %{duration: System.monotonic_time() - start_time},
+        %{backend: :mnesia, key: key},
+        :persistence
+      )
+
     :ok
   end
 
@@ -272,5 +317,13 @@ defmodule ExDataSketch.Storage.Mnesia do
       :no ->
         :mnesia.start()
     end
+  end
+
+  defp sketch_type_from_module(module) do
+    module
+    |> Module.split()
+    |> List.last()
+    |> Macro.underscore()
+    |> String.to_atom()
   end
 end

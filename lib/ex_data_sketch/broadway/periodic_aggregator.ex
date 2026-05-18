@@ -48,7 +48,7 @@ defmodule ExDataSketch.Broadway.PeriodicAggregator do
 
   use GenServer
 
-  alias ExDataSketch.Integration
+  alias ExDataSketch.{Integration, Telemetry}
 
   @default_flush_interval 5_000
 
@@ -205,6 +205,15 @@ defmodule ExDataSketch.Broadway.PeriodicAggregator do
   def handle_call(:flush, _from, state) do
     flushed = state.current
     new_sketch = state.sketch_module.new(state.sketch_opts)
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:pipeline, :periodic_flush),
+        %{duration: 0},
+        %{sketch_type: Telemetry.sketch_type(flushed)},
+        :pipeline
+      )
+
     {:reply, flushed, %{state | current: new_sketch}}
   end
 

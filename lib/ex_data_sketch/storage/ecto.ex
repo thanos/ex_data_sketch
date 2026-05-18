@@ -41,8 +41,7 @@ defmodule ExDataSketch.Storage.Ecto do
       :ok = ExDataSketch.Storage.Ecto.delete(MyApp.Repo, "cardinality:2024-01")
   """
 
-  alias ExDataSketch.Integration
-  alias ExDataSketch.Storage.Ecto.Schema
+  alias ExDataSketch.{Integration, Storage.Ecto.Schema, Telemetry}
 
   @ecto_available Code.ensure_loaded?(Ecto.Adapters.SQL)
 
@@ -87,6 +86,7 @@ defmodule ExDataSketch.Storage.Ecto do
   """
   @spec save(struct(), module(), ExDataSketch.Storage.key()) :: :ok | {:error, term()}
   def save(sketch, repo, key) do
+    start_time = System.monotonic_time()
     Integration.require_ecto!()
     binary = sketch.__struct__.serialize(sketch)
 
@@ -103,13 +103,24 @@ defmodule ExDataSketch.Storage.Ecto do
         data: binary
       })
 
-    case repo.insert(changeset,
-           on_conflict: {:replace, [:data, :updated_at]},
-           conflict_target: [:key]
-         ) do
-      {:ok, _} -> :ok
-      {:error, changeset} -> {:error, changeset}
-    end
+    result =
+      case repo.insert(changeset,
+             on_conflict: {:replace, [:data, :updated_at]},
+             conflict_target: [:key]
+           ) do
+        {:ok, _} -> :ok
+        {:error, changeset} -> {:error, changeset}
+      end
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:persistence, :save),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: Telemetry.sketch_type(sketch), backend: :ecto, key: key},
+        :persistence
+      )
+
+    result
   end
 
   @doc """
@@ -143,23 +154,35 @@ defmodule ExDataSketch.Storage.Ecto do
   @spec load(module(), module(), ExDataSketch.Storage.key()) ::
           {:ok, struct()} | {:error, :not_found | term()}
   def load(sketch_module, repo, key) do
+    start_time = System.monotonic_time()
     Integration.require_ecto!()
 
     import Ecto.Query
 
-    case repo.one(
-           from(s in Schema,
-             where: s.key == ^to_string(key),
-             order_by: [desc: s.updated_at],
-             limit: 1
-           )
-         ) do
-      %Schema{data: binary} ->
-        sketch_module.deserialize(binary)
+    result =
+      case repo.one(
+             from(s in Schema,
+               where: s.key == ^to_string(key),
+               order_by: [desc: s.updated_at],
+               limit: 1
+             )
+           ) do
+        %Schema{data: binary} ->
+          sketch_module.deserialize(binary)
 
-      nil ->
-        {:error, :not_found}
-    end
+        nil ->
+          {:error, :not_found}
+      end
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:persistence, :load),
+        %{duration: System.monotonic_time() - start_time},
+        %{sketch_type: sketch_type_from_module(sketch_module), backend: :ecto, key: key},
+        :persistence
+      )
+
+    result
   end
 
   @doc """
@@ -193,50 +216,62 @@ defmodule ExDataSketch.Storage.Ecto do
   """
   @spec merge(struct(), module(), ExDataSketch.Storage.key()) :: :ok | {:error, term()}
   def merge(sketch, repo, key) do
+    start_time = System.monotonic_time()
     Integration.require_ecto!()
     sketch_module = sketch.__struct__
     string_key = to_string(key)
 
-    repo.transaction(fn ->
-      import Ecto.Query
+    result =
+      repo.transaction(fn ->
+        import Ecto.Query
 
-      case repo.one(
-             from(s in Schema,
-               where: s.key == ^string_key,
-               lock: "FOR UPDATE",
-               limit: 1
-             )
-           ) do
-        %Schema{data: binary} = existing ->
-          {:ok, existing_sketch} = sketch_module.deserialize(binary)
-          merged = sketch_module.merge(existing_sketch, sketch)
-          merged_binary = sketch_module.serialize(merged)
-          changeset = Schema.changeset(existing, %{data: merged_binary})
-          repo.update!(changeset)
+        case repo.one(
+               from(s in Schema,
+                 where: s.key == ^string_key,
+                 lock: "FOR UPDATE",
+                 limit: 1
+               )
+             ) do
+          %Schema{data: binary} = existing ->
+            {:ok, existing_sketch} = sketch_module.deserialize(binary)
+            merged = sketch_module.merge(existing_sketch, sketch)
+            merged_binary = sketch_module.serialize(merged)
+            changeset = Schema.changeset(existing, %{data: merged_binary})
+            repo.update!(changeset)
 
-        nil ->
-          binary = sketch_module.serialize(sketch)
+          nil ->
+            binary = sketch_module.serialize(sketch)
 
-          sketch_type =
-            sketch_module
-            |> Module.split()
-            |> List.last()
-            |> String.downcase()
+            sketch_type =
+              sketch_module
+              |> Module.split()
+              |> List.last()
+              |> String.downcase()
 
-          changeset =
-            Schema.changeset(%Schema{}, %{
-              key: string_key,
-              sketch_type: sketch_type,
-              data: binary
-            })
+            changeset =
+              Schema.changeset(%Schema{}, %{
+                key: string_key,
+                sketch_type: sketch_type,
+                data: binary
+              })
 
-          repo.insert!(changeset)
+            repo.insert!(changeset)
+        end
+      end)
+      |> case do
+        {:ok, _} -> :ok
+        {:error, reason} -> {:error, reason}
       end
-    end)
-    |> case do
-      {:ok, _} -> :ok
-      {:error, reason} -> {:error, reason}
-    end
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:persistence, :merge),
+        %{duration: System.monotonic_time() - start_time},
+        %{sketch_type: Telemetry.sketch_type(sketch), backend: :ecto, key: key},
+        :persistence
+      )
+
+    result
   end
 
   @doc """
@@ -258,6 +293,7 @@ defmodule ExDataSketch.Storage.Ecto do
   """
   @spec delete(module(), ExDataSketch.Storage.key()) :: :ok
   def delete(repo, key) do
+    start_time = System.monotonic_time()
     Integration.require_ecto!()
 
     import Ecto.Query
@@ -267,6 +303,14 @@ defmodule ExDataSketch.Storage.Ecto do
         where: s.key == ^to_string(key)
       )
     )
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:persistence, :delete),
+        %{duration: System.monotonic_time() - start_time},
+        %{backend: :ecto, key: key},
+        :persistence
+      )
 
     :ok
   end
@@ -280,5 +324,13 @@ defmodule ExDataSketch.Storage.Ecto do
       true -> true
       false -> false
     end
+  end
+
+  defp sketch_type_from_module(module) do
+    module
+    |> Module.split()
+    |> List.last()
+    |> Macro.underscore()
+    |> String.to_atom()
   end
 end

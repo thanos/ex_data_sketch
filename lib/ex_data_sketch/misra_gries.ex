@@ -317,15 +317,27 @@ defmodule ExDataSketch.MisraGries do
   """
   @spec serialize(t()) :: binary()
   def serialize(%__MODULE__{state: state, opts: opts}) do
+    start_time = System.monotonic_time()
     k = Keyword.fetch!(opts, :k)
     key_encoding = Keyword.get(opts, :key_encoding, :binary)
     enc_byte = encode_key_encoding(key_encoding)
     params_bin = <<k::unsigned-little-32, enc_byte::unsigned-8>>
 
-    Binary.encode(
-      Binary.metadata_from_opts(Codec.sketch_id_mg(), 1, opts),
-      Binary.build_payload(params_bin, state)
-    )
+    binary =
+      Binary.encode(
+        Binary.metadata_from_opts(Codec.sketch_id_mg(), 1, opts),
+        Binary.build_payload(params_bin, state)
+      )
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:sketch, :serialize),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: :misra_gries},
+        :sketch
+      )
+
+    binary
   end
 
   @doc """
@@ -341,19 +353,32 @@ defmodule ExDataSketch.MisraGries do
   """
   @spec deserialize(binary()) :: {:ok, t()} | {:error, Exception.t()}
   def deserialize(binary) when is_binary(binary) do
-    with {:ok, decoded} <- Binary.decode(binary),
-         :ok <- validate_sketch_id(decoded.sketch_id),
-         {:ok, opts} <- decode_params(decoded.params),
-         :ok <- validate_state_header(decoded.state) do
-      backend = Backend.default()
+    start_time = System.monotonic_time()
 
-      {:ok,
-       %__MODULE__{
-         state: decoded.state,
-         opts: opts,
-         backend: backend
-       }}
-    end
+    result =
+      with {:ok, decoded} <- Binary.decode(binary),
+           :ok <- validate_sketch_id(decoded.sketch_id),
+           {:ok, opts} <- decode_params(decoded.params),
+           :ok <- validate_state_header(decoded.state) do
+        backend = Backend.default()
+
+        {:ok,
+         %__MODULE__{
+           state: decoded.state,
+           opts: opts,
+           backend: backend
+         }}
+      end
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:sketch, :deserialize),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: :misra_gries},
+        :sketch
+      )
+
+    result
   end
 
   @doc """

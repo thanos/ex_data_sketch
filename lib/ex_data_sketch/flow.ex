@@ -44,7 +44,7 @@ defmodule ExDataSketch.Flow do
   at runtime.
   """
 
-  alias ExDataSketch.Integration
+  alias ExDataSketch.{Integration, Telemetry}
 
   @doc """
   Reduces a Flow into partition-local sketches using the sketch module's
@@ -90,6 +90,14 @@ defmodule ExDataSketch.Flow do
     flow
     |> Flow.reduce(initial, reducer_fn)
     |> Flow.on_trigger(fn acc, _partition, _reduce_count ->
+      :ok =
+        Telemetry.execute(
+          Telemetry.event_name(:stream, :reduce),
+          %{duration: 0},
+          %{sketch_type: Telemetry.sketch_type(acc)},
+          :stream
+        )
+
       {[acc], acc}
     end)
   end
@@ -129,9 +137,17 @@ defmodule ExDataSketch.Flow do
   def merge(flow, sketch_module) do
     Integration.require_flow!()
 
-    flow
-    |> Enum.to_list()
-    |> sketch_module.merge_many()
+    Telemetry.span(
+      Telemetry.event_name(:stream, :partition_merge),
+      %{partition_count: 0},
+      %{sketch_type: Telemetry.sketch_type(sketch_module.new())},
+      :stream,
+      fn ->
+        flow
+        |> Enum.to_list()
+        |> sketch_module.merge_many()
+      end
+    )
   end
 
   @doc """

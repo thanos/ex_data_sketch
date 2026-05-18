@@ -343,14 +343,26 @@ defmodule ExDataSketch.FrequentItems do
   """
   @spec serialize(t()) :: binary()
   def serialize(%__MODULE__{state: state, opts: opts}) do
+    start_time = System.monotonic_time()
     k = Keyword.fetch!(opts, :k)
     flags = Keyword.fetch!(opts, :flags)
     params_bin = <<k::unsigned-little-32, flags::unsigned-8>>
 
-    Binary.encode(
-      Binary.metadata_from_opts(Codec.sketch_id_fi(), 1, opts),
-      Binary.build_payload(params_bin, state)
-    )
+    binary =
+      Binary.encode(
+        Binary.metadata_from_opts(Codec.sketch_id_fi(), 1, opts),
+        Binary.build_payload(params_bin, state)
+      )
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:sketch, :serialize),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: :frequent_items},
+        :sketch
+      )
+
+    binary
   end
 
   @doc """
@@ -366,19 +378,32 @@ defmodule ExDataSketch.FrequentItems do
   """
   @spec deserialize(binary()) :: {:ok, t()} | {:error, Exception.t()}
   def deserialize(binary) when is_binary(binary) do
-    with {:ok, decoded} <- Binary.decode(binary),
-         :ok <- validate_sketch_id(decoded.sketch_id),
-         {:ok, opts} <- decode_params(decoded.params),
-         :ok <- validate_state_header(decoded.state, opts) do
-      backend = Backend.default()
+    start_time = System.monotonic_time()
 
-      {:ok,
-       %__MODULE__{
-         state: decoded.state,
-         opts: opts,
-         backend: backend
-       }}
-    end
+    result =
+      with {:ok, decoded} <- Binary.decode(binary),
+           :ok <- validate_sketch_id(decoded.sketch_id),
+           {:ok, opts} <- decode_params(decoded.params),
+           :ok <- validate_state_header(decoded.state, opts) do
+        backend = Backend.default()
+
+        {:ok,
+         %__MODULE__{
+           state: decoded.state,
+           opts: opts,
+           backend: backend
+         }}
+      end
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:sketch, :deserialize),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: :frequent_items},
+        :sketch
+      )
+
+    result
   end
 
   @doc """
