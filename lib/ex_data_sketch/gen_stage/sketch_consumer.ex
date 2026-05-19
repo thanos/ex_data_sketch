@@ -6,12 +6,32 @@ defmodule ExDataSketch.GenStage.SketchConsumer do
   configured sketch module, and provides read and flush access to the
   accumulated sketch.
 
+  ## Event Contract
+
+  Each incoming event is interpreted in one of two ways:
+
+  1. **Sketch snapshot**: when the event is a struct of the configured
+     `:sketch_module`, the consumer merges it into its accumulated sketch
+     via `sketch_module.merge/2`. This is the contract used by
+     `ExDataSketch.GenStage.SketchProducer` and
+     `ExDataSketch.GenStage.SketchStage`, which emit snapshots of their
+     internal sketch on demand.
+
+  2. **Raw item**: any other event is passed through `:key_fn` and inserted
+     into the accumulated sketch via `sketch_module.update/2` (or
+     `sketch_module.from_enumerable/2` for a batch). This is the contract
+     used by raw event sources (Kafka offsets, Phoenix events, etc.).
+
+  A single batch may mix both shapes; sketches are merged and raw items are
+  updated independently, then folded into a single accumulator.
+
   ## Options
 
   - `:sketch_module` -- required, the sketch module (e.g., `ExDataSketch.HLL`).
   - `:sketch_opts` -- options forwarded to `sketch_module.new/1` (default: `[]`).
   - `:key_fn` -- function `(event -> term)` that extracts the value from
-    each event (default: `fn event -> event end`).
+    each *raw* event (default: `fn event -> event end`). Not applied to
+    sketch snapshots.
   - `:flush_interval` -- milliseconds between automatic flushes (default:
     `:infinity`, no automatic flush). When set, the consumer calls
     `:flush_callback` and resets.
@@ -172,19 +192,40 @@ defmodule ExDataSketch.GenStage.SketchConsumer do
 
   @impl true
   def handle_events(events, _from, state) do
-    values = Enum.map(events, state.key_fn)
+    {sketches, raw_events} =
+      Enum.split_with(events, fn event -> is_struct(event, state.sketch_module) end)
 
     new_current =
-      if function_exported?(state.sketch_module, :from_enumerable, 2) do
-        partial = state.sketch_module.from_enumerable(values, state.sketch_opts)
-        state.sketch_module.merge(state.current, partial)
-      else
-        Enum.reduce(values, state.current, fn value, acc ->
-          state.sketch_module.update(acc, value)
-        end)
-      end
+      state.current
+      |> merge_sketches(sketches, state.sketch_module)
+      |> ingest_raw_events(raw_events, state)
 
     {:noreply, [], %{state | current: new_current}}
+  end
+
+  # Merge any upstream sketch snapshots into the accumulator.
+  defp merge_sketches(acc, [], _sketch_module), do: acc
+
+  defp merge_sketches(acc, sketches, sketch_module) do
+    Enum.reduce(sketches, acc, fn sketch, current ->
+      sketch_module.merge(current, sketch)
+    end)
+  end
+
+  # Ingest raw items via key_fn + from_enumerable (or update fallback).
+  defp ingest_raw_events(acc, [], _state), do: acc
+
+  defp ingest_raw_events(acc, raw_events, state) do
+    values = Enum.map(raw_events, state.key_fn)
+
+    if function_exported?(state.sketch_module, :from_enumerable, 2) do
+      partial = state.sketch_module.from_enumerable(values, state.sketch_opts)
+      state.sketch_module.merge(acc, partial)
+    else
+      Enum.reduce(values, acc, fn value, current ->
+        state.sketch_module.update(current, value)
+      end)
+    end
   end
 
   @impl true

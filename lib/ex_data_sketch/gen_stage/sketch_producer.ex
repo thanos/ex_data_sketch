@@ -1,14 +1,29 @@
 defmodule ExDataSketch.GenStage.SketchProducer do
   @moduledoc """
-  A GenStage producer that emits accumulated sketches on demand.
+  A GenStage producer that emits accumulated sketch snapshots on demand.
 
   `SketchProducer` maintains an internal sketch that can be updated via
-  `update/2` and `merge/2`. Consumers pull the accumulated sketch when
-  they demand events. Each demand event emits the current sketch.
+  `update/2` and `merge/2`. Each downstream demand request schedules the
+  emission of one snapshot of the current sketch; subsequent snapshots
+  are emitted as the producer's state changes (via `update/2` or
+  `merge/2`).
 
   This is useful for downstream consumers that need periodic snapshots
   of an evolving sketch (e.g., for persistence, cross-node distribution,
   or metrics reporting).
+
+  ## Emission Semantics
+
+  A snapshot is the current sketch *struct*. Downstream consumers
+  (typically `ExDataSketch.GenStage.SketchConsumer` or
+  `ExDataSketch.GenStage.SketchStage`) merge each received snapshot into
+  their own accumulated sketch via `sketch_module.merge/2`.
+
+  Demand is tracked cumulatively. The producer emits at most one snapshot
+  per unit of demand and only when the underlying sketch has been updated
+  since the previous emission (or on the first emission after demand
+  arrives). This avoids flooding downstream consumers with duplicate
+  snapshots while still respecting GenStage back-pressure.
 
   ## Options
 
@@ -26,7 +41,7 @@ defmodule ExDataSketch.GenStage.SketchProducer do
       SketchProducer.update(producer, "user_1")
       SketchProducer.update(producer, "user_2")
 
-      # Consumers that subscribe will receive the current sketch on demand
+      # Consumers that subscribe receive snapshots of the current sketch.
   """
 
   use GenStage
@@ -34,7 +49,9 @@ defmodule ExDataSketch.GenStage.SketchProducer do
   @type state :: %{
           sketch_module: module(),
           sketch_opts: keyword(),
-          current: struct()
+          current: struct(),
+          pending_demand: non_neg_integer(),
+          dirty: boolean()
         }
 
   @doc """
@@ -138,25 +155,34 @@ defmodule ExDataSketch.GenStage.SketchProducer do
      %{
        sketch_module: sketch_module,
        sketch_opts: sketch_opts,
-       current: current
+       current: current,
+       pending_demand: 0,
+       # The producer is considered "dirty" (has a fresh snapshot worth
+       # emitting) until the first emission. After that, dirty is set to
+       # true again whenever update/merge mutates the sketch.
+       dirty: true
      }}
   end
 
   @impl true
   def handle_demand(demand, state) when demand > 0 do
-    events = List.duplicate(state.current, demand)
-    {:noreply, events, state}
+    new_state = %{state | pending_demand: state.pending_demand + demand}
+    emit_snapshot(new_state)
   end
 
   @impl true
   def handle_call({:update, item}, _from, state) do
     new_current = state.sketch_module.update(state.current, item)
-    {:reply, :ok, [], %{state | current: new_current}}
+    new_state = %{state | current: new_current, dirty: true}
+    {events, new_state} = take_snapshot(new_state)
+    {:reply, :ok, events, new_state}
   end
 
   def handle_call({:merge, partial_sketch}, _from, state) do
     new_current = state.sketch_module.merge(state.current, partial_sketch)
-    {:reply, :ok, [], %{state | current: new_current}}
+    new_state = %{state | current: new_current, dirty: true}
+    {events, new_state} = take_snapshot(new_state)
+    {:reply, :ok, events, new_state}
   end
 
   def handle_call(:estimate, _from, state) do
@@ -165,5 +191,20 @@ defmodule ExDataSketch.GenStage.SketchProducer do
 
   def handle_call(:get, _from, state) do
     {:reply, state.current, [], state}
+  end
+
+  # Emit one snapshot if demand is pending and the sketch is dirty;
+  # otherwise no events are emitted and the demand stays queued.
+  defp emit_snapshot(state) do
+    {events, new_state} = take_snapshot(state)
+    {:noreply, events, new_state}
+  end
+
+  defp take_snapshot(%{pending_demand: 0} = state), do: {[], state}
+
+  defp take_snapshot(%{dirty: false} = state), do: {[], state}
+
+  defp take_snapshot(state) do
+    {[state.current], %{state | pending_demand: state.pending_demand - 1, dirty: false}}
   end
 end

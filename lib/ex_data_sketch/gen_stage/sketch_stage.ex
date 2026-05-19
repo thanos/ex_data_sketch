@@ -3,16 +3,31 @@ defmodule ExDataSketch.GenStage.SketchStage do
   A combined GenStage producer-consumer for sketch aggregation pipelines.
 
   `SketchStage` subscribes to an upstream producer, accumulates events into
-  a sketch, and emits the current sketch to downstream consumers on demand.
-  This enables pipeline compositions where one stage aggregates and the
-  next stage persists or reports.
+  a sketch, and emits the current sketch snapshot to downstream consumers
+  on demand. This enables pipeline compositions where one stage aggregates
+  and the next stage persists or reports.
+
+  ## Event Contract
+
+  Incoming events follow the same convention as
+  `ExDataSketch.GenStage.SketchConsumer`:
+
+  1. **Sketch snapshot**: when the event is a struct of the configured
+     `:sketch_module`, it is merged into the stage's accumulated sketch
+     via `sketch_module.merge/2`.
+  2. **Raw item**: any other event is passed through `:key_fn` and
+     inserted via `sketch_module.from_enumerable/2`.
+
+  After processing each incoming batch, the stage emits a single snapshot
+  of its updated accumulated sketch downstream.
 
   ## Options
 
   - `:sketch_module` -- required, the sketch module.
   - `:sketch_opts` -- options forwarded to `sketch_module.new/1` (default: `[]`).
-  - `:key_fn` -- function `(event -> term())` to extract values from events
-    (default: `fn event -> event end`).
+  - `:key_fn` -- function `(event -> term())` to extract values from raw
+    events (default: `fn event -> event end`). Not applied to sketch
+    snapshots.
   - `:subscribe_to` -- a producer or `{producer, opts}` tuple to subscribe to.
 
   ## Examples
@@ -128,11 +143,31 @@ defmodule ExDataSketch.GenStage.SketchStage do
 
   @impl true
   def handle_events(events, _from, state) do
-    values = Enum.map(events, state.key_fn)
-    partial = state.sketch_module.from_enumerable(values, state.sketch_opts)
-    new_current = state.sketch_module.merge(state.current, partial)
+    {sketches, raw_events} =
+      Enum.split_with(events, fn event -> is_struct(event, state.sketch_module) end)
+
+    new_current =
+      state.current
+      |> merge_sketches(sketches, state.sketch_module)
+      |> ingest_raw_events(raw_events, state)
 
     {:noreply, [new_current], %{state | current: new_current}}
+  end
+
+  defp merge_sketches(acc, [], _sketch_module), do: acc
+
+  defp merge_sketches(acc, sketches, sketch_module) do
+    Enum.reduce(sketches, acc, fn sketch, current ->
+      sketch_module.merge(current, sketch)
+    end)
+  end
+
+  defp ingest_raw_events(acc, [], _state), do: acc
+
+  defp ingest_raw_events(acc, raw_events, state) do
+    values = Enum.map(raw_events, state.key_fn)
+    partial = state.sketch_module.from_enumerable(values, state.sketch_opts)
+    state.sketch_module.merge(acc, partial)
   end
 
   @impl true

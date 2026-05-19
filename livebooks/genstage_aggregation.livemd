@@ -128,24 +128,43 @@ GenServer.stop(consumer)
 
 ## Section 5: Putting It Together -- Producer to Consumer Pipeline
 
+`SketchProducer` emits *sketch snapshots* of its current accumulated
+sketch. When `SketchConsumer` subscribes to a `SketchProducer`, each
+event it receives is a sketch struct of the configured `:sketch_module`
+and is merged into the consumer's accumulated sketch via
+`sketch_module.merge/2`.
+
+Raw event sources (Kafka, RabbitMQ, etc.) emit non-sketch terms; the
+consumer detects them by struct type and instead applies `:key_fn` and
+`update/2`. A single batch can mix both shapes.
+
 ```elixir
-# Producer that emits items
+# Producer that accumulates items and emits snapshots downstream.
 {:ok, producer} = ExDataSketch.GenStage.SketchProducer.start_link(
   sketch_module: ExDataSketch.HLL,
   sketch_opts: [p: 14]
 )
 
-# Consumer that accumulates from the producer
+# Consumer that merges incoming snapshots into its own sketch.
 {:ok, consumer} = ExDataSketch.GenStage.SketchConsumer.start_link(
   sketch_module: ExDataSketch.HLL,
   sketch_opts: [p: 14],
-  key_fn: fn event -> event end,
   subscribe_to: [{producer, max_demand: 100}]
 )
 
-# The consumer is now subscribed to the producer
-# In a real app, the producer receives items from external sources
-IO.puts("Pipeline connected. Consumer estimate: #{ExDataSketch.GenStage.SketchConsumer.estimate(consumer)}")
+# Feed the producer; each update triggers one snapshot to the consumer.
+items = Enum.map(1..500, &"user_#{&1}")
+Enum.each(items, fn item -> :ok = ExDataSketch.GenStage.SketchProducer.update(producer, item) end)
+
+# Allow the demand/emit loop to settle.
+Process.sleep(200)
+
+producer_estimate = ExDataSketch.GenStage.SketchProducer.estimate(producer)
+consumer_estimate = ExDataSketch.GenStage.SketchConsumer.estimate(consumer)
+
+IO.puts("Producer estimate: #{Float.round(producer_estimate, 0)} (true: 500)")
+IO.puts("Consumer estimate: #{Float.round(consumer_estimate, 0)} (true: 500)")
+IO.puts("Round-trip preserved cardinality: #{abs(consumer_estimate - 500) < 25}")
 
 GenServer.stop(consumer)
 GenServer.stop(producer)
