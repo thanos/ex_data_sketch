@@ -24,8 +24,8 @@ for chunk_size <- chunk_sizes do
   Benchee.run(
     %{
       "update_many (chunk=#{chunk_size})" => fn ->
-        HLL.new(p: 14)
-        |> HLL.update_many(items_100k, update_many_chunk_size: chunk_size)
+        HLL.new(p: 14, update_many_chunk_size: chunk_size)
+        |> HLL.update_many(items_100k)
       end
     },
     time: 3,

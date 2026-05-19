@@ -97,11 +97,13 @@ for {item, count} <- ExDataSketch.MisraGries.top_k(mg, 5) do
   IO.puts("  #{item}: ~#{count} (estimated)")
 end
 
-# FrequentItems: similar but with different guarantees
+# FrequentItems: similar but with different guarantees.
+# Note: `top_k/2` takes a keyword list (limit: N); returned maps expose
+# :item, :estimate, :error, :lower, :upper (no :count field).
 fi = ExDataSketch.FrequentItems.from_enumerable(prompt_patterns, k: 10)
 IO.puts("\nFrequentItems top patterns:")
-for item <- ExDataSketch.FrequentItems.top_k(fi, 5) do
-  IO.puts("  #{item.item}: ~#{item.count}")
+for item <- ExDataSketch.FrequentItems.top_k(fi, limit: 5) do
+  IO.puts("  #{item.item}: ~#{item.estimate}")
 end
 ```
 

@@ -231,19 +231,19 @@ IO.puts("At p=14, tracking 1M daily active users uses just 16KB.")
 ```elixir
 # Compare exact vs. sketch-based memory for Phoenix observability
 exact_dau = MapSet.new(Enum.take(Stream.map(1..100_000, fn i -> "user_#{rem(i, 5000)}" end), 100_000))
-sketch_daup = ExDataSketch.HLL.from_enumerable(
+sketch_dau = ExDataSketch.HLL.from_enumerable(
   Stream.map(1..100_000, fn i -> "user_#{rem(i, 5000)}" end),
   p: 14
 )
 
-exact_bytes = :erlang.term_to_binary(exact_daup) |> byte_size()
-sketch_bytes = ExDataSketch.HLL.size_bytes(sketch_daup)
+exact_bytes = :erlang.term_to_binary(exact_dau) |> byte_size()
+sketch_bytes = ExDataSketch.HLL.size_bytes(sketch_dau)
 
 IO.puts("=== Memory Comparison for 100K requests, 5K unique users ===")
 IO.puts("  MapSet (exact):   #{exact_bytes} bytes (~#{Float.round(exact_bytes / 1024, 1)} KB)")
 IO.puts("  HLL p=14:         #{sketch_bytes} bytes (~#{Float.round(sketch_bytes / 1024, 1)} KB)")
 IO.puts("  Compression:      #{Float.round(100 * (1 - sketch_bytes / exact_bytes), 1)}%")
-IO.puts("  Accuracy:         #{Float.round(ExDataSketch.HLL.estimate(sketch_daup), 0)} vs #{MapSet.size(exact_daup)} true")
+IO.puts("  Accuracy:         #{Float.round(ExDataSketch.HLL.estimate(sketch_dau), 0)} vs #{MapSet.size(exact_dau)} true")
 ```
 
 ## Section 8: Operational Guidance

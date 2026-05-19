@@ -23,31 +23,43 @@ defmodule ExDataSketch.ULL do
 
   ## Estimation Strategy
 
-  The ULL estimator uses three correction strategies depending on the register
-  state, similar to HLL:
+  The ULL estimator selects between two estimators based on whether any
+  register is still empty:
 
-  1. **Linear counting** (when empty registers exist): When at least one
-     register is zero, the linear counting formula `m * ln(m / zeros)` provides
-     accurate estimates. This is the preferred method for sparse sketches and
-     is essential for accuracy at low precision (small `p`).
+  1. **Linear counting** (`zeros > 0`): when at least one register is empty,
+     the formula `m * ln(m / zeros)` is used. Linear counting is the
+     maximum-likelihood estimator in this regime and is the dominant
+     estimator for realistic workloads (any cardinality where the load
+     factor leaves empty registers, roughly `n < m * ln(m)`). It also
+     significantly outperforms the FGRA estimator at low precision
+     (`p < 12`), where FGRA carries non-trivial bias for moderate
+     `n / m`. The FGRA Horner loop is skipped on this branch.
 
-  2. **FGRA estimator** (Ertl 2017): The Flajolet-style geometric rank
-     aggregation with sigma/tau convergence. This is used when all registers
-     are non-empty. Accuracy degrades at high load factors (`n >> m`) with
-     small `p` (p < 12). For production use, `p >= 12` is recommended.
+  2. **FGRA estimator** (`zeros == 0`): when every register is occupied,
+     the Flajolet-style geometric rank aggregation with sigma/tau
+     convergence from Algorithm 4 of Ertl 2017 is used. This is the
+     large-cardinality regime, and the published relative standard error
+     `~0.835 / sqrt(m)` applies here.
 
-  3. **Large range correction**: When the FGRA estimate exceeds `2^64 / 30`,
-     a hash-space bias correction is applied. This is effectively
-     unreachable with 64-bit hashes.
+  3. **Large range correction**: applied on top of FGRA when the raw
+     estimate exceeds `2^56 / 30`. The hash-space bias correction
+     `-2^64 * ln(1 - raw_estimate / 2^64)` is used. This branch is
+     effectively unreachable with 64-bit hashes.
+
+  Note that for typical workloads (where cardinality is comparable to or
+  smaller than `m * ln(m)`) the linear counting branch is taken; the FGRA
+  branch is exercised primarily in the very-large-`n` regime.
 
   ## Recommended Precision
 
-  - `p >= 12` is recommended for production use. Below `p = 12`, accuracy
-    degrades when the cardinality significantly exceeds `2^p` (i.e., when all
-    registers are non-empty).
-  - When `p < 12` and the sketch has empty registers, linear counting provides
-    reliable estimates. Accuracy degrades primarily when `n > 5 * 2^p` at
-    small `p` values.
+  - `p >= 12` is recommended for production use. Below `p = 12`, the
+    transition between linear counting and FGRA (at `zeros = 0`) can
+    exhibit increased relative error because FGRA's small-`p` bias is
+    significant and linear counting at very few empty registers
+    (`zeros < ~m * e^(-5)`) has high variance.
+  - When `p >= 12`, linear counting provides reliable estimates across
+    the entire small-to-moderate cardinality range, and FGRA's RSE
+    bound is tight when it engages.
 
   ## Binary State Layout (ULL1)
 

@@ -419,7 +419,7 @@ defmodule ExDataSketch.HLL do
       %{sketch_type: :hll},
       :sketch,
       fn -> new(opts) |> update_many(enumerable) end,
-      fn sketch -> %{count: size_bytes(sketch)} end
+      fn sketch -> %{size_bytes: size_bytes(sketch)} end
     )
   end
 

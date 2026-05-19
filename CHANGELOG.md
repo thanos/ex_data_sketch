@@ -56,7 +56,7 @@ Release theme: **Streaming Integrations.** Transforms ex_data_sketch from a coll
   - Both Pure Elixir and Rust NIF backends updated; property tests updated with tiered accuracy bounds (35%/25%/15% at p=8).
 
 - **Configurable `update_many` chunk size (Phase 5).**
-  - `update_many_chunk_size` option on HLL, ULL, CMS, and Theta (`new/1`Opts`). Default 10,000 (backward compatible).
+  - `update_many_chunk_size` option on HLL, ULL, CMS, and Theta (via `new/1` opts). Default 10,000 (backward compatible).
 
 - **EXSK v1 serialization escape hatch (Phase 5).**
   - `HLL.serialize(sketch, format: :v1)` produces a backward-compatible v0.7.x binary (requires `:phash2` hash strategy, raises `ArgumentError` for other strategies).

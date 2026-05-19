@@ -49,7 +49,7 @@ reading order is:
 | Persistence Snapshots | `Storage.ETS.save/load/merge`, `Storage.DETS`, `serialize/1` | Durability hierarchy, EXSK v2 binary format |
 | Distributed Merges | `merge_many/1`, `merge/2`, `Storage.ETS.merge/3` | Associativity, commutativity, tree aggregation |
 | Rolling Telemetry | `Telemetry.execute`, `Telemetry.span`, `GenServer` timer | Time-windowed aggregation, periodic flush |
-| Broadway Integration | `Broadway.accumulate/3`, `PeriodicAggregator` | Batch aggregation, periodic flush, partition handling |
+| Broadway Integration | `ExDataSketch.Broadway.accumulate/3`, `PeriodicAggregator` | Batch aggregation, periodic flush, partition handling |
 | GenStage Aggregation | `SketchConsumer`, `SketchProducer`, `flush/1` | Back-pressure, push-based accumulation, callbacks |
 | LiveDashboard Integration | `Telemetry.event_name`, `all_event_names`, `:telemetry.attach` | Phoenix metrics wiring, custom dashboard pages |
 | Phoenix Observability | HLL, REQ, CMS, Theta, ETS | Per-endpoint DAU, latency distributions, rate limiting |

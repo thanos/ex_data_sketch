@@ -4806,27 +4806,55 @@ defmodule ExDataSketch.Backend.Pure do
     ull_register_counts_loop(rest, counts, max(q_max, val))
   end
 
-  # FGRA estimator (Ertl 2017 "new HLL" estimator applied to ULL register values).
+  # ULL estimator with linear counting (small range) and FGRA (large range).
   #
-  # Uses the Horner-scheme computation from Algorithm 4 of Ertl 2017:
-  #   z = m * tau(1 - C[q]/m)
-  #   for k from q-1 down to 1: z = (z + C[k]) * 0.5
-  #   z += m * sigma(C[0]/m)
-  #   estimate = alpha_inf * m^2 / z
+  # Estimation strategy:
   #
-  # where alpha_inf = 1 / (2 * ln(2))
+  #   1. **Linear counting fast path** (`zeros > 0`): when at least one register
+  #      is empty, return `m * ln(m / zeros)`. The FGRA Horner loop is skipped
+  #      entirely on this branch. Linear counting is the maximum-likelihood
+  #      estimator in this regime and outperforms FGRA, especially at small
+  #      precision (`p < 12`) where the FGRA estimator carries non-trivial
+  #      bias for `n / m` in the moderate range. This is the dominant
+  #      estimator for realistic workloads where `n < m * ln(m)`.
+  #
+  #   2. **FGRA estimator** (`zeros == 0`): when every register is occupied,
+  #      compute the raw FGRA estimate via Algorithm 4 of Ertl 2017:
+  #        z = m * tau(1 - C[q]/m)
+  #        for k from q-1 down to 1: z = (z + C[k]) * 0.5
+  #        z += m * sigma(0)
+  #        raw_estimate = alpha_inf * m^2 / z   (alpha_inf = 1 / (2 * ln(2)))
+  #      The published RSE `~0.835 / sqrt(m)` applies in this regime.
+  #
+  #   3. **Large range correction**: when `raw_estimate > 2^56 / 30`, apply
+  #      the hash-space bias correction
+  #      `-2^64 * ln(1 - raw_estimate / 2^64)`. This branch is effectively
+  #      unreachable with 64-bit hashes.
   defp ull_fgra_estimate(counts, m, q_max) do
     m_f = m * 1.0
+    zeros = :counters.get(counts, 0 + 1) * 1.0
+
+    if zeros > 0.0 do
+      # Linear counting fast path: skip FGRA Horner loop entirely.
+      m_f * :math.log(m_f / zeros)
+    else
+      ull_fgra_raw_estimate(counts, m_f, q_max)
+    end
+  end
+
+  defp ull_fgra_raw_estimate(counts, m_f, q_max) do
     alpha_inf = 1.0 / (2.0 * :math.log(2.0))
 
-    c0 = :counters.get(counts, 0 + 1) * 1.0
     c_q = :counters.get(counts, q_max + 1) * 1.0
 
+    # zeros is known to be 0 on this branch, so sigma(0) = 0 and the C[0] term
+    # contributes nothing. We still pass 0.0 explicitly to keep the Algorithm 4
+    # form intact.
     z = m_f * ull_tau(1.0 - c_q / m_f)
 
     z = ull_horner_loop(z, counts, q_max - 1)
 
-    z = z + m_f * ull_sigma(c0 / m_f)
+    z = z + m_f * ull_sigma(0.0)
 
     raw_estimate =
       if z == 0.0 do
@@ -4835,17 +4863,11 @@ defmodule ExDataSketch.Backend.Pure do
         alpha_inf * m_f * m_f / z
       end
 
-    zeros = :counters.get(counts, 0 + 1) * 1.0
-
-    cond do
-      zeros > 0 ->
-        m_f * :math.log(m_f / zeros)
-
-      raw_estimate > 0x100000000000000 / 30.0 ->
-        -0x10000000000000000 * :math.log(1.0 - raw_estimate / 0x10000000000000000)
-
-      true ->
-        raw_estimate
+    if raw_estimate > 0x100000000000000 / 30.0 do
+      # Large range correction (effectively unreachable with 64-bit hashes).
+      -0x10000000000000000 * :math.log(1.0 - raw_estimate / 0x10000000000000000)
+    else
+      raw_estimate
     end
   end
 
