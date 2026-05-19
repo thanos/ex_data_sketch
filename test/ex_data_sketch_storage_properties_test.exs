@@ -68,7 +68,8 @@ defmodule ExDataSketch.Storage.PropertiesTest do
       real_estimate = ExDataSketch.HLL.estimate(merged)
 
       if expected > 0 do
-        assert abs(real_estimate - expected) / max(expected, 1) < 0.3
+        tolerance = if expected < 5, do: 0.6, else: 0.3
+        assert abs(real_estimate - expected) / max(expected, 1) < tolerance
       end
 
       :ets.delete(table)

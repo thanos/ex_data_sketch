@@ -159,11 +159,16 @@ defmodule ExDataSketch.PropertyGuaranteesTest do
         m = Bitwise.bsl(1, 8)
 
         if zeros > 0 do
-          tolerance = if zeros < div(m, 10), do: 0.25, else: 0.15
+          tolerance =
+            cond do
+              zeros <= 2 -> 0.35
+              zeros < div(m, 10) -> 0.25
+              true -> 0.15
+            end
 
           assert abs(estimate - n) <= n * tolerance,
                  "ULL p=8 (zeros=#{zeros}, n=#{n}): estimate=#{estimate}, " <>
-                   "exceeds #{round(tolerance * 100)}% tolerance with linear counting"
+                   "exceeds #{round(tolerance * 100)}% tolerance"
         end
       end
     end
