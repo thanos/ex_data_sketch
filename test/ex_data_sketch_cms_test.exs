@@ -167,7 +167,11 @@ defmodule ExDataSketch.CMSTest do
       test "update_many_chunk_size respects creation-time option" do
         items = Enum.map(1..5000, &"item_#{&1}")
         default = CMS.new(width: 256, depth: 3, backend: @backend) |> CMS.update_many(items)
-        chunked = CMS.new(width: 256, depth: 3, update_many_chunk_size: 5, backend: @backend) |> CMS.update_many(items)
+
+        chunked =
+          CMS.new(width: 256, depth: 3, update_many_chunk_size: 5, backend: @backend)
+          |> CMS.update_many(items)
+
         assert CMS.estimate(default, "item_1") >= 1
         assert CMS.estimate(chunked, "item_1") >= 1
         assert default.state == chunked.state
