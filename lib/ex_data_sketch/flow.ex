@@ -93,7 +93,7 @@ defmodule ExDataSketch.Flow do
       :ok =
         Telemetry.execute(
           Telemetry.event_name(:stream, :reduce),
-          %{duration: 0},
+          %{},
           %{sketch_type: Telemetry.sketch_type(acc)},
           :stream
         )
@@ -137,15 +137,15 @@ defmodule ExDataSketch.Flow do
   def merge(flow, sketch_module) do
     Integration.require_flow!()
 
+    partitions = Enum.to_list(flow)
+
     Telemetry.span(
       Telemetry.event_name(:stream, :partition_merge),
-      %{partition_count: 0},
+      %{partition_count: length(partitions)},
       %{sketch_type: Telemetry.sketch_type(sketch_module.new())},
       :stream,
       fn ->
-        flow
-        |> Enum.to_list()
-        |> sketch_module.merge_many()
+        sketch_module.merge_many(partitions)
       end
     )
   end

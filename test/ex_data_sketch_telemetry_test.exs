@@ -23,7 +23,7 @@ defmodule ExDataSketch.TelemetryTest do
   describe "all_event_names/0" do
     test "returns all canonical event names" do
       events = Telemetry.all_event_names()
-      assert length(events) == 13
+      assert length(events) == 12
       assert [:ex_data_sketch, :sketch, :ingest] in events
       assert [:ex_data_sketch, :persistence, :save] in events
       assert [:ex_data_sketch, :stream, :reduce] in events

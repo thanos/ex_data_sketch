@@ -37,10 +37,15 @@ Disable specific categories:
 
 | Event | Measurements | Metadata |
 |-------|-------------|----------|
-| `[:ex_data_sketch, :sketch, :ingest]` | `duration`, `size_bytes` | `sketch_type` |
+| `[:ex_data_sketch, :sketch, :ingest]` | `duration`, `size_bytes` (HLL only) | `sketch_type` |
 | `[:ex_data_sketch, :sketch, :merge]` | `duration`, `merge_count` | `sketch_type` |
-| `[:ex_data_sketch, :sketch, :serialize]` | `duration`, `size_bytes` | `sketch_type` (HLL) |
-| `[:ex_data_sketch, :sketch, :deserialize]` | `duration`, `size_bytes` | `sketch_type` (HLL) |
+| `[:ex_data_sketch, :sketch, :serialize]` | `duration`, `size_bytes` | `sketch_type` |
+| `[:ex_data_sketch, :sketch, :deserialize]` | `duration`, `size_bytes` | `sketch_type` |
+
+> **Note:** The `:ingest` event's `size_bytes` measurement is only available
+> for HLL. All other sketch types emit `%{duration}` only. This is because
+> `from_enumerable/2` consumes a lazy stream and the item count is not
+> available without forcing evaluation.
 
 ### Persistence Events
 
@@ -51,19 +56,32 @@ Disable specific categories:
 | `[:ex_data_sketch, :persistence, :merge]` | `duration` | `sketch_type`, `backend`, `key` |
 | `[:ex_data_sketch, :persistence, :delete]` | `duration` | `backend`, `key` |
 
-### Pipeline Events
-
-| Event | Measurements | Metadata |
-|-------|-------------|----------|
-| `[:ex_data_sketch, :pipeline, :accumulate]` | `duration`, `size_bytes` | `sketch_type` |
-| `[:ex_data_sketch, :pipeline, :periodic_flush]` | `duration` | `sketch_type` |
+> **Note:** The `:delete` event does not include `sketch_type` because the
+> sketch struct is no longer available at deletion time. The `:load` event
+> does not include `size_bytes` because the binary size is only known after
+> deserialization completes.
 
 ### Stream Events
 
 | Event | Measurements | Metadata |
 |-------|-------------|----------|
-| `[:ex_data_sketch, :stream, :reduce]` | `duration` | `sketch_type` |
+| `[:ex_data_sketch, :stream, :reduce]` | (none) | `sketch_type` |
 | `[:ex_data_sketch, :stream, :partition_merge]` | `duration`, `partition_count` | `sketch_type` |
+
+> **Note:** The `:reduce` event is a completion signal emitted from
+> `Flow.on_trigger/2`. Because the reduce runs inside the Flow runtime, no
+> timing measurement is available.
+
+### Pipeline Events
+
+| Event | Measurements | Metadata |
+|-------|-------------|----------|
+| `[:ex_data_sketch, :pipeline, :accumulate]` | `duration`, `count` | `sketch_type`, `batch_size` |
+| `[:ex_data_sketch, :pipeline, :periodic_flush]` | `duration` | `sketch_type` |
+
+> **Note:** The `:periodic_flush` `duration` measures time since the
+> previous flush (or process start), not the time taken to perform the flush
+> itself.
 
 ### All Event Names
 

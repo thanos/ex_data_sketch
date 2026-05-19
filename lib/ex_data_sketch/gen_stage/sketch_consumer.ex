@@ -64,7 +64,8 @@ defmodule ExDataSketch.GenStage.SketchConsumer do
           key_fn: (term() -> term()),
           current: struct(),
           flush_callback: (struct() -> term()) | nil,
-          flush_interval: non_neg_integer() | :infinity
+          flush_interval: non_neg_integer() | :infinity,
+          last_flush_time: integer()
         }
 
   @doc """
@@ -186,7 +187,8 @@ defmodule ExDataSketch.GenStage.SketchConsumer do
        key_fn: key_fn,
        current: current,
        flush_callback: flush_callback,
-       flush_interval: flush_interval
+       flush_interval: flush_interval,
+       last_flush_time: System.monotonic_time()
      }, subscribe_to: subscribe_to}
   end
 
@@ -246,31 +248,43 @@ defmodule ExDataSketch.GenStage.SketchConsumer do
   def handle_call(:flush, _from, state) do
     flushed = state.current
     new_sketch = state.sketch_module.new(state.sketch_opts)
+    now = System.monotonic_time()
+    duration = now - state.last_flush_time
 
     :ok =
       Telemetry.execute(
         Telemetry.event_name(:pipeline, :periodic_flush),
-        %{duration: 0},
+        %{duration: duration},
         %{sketch_type: Telemetry.sketch_type(flushed)},
         :pipeline
       )
 
-    {:reply, flushed, [], %{state | current: new_sketch}}
+    {:reply, flushed, [], %{state | current: new_sketch, last_flush_time: now}}
   end
 
   @impl true
   def handle_info(:flush_tick, state) do
     flushed = state.current
     new_sketch = state.sketch_module.new(state.sketch_opts)
+    now = System.monotonic_time()
+    duration = now - state.last_flush_time
 
     if state.flush_callback do
       state.flush_callback.(flushed)
     end
 
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:pipeline, :periodic_flush),
+        %{duration: duration},
+        %{sketch_type: Telemetry.sketch_type(flushed)},
+        :pipeline
+      )
+
     if state.flush_interval != :infinity do
       Process.send_after(self(), :flush_tick, state.flush_interval)
     end
 
-    {:noreply, [], %{state | current: new_sketch}}
+    {:noreply, [], %{state | current: new_sketch, last_flush_time: now}}
   end
 end

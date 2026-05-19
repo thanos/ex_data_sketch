@@ -33,42 +33,59 @@ defmodule ExDataSketch.Telemetry do
 
   | Event | Measurements | Metadata |
   |-------|-------------|----------|
-  | `[:ex_data_sketch, :sketch, :create]` | `size_bytes` | `sketch_type` |
-  | `[:ex_data_sketch, :sketch, :ingest]` | `count`, `duration` | `sketch_type` |
+  | `[:ex_data_sketch, :sketch, :ingest]` | `duration`, `size_bytes` (HLL only) | `sketch_type` |
   | `[:ex_data_sketch, :sketch, :merge]` | `duration`, `merge_count` | `sketch_type` |
   | `[:ex_data_sketch, :sketch, :serialize]` | `duration`, `size_bytes` | `sketch_type` |
   | `[:ex_data_sketch, :sketch, :deserialize]` | `duration`, `size_bytes` | `sketch_type` |
+
+  > **Note on `:ingest` measurements:** All sketch types emit `duration`.
+  > Only HLL emits the additional `size_bytes` measurement via its result
+  > callback. Other sketch types emit `%{duration}` only. This is because
+  > `from_enumerable/2` consumes a lazy stream and the item count is not
+  > available without forcing evaluation.
 
   ### Persistence Events
 
   | Event | Measurements | Metadata |
   |-------|-------------|----------|
   | `[:ex_data_sketch, :persistence, :save]` | `duration`, `size_bytes` | `sketch_type`, `backend`, `key` |
-  | `[:ex_data_sketch, :persistence, :load]` | `duration`, `size_bytes` | `sketch_type`, `backend`, `key` |
+  | `[:ex_data_sketch, :persistence, :load]` | `duration` | `sketch_type`, `backend`, `key` |
   | `[:ex_data_sketch, :persistence, :merge]` | `duration` | `sketch_type`, `backend`, `key` |
-  | `[:ex_data_sketch, :persistence, :delete]` | `duration` | `sketch_type`, `backend`, `key` |
+  | `[:ex_data_sketch, :persistence, :delete]` | `duration` | `backend`, `key` |
+
+  > **Note on `:delete` metadata:** No `sketch_type` is available at deletion
+  > time because the sketch struct has already been discarded.
 
   ### Stream Events
 
   | Event | Measurements | Metadata |
   |-------|-------------|----------|
-  | `[:ex_data_sketch, :stream, :reduce]` | `duration`, `count` | `sketch_type` |
+  | `[:ex_data_sketch, :stream, :reduce]` | (none) | `sketch_type` |
   | `[:ex_data_sketch, :stream, :partition_merge]` | `duration`, `partition_count` | `sketch_type` |
+
+  > **Note on `:reduce` measurements:** The `Flow.reduce/3` integration emits
+  > this event as a completion signal from `Flow.on_trigger/2`. Because the
+  > reduce runs inside the Flow runtime, the timing is not accessible; the
+  > event carries no measurements beyond `sketch_type` in metadata.
 
   ### Pipeline Events
 
   | Event | Measurements | Metadata |
   |-------|-------------|----------|
   | `[:ex_data_sketch, :pipeline, :accumulate]` | `duration`, `count` | `sketch_type`, `batch_size` |
-  | `[:ex_data_sketch, :pipeline, :periodic_flush]` | `duration` | `sketch_type`, `pipeline_id` |
+  | `[:ex_data_sketch, :pipeline, :periodic_flush]` | `duration` | `sketch_type` |
+
+  > **Note on `:periodic_flush` duration:** The `duration` measurement
+  > represents the time elapsed since the previous flush (or since process
+  > start), not the time taken to perform the flush itself.
 
   ## Usage
 
   Users attach handlers via `:telemetry.attach/4`:
 
-      :telemetry.attach("my-handler", [:ex_data_sketch, :sketch, :ingest], fn _name, measurements, metadata, _config ->
-        Logger.info("Ingested \#{metadata.sketch_type}: \#{measurements.count} items in \#{measurements.duration} ns")
-      end, nil)
+       :telemetry.attach("my-handler", [:ex_data_sketch, :sketch, :ingest], fn _name, measurements, metadata, _config ->
+         Logger.info("Ingested \#{metadata.sketch_type}: \#{measurements.size_bytes} bytes in \#{measurements.duration} ns")
+       end, nil)
 
   Or use `ExDataSketch.Telemetry.OpenTelemetry.setup/0` to bridge to
   OpenTelemetry spans when the `:opentelemetry_api` dependency is available.
@@ -164,7 +181,7 @@ defmodule ExDataSketch.Telemetry do
 
   Similar to `span/5` but accepts a callback that receives the result and
   returns additional measurements to merge. This is useful when measurements
-  depend on the result (e.g., `count` from `from_enumerable/2`).
+  depend on the result (e.g., `size_bytes` from `HLL.from_enumerable/2`).
 
   ## Arguments
 
@@ -184,7 +201,7 @@ defmodule ExDataSketch.Telemetry do
         %{sketch_type: :hll},
         :sketch,
         fn -> ExDataSketch.HLL.from_enumerable(items, p: 14) end,
-        fn sketch -> %{count: length(items), size_bytes: ExDataSketch.HLL.size_bytes(sketch)} end
+        fn sketch -> %{size_bytes: ExDataSketch.HLL.size_bytes(sketch)} end
       )
 
   """
@@ -312,7 +329,7 @@ defmodule ExDataSketch.Telemetry do
   @spec all_event_names() :: [event_name()]
   def all_event_names do
     sketch_events =
-      for action <- [:create, :ingest, :merge, :serialize, :deserialize] do
+      for action <- [:ingest, :merge, :serialize, :deserialize] do
         event_name(:sketch, action)
       end
 
