@@ -51,11 +51,37 @@ Disable specific categories:
 | `[:ex_data_sketch, :persistence, :merge]` | `duration` | `sketch_type`, `backend`, `key` |
 | `[:ex_data_sketch, :persistence, :delete]` | `duration` | `backend`, `key` |
 
+### Pipeline Events
+
+| Event | Measurements | Metadata |
+|-------|-------------|----------|
+| `[:ex_data_sketch, :pipeline, :accumulate]` | `duration`, `size_bytes` | `sketch_type` |
+| `[:ex_data_sketch, :pipeline, :periodic_flush]` | `duration` | `sketch_type` |
+
 ### Stream Events
 
 | Event | Measurements | Metadata |
 |-------|-------------|----------|
+| `[:ex_data_sketch, :stream, :reduce]` | `duration` | `sketch_type` |
 | `[:ex_data_sketch, :stream, :partition_merge]` | `duration`, `partition_count` | `sketch_type` |
+
+### All Event Names
+
+To get a list of all event names programmatically:
+
+    ExDataSketch.Telemetry.all_event_names()
+    # => [[:ex_data_sketch, :sketch, :ingest],
+    #     [:ex_data_sketch, :sketch, :merge],
+    #     [:ex_data_sketch, :sketch, :serialize],
+    #     [:ex_data_sketch, :sketch, :deserialize],
+    #     [:ex_data_sketch, :persistence, :save],
+    #     [:ex_data_sketch, :persistence, :load],
+    #     [:ex_data_sketch, :persistence, :merge],
+    #     [:ex_data_sketch, :persistence, :delete],
+    #     [:ex_data_sketch, :stream, :reduce],
+    #     [:ex_data_sketch, :stream, :partition_merge],
+    #     [:ex_data_sketch, :pipeline, :accumulate],
+    #     [:ex_data_sketch, :pipeline, :periodic_flush]]
 
 ## Attaching Handlers
 
