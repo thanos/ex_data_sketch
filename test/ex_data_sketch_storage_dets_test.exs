@@ -4,7 +4,9 @@ defmodule ExDataSketch.Storage.DETSTest do
   alias ExDataSketch.Storage.DETS
 
   setup do
-    table = :"dets_test_#{System.unique_integer([:positive])}"
+    temp_dir = System.tmp_dir!()
+    temp_file = Path.join(temp_dir, "dets_test_#{System.system_time()}")
+    table = :"#{temp_file}"
     {:ok, _} = :dets.open_file(table, type: :set)
     on_exit(fn -> :dets.close(table) end)
     %{table: table}

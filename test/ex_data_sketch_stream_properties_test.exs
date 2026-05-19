@@ -133,4 +133,83 @@ defmodule ExDataSketch.StreamPropertiesTest do
       assert ExDataSketch.CMS.estimate(partitioned, test_item) >= 1
     end
   end
+
+  property "ULL: Stream.ull/2 matches ULL.from_enumerable/2" do
+    check all(items <- string_list(1, 10, 10, 200)) do
+      stream_sketch = S.ull(items, p: 12)
+      direct_sketch = ExDataSketch.ULL.from_enumerable(items, p: 12)
+
+      stream_est = ExDataSketch.ULL.estimate(stream_sketch)
+      direct_est = ExDataSketch.ULL.estimate(direct_sketch)
+
+      assert_in_delta stream_est, direct_est, 0.01
+    end
+  end
+
+  property "ULL: reduce_partitioned/3 approximates from_enumerable/2" do
+    check all(items <- string_list(1, 10, 50, 300)) do
+      single = ExDataSketch.ULL.from_enumerable(items, p: 12)
+      partitioned = S.reduce_partitioned(items, ExDataSketch.ULL, partitions: 4, p: 12)
+
+      single_est = ExDataSketch.ULL.estimate(single)
+      part_est = ExDataSketch.ULL.estimate(partitioned)
+
+      if single_est > 0 do
+        rel_error = abs(single_est - part_est) / max(1.0, single_est)
+        assert rel_error < 0.10
+      end
+    end
+  end
+
+  property "ULL: merge associativity holds across partitioned streams" do
+    check all(items <- string_list(1, 10, 50, 300)) do
+      third = div(length(items), 3)
+      {a_items, rest} = Enum.split(items, third)
+      {b_items, c_items} = Enum.split(rest, third)
+
+      s1 = ExDataSketch.ULL.from_enumerable(a_items, p: 12)
+      s2 = ExDataSketch.ULL.from_enumerable(b_items, p: 12)
+      s3 = ExDataSketch.ULL.from_enumerable(c_items, p: 12)
+
+      left = ExDataSketch.ULL.merge(ExDataSketch.ULL.merge(s1, s2), s3)
+      right = ExDataSketch.ULL.merge(s1, ExDataSketch.ULL.merge(s2, s3))
+
+      assert_in_delta ExDataSketch.ULL.estimate(left), ExDataSketch.ULL.estimate(right), 0.01
+    end
+  end
+
+  property "Theta: Stream.theta/2 matches Theta.from_enumerable/2" do
+    check all(items <- string_list(1, 10, 10, 200)) do
+      stream_sketch = S.theta(items, delta: 0.01)
+      direct_sketch = ExDataSketch.Theta.from_enumerable(items, delta: 0.01)
+
+      stream_est = ExDataSketch.Theta.estimate(stream_sketch)
+      direct_est = ExDataSketch.Theta.estimate(direct_sketch)
+
+      if direct_est > 0 do
+        rel_error = abs(stream_est - direct_est) / max(1.0, direct_est)
+        assert rel_error < 0.10
+      end
+    end
+  end
+
+  property "CMS: merge associativity holds" do
+    check all(items <- string_list(1, 5, 20, 200)) do
+      third = div(length(items), 3)
+      {a_items, rest} = Enum.split(items, third)
+      {b_items, c_items} = Enum.split(rest, third)
+
+      s1 = ExDataSketch.CMS.from_enumerable(a_items, width: 128, depth: 3)
+      s2 = ExDataSketch.CMS.from_enumerable(b_items, width: 128, depth: 3)
+      s3 = ExDataSketch.CMS.from_enumerable(c_items, width: 128, depth: 3)
+
+      left = ExDataSketch.CMS.merge(ExDataSketch.CMS.merge(s1, s2), s3)
+      right = ExDataSketch.CMS.merge(s1, ExDataSketch.CMS.merge(s2, s3))
+
+      test_item = Enum.random(items)
+
+      assert ExDataSketch.CMS.estimate(left, test_item) ==
+               ExDataSketch.CMS.estimate(right, test_item)
+    end
+  end
 end
