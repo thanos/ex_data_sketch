@@ -79,6 +79,9 @@ defmodule ExDataSketch.ULL do
 
   - `:p` - precision parameter, integer 4..26 (default: 14)
   - `:backend` - backend module (default: `ExDataSketch.Backend.Pure`)
+  - `:update_many_chunk_size` - chunk size for `update_many/2` internal
+    batching (default: 10000). Must be set at creation time; cannot be
+    overridden on a per-call basis.
 
   ## Merge Properties
 
@@ -135,7 +138,11 @@ defmodule ExDataSketch.ULL do
     clean_opts =
       [p: p, hash_strategy: hash_strategy] ++
         if(hash_fn, do: [hash_fn: hash_fn], else: []) ++
-        if(seed, do: [seed: seed], else: [])
+        if(seed, do: [seed: seed], else: []) ++
+        if(Keyword.has_key?(opts, :update_many_chunk_size),
+          do: [update_many_chunk_size: Keyword.fetch!(opts, :update_many_chunk_size)],
+          else: []
+        )
 
     state = backend.ull_new(clean_opts)
     %__MODULE__{state: state, opts: clean_opts, backend: backend}
@@ -166,6 +173,9 @@ defmodule ExDataSketch.ULL do
 
   More efficient than calling `update/2` repeatedly because it minimizes
   intermediate binary allocations.
+
+  The internal batch size is controlled by `:update_many_chunk_size`,
+  which must be set at `new/1` time and cannot be changed per call.
 
   ## Examples
 

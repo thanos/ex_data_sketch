@@ -76,6 +76,9 @@ defmodule ExDataSketch.Theta do
   - `:backend` - backend module (default: `ExDataSketch.Backend.Pure`).
   - `:hash_fn` - custom hash function `(term -> non_neg_integer)`.
   - `:seed` - hash seed (default: 0).
+  - `:update_many_chunk_size` - chunk size for `update_many/2` internal
+    batching (default: 10000). Must be set at creation time; cannot be
+    overridden on a per-call basis.
 
   ## Examples
 
@@ -99,7 +102,11 @@ defmodule ExDataSketch.Theta do
     clean_opts =
       [k: k, hash_strategy: hash_strategy] ++
         if(hash_fn, do: [hash_fn: hash_fn], else: []) ++
-        if(seed, do: [seed: seed], else: [])
+        if(seed, do: [seed: seed], else: []) ++
+        if(Keyword.has_key?(opts, :update_many_chunk_size),
+          do: [update_many_chunk_size: Keyword.fetch!(opts, :update_many_chunk_size)],
+          else: []
+        )
 
     state = backend.theta_new(clean_opts)
     %__MODULE__{state: state, opts: clean_opts, backend: backend}
@@ -130,6 +137,9 @@ defmodule ExDataSketch.Theta do
 
   More efficient than calling `update/2` repeatedly because it minimizes
   intermediate binary allocations.
+
+  The internal batch size is controlled by `:update_many_chunk_size`,
+  which must be set at `new/1` time and cannot be changed per call.
 
   ## Examples
 

@@ -117,13 +117,20 @@ defmodule ExDataSketch.HLLTest do
         assert HLL.update_many(sketch, []).state == sketch.state
       end
 
-      test "works with custom hash_fn" do
-        hash_fn = fn term -> :erlang.phash2(term, 1 <<< 32) end
-        sketch = HLL.new(p: 10, hash_fn: hash_fn, backend: @backend)
-        sketch = HLL.update_many(sketch, ["a", "b", "c"])
-        assert HLL.estimate(sketch) > 0.0
-      end
-    end
+test "works with custom hash_fn" do
+         hash_fn = fn term -> :erlang.phash2(term, 1 <<< 32) end
+         sketch = HLL.new(p: 10, hash_fn: hash_fn, backend: @backend)
+         sketch = HLL.update_many(sketch, ["a", "b", "c"])
+         assert HLL.estimate(sketch) > 0.0
+       end
+
+       test "update_many_chunk_size respects creation-time option" do
+         items = Enum.map(1..5000, &"item_#{&1}")
+         default = HLL.new(p: 14, backend: @backend) |> HLL.update_many(items)
+         chunked = HLL.new(p: 14, update_many_chunk_size: 5, backend: @backend) |> HLL.update_many(items)
+         assert_in_delta HLL.estimate(default), HLL.estimate(chunked), 0.01 * 5000
+       end
+     end
 
     describe "estimate/1 [#{backend_name}]" do
       test "empty sketch estimates 0.0" do

@@ -123,6 +123,13 @@ defmodule ExDataSketch.ULLTest do
         sketch = ULL.update_many(sketch, ["a", "b", "c"])
         assert ULL.estimate(sketch) > 0.0
       end
+
+      test "update_many_chunk_size respects creation-time option" do
+        items = Enum.map(1..5000, &"item_#{&1}")
+        default = ULL.new(p: 14, backend: @backend) |> ULL.update_many(items)
+        chunked = ULL.new(p: 14, update_many_chunk_size: 5, backend: @backend) |> ULL.update_many(items)
+        assert_in_delta ULL.estimate(default), ULL.estimate(chunked), 0.01 * 5000
+      end
     end
 
     describe "estimate/1 [#{backend_name}]" do

@@ -44,6 +44,9 @@ defmodule ExDataSketch.CMS do
   - `:depth` - number of rows (hash functions), pos_integer (default: 5).
   - `:counter_width` - bits per counter, 32 or 64 (default: 32).
   - `:backend` - backend module (default: `ExDataSketch.Backend.Pure`).
+  - `:update_many_chunk_size` - chunk size for `update_many/2` internal
+    batching (default: 10000). Must be set at creation time; cannot be
+    overridden on a per-call basis.
 
   ## Overflow Policy
 
@@ -110,7 +113,11 @@ defmodule ExDataSketch.CMS do
     clean_opts =
       [width: width, depth: depth, counter_width: counter_width, hash_strategy: hash_strategy] ++
         if(hash_fn, do: [hash_fn: hash_fn], else: []) ++
-        if(seed, do: [seed: seed], else: [])
+        if(seed, do: [seed: seed], else: []) ++
+        if(Keyword.has_key?(opts, :update_many_chunk_size),
+          do: [update_many_chunk_size: Keyword.fetch!(opts, :update_many_chunk_size)],
+          else: []
+        )
 
     state = backend.cms_new(clean_opts)
     %__MODULE__{state: state, opts: clean_opts, backend: backend}
@@ -152,6 +159,9 @@ defmodule ExDataSketch.CMS do
 
   Accepts an enumerable of items (each with implicit increment of 1) or
   an enumerable of `{item, increment}` tuples.
+
+  The internal batch size is controlled by `:update_many_chunk_size`,
+  which must be set at `new/1` time and cannot be changed per call.
 
   ## Examples
 
