@@ -239,6 +239,29 @@ defmodule ExDataSketch.Binary do
   end
 
   @doc """
+  Encodes a sketch into an EXSK v1 (legacy) frame.
+
+  This function produces a v1 EXSK frame suitable for v0.7.x readers
+  that do not understand v2 frames. It is intended for use during
+  rolling upgrades where producers write v1 while consumers migrate
+  to v0.8.0+.
+
+  The v1 format excludes the metadata block, family version, flags, and
+  CRC32C trailer present in v2 frames. It is only valid for sketches
+  using the `:phash2` hash strategy (the v0.7.x default).
+
+  ## Examples
+
+      iex> ExDataSketch.Binary.encode_v1(1, 1, <<14>>, <<0, 0>>)
+      <<"EXSK", 1, 1, 1, 0, 0, 0, 14, 2, 0, 0, 0, 0, 0>>
+
+  """
+  @spec encode_v1(Codec.sketch_id(), non_neg_integer(), binary(), binary()) :: binary()
+  def encode_v1(sketch_id, version, params, state) do
+    Codec.encode(sketch_id, version, params, state)
+  end
+
+  @doc """
   Builds the sketch payload for an EXSK v2 frame.
 
   This is the inverse of the internal `split_v2_payload/1` used by

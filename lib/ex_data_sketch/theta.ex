@@ -51,7 +51,7 @@ defmodule ExDataSketch.Theta do
 
   import Bitwise, only: [<<<: 2, &&&: 2]
 
-  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash}
+  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash, Telemetry}
   alias ExDataSketch.DataSketches.CompactSketch
 
   @type t :: %__MODULE__{
@@ -139,13 +139,15 @@ defmodule ExDataSketch.Theta do
 
   """
   @spec update_many(t(), Enumerable.t()) :: t()
-  @update_many_chunk_size 10_000
+  @default_update_many_chunk_size 10_000
 
   def update_many(%__MODULE__{opts: opts, backend: backend} = sketch, items)
       when backend == Backend.Pure do
+    chunk_size = Keyword.get(opts, :update_many_chunk_size, @default_update_many_chunk_size)
+
     new_state =
       items
-      |> Stream.chunk_every(@update_many_chunk_size)
+      |> Stream.chunk_every(chunk_size)
       |> Enum.reduce(sketch.state, fn chunk, state_acc ->
         hashes = Enum.map(chunk, &hash_item(&1, opts))
         backend.theta_update_many(state_acc, hashes, opts)
@@ -155,13 +157,15 @@ defmodule ExDataSketch.Theta do
   end
 
   def update_many(%__MODULE__{opts: opts, backend: backend} = sketch, items) do
+    chunk_size = Keyword.get(opts, :update_many_chunk_size, @default_update_many_chunk_size)
+
     use_raw =
       backend == Backend.Rust and Keyword.get(opts, :hash_fn) == nil and
         Keyword.get(opts, :hash_strategy) != :phash2
 
     new_state =
       items
-      |> Stream.chunk_every(@update_many_chunk_size)
+      |> Stream.chunk_every(chunk_size)
       |> Enum.reduce(sketch.state, fn chunk, state_acc ->
         if use_raw do
           Backend.Rust.theta_update_many_raw(state_acc, chunk, opts)
@@ -271,14 +275,26 @@ defmodule ExDataSketch.Theta do
   """
   @spec serialize(t()) :: binary()
   def serialize(%__MODULE__{state: state, opts: opts}) do
+    start_time = System.monotonic_time()
     k = Keyword.fetch!(opts, :k)
     hs = hash_strategy_byte(opts)
     params_bin = <<k::unsigned-little-32, hs::unsigned-8>>
 
-    Binary.encode(
-      Binary.metadata_from_opts(Codec.sketch_id_theta(), 1, opts),
-      Binary.build_payload(params_bin, state)
-    )
+    binary =
+      Binary.encode(
+        Binary.metadata_from_opts(Codec.sketch_id_theta(), 1, opts),
+        Binary.build_payload(params_bin, state)
+      )
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:sketch, :serialize),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: :theta},
+        :sketch
+      )
+
+    binary
   end
 
   @doc """
@@ -294,18 +310,31 @@ defmodule ExDataSketch.Theta do
   """
   @spec deserialize(binary()) :: {:ok, t()} | {:error, Exception.t()}
   def deserialize(binary) when is_binary(binary) do
-    with {:ok, decoded} <- Binary.decode(binary),
-         :ok <- validate_sketch_id(decoded.sketch_id),
-         {:ok, opts} <- decode_params(decoded.params) do
-      backend = Backend.default()
+    start_time = System.monotonic_time()
 
-      {:ok,
-       %__MODULE__{
-         state: decoded.state,
-         opts: opts,
-         backend: backend
-       }}
-    end
+    result =
+      with {:ok, decoded} <- Binary.decode(binary),
+           :ok <- validate_sketch_id(decoded.sketch_id),
+           {:ok, opts} <- decode_params(decoded.params) do
+        backend = Backend.default()
+
+        {:ok,
+         %__MODULE__{
+           state: decoded.state,
+           opts: opts,
+           backend: backend
+         }}
+      end
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:sketch, :deserialize),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: :theta},
+        :sketch
+      )
+
+    result
   end
 
   @doc """
@@ -379,7 +408,14 @@ defmodule ExDataSketch.Theta do
   """
   @spec from_enumerable(Enumerable.t(), keyword()) :: t()
   def from_enumerable(enumerable, opts \\ []) do
-    new(opts) |> update_many(enumerable)
+    Telemetry.span_with_result(
+      Telemetry.event_name(:sketch, :ingest),
+      %{},
+      %{sketch_type: :theta},
+      :sketch,
+      fn -> new(opts) |> update_many(enumerable) end,
+      fn _sketch -> %{} end
+    )
   end
 
   @doc """
@@ -398,7 +434,13 @@ defmodule ExDataSketch.Theta do
   """
   @spec merge_many(Enumerable.t()) :: t()
   def merge_many(sketches) do
-    Enum.reduce(sketches, fn sketch, acc -> merge(acc, sketch) end)
+    Telemetry.span(
+      Telemetry.event_name(:sketch, :merge),
+      %{merge_count: Enum.count(sketches)},
+      %{sketch_type: :theta},
+      :sketch,
+      fn -> Enum.reduce(sketches, fn sketch, acc -> merge(acc, sketch) end) end
+    )
   end
 
   @doc """

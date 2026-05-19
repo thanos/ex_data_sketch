@@ -1,7 +1,7 @@
 defmodule ExDataSketch.MixProject do
   use Mix.Project
 
-  @version "0.8.0"
+  @version "0.9.0"
   @source_url "https://github.com/thanos/ex_data_sketch"
 
   def project do
@@ -28,7 +28,7 @@ defmodule ExDataSketch.MixProject do
       # Dialyzer
       dialyzer: [
         plt_file: {:no_warn, "priv/plts/dialyzer.plt"},
-        plt_add_apps: [:mix, :ex_unit]
+        plt_add_apps: [:mix, :ex_unit, :mnesia, :cubdb, :ecto_sql]
       ]
     ]
   end
@@ -48,7 +48,7 @@ defmodule ExDataSketch.MixProject do
 
   def application do
     [
-      extra_applications: [:logger]
+      extra_applications: [:logger, :mnesia]
     ]
   end
 
@@ -68,7 +68,13 @@ defmodule ExDataSketch.MixProject do
       {:jason, "~> 1.4"},
       {:excoveralls, "~> 0.18", only: :test, runtime: false},
       {:mox, "~> 1.0", only: :test},
-      {:ex_slop, "~> 0.1", only: [:dev, :test], runtime: false}
+      {:ex_slop, "~> 0.1", only: [:dev, :test], runtime: false},
+      {:telemetry, "~> 1.0"},
+      {:opentelemetry_api, "~> 1.0", optional: true},
+      {:broadway, "~> 1.0", optional: true},
+      {:flow, "~> 1.2", optional: true},
+      {:cubdb, "~> 2.0", optional: true},
+      {:ecto_sql, "~> 3.0", optional: true}
     ]
   end
 
@@ -105,6 +111,16 @@ defmodule ExDataSketch.MixProject do
         "guides/quick_start.md",
         "guides/usage_guide.md",
         "guides/integrations.md",
+        "guides/streaming_sketches.md",
+        "guides/broadway_integration.md",
+        "guides/genstage_integration.md",
+        "guides/flow_integration.md",
+        "guides/persistence.md",
+        "guides/telemetry.md",
+        "guides/observability.md",
+        "guides/aggregation_wall.md",
+        "guides/distributed_merge_semantics.md",
+        "guides/livebooks.md",
         "guides/hash_strategies.md",
         "guides/hll_performance.md",
         "guides/precompiled_nifs.md",
@@ -138,12 +154,36 @@ defmodule ExDataSketch.MixProject do
           ExDataSketch.ULL,
           ExDataSketch.Quantiles
         ],
+        "Stream Integration": [
+          ExDataSketch.Stream
+        ],
+        "Dataflow Integration": [
+          ExDataSketch.Broadway,
+          ExDataSketch.Broadway.PeriodicAggregator,
+          ExDataSketch.GenStage,
+          ExDataSketch.GenStage.SketchConsumer,
+          ExDataSketch.GenStage.SketchProducer,
+          ExDataSketch.GenStage.SketchStage,
+          ExDataSketch.Flow
+        ],
+        Persistence: [
+          ExDataSketch.Storage,
+          ExDataSketch.Storage.ETS,
+          ExDataSketch.Storage.DETS,
+          ExDataSketch.Storage.CubDB,
+          ExDataSketch.Storage.Mnesia,
+          ExDataSketch.Storage.Ecto,
+          ExDataSketch.Storage.Ecto.Schema,
+          ExDataSketch.Storage.Ecto.Migration
+        ],
         Infrastructure: [
           ExDataSketch.Hash,
           ExDataSketch.Codec,
           ExDataSketch.Backend,
           ExDataSketch.Backend.Pure,
-          ExDataSketch.Backend.Rust
+          ExDataSketch.Backend.Rust,
+          ExDataSketch.Telemetry,
+          ExDataSketch.Telemetry.OpenTelemetry
         ],
         Errors: [
           ExDataSketch.Errors
@@ -176,7 +216,8 @@ defmodule ExDataSketch.MixProject do
         "run bench/req_bench.exs",
         "run bench/misra_gries_bench.exs",
         "run bench/ull_bench.exs",
-        "run bench/xxhash3_bench.exs"
+        "run bench/xxhash3_bench.exs",
+        "run bench/stream_ingestion_bench.exs"
       ],
       # Switching between NIF-on and NIF-off modes locally requires cleaning
       # rustler_precompiled's per-env compiled config (which captures the

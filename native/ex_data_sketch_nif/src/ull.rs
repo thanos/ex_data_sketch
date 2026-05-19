@@ -199,10 +199,20 @@ fn ull_estimate_impl<'a>(env: Env<'a>, state_bin: Binary, p: u8) -> Term<'a> {
 
     z += m_f * sigma(c0 / m_f);
 
-    let estimate = if z == 0.0 {
+    let raw_estimate = if z == 0.0 {
         0.0
     } else {
         alpha_inf * m_f * m_f / z
+    };
+
+    let zeros = counts[0] as f64;
+
+    let estimate = if zeros > 0.0 {
+        m_f * (m_f / zeros).ln()
+    } else if raw_estimate > (0x100000000000000u64 as f64) / 30.0 {
+        -(0x10000000000000000u128 as f64) * (1.0 - raw_estimate / (0x10000000000000000u128 as f64)).ln()
+    } else {
+        raw_estimate
     };
 
     error::ok_float(env, estimate)

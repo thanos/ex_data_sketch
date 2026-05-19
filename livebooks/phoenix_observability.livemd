@@ -1,0 +1,264 @@
+<!-- livebook:{"app_settings":{"auto_dependency_loading":true}} -->
+
+# Phoenix Observability Use Cases
+
+```elixir
+Mix.install([
+  {:ex_data_sketch, "~> 0.9.0"}
+])
+```
+
+## Introduction
+
+Phoenix applications need real-time observability: distinct active users,
+request latency distributions, endpoint cardinality, and membership checks
+for rate limiting. ExDataSketch provides bounded-memory data structures
+that answer these questions without storing every event.
+
+This Livebook demonstrates Phoenix-specific observability patterns using
+ExDataSketch.
+
+## Section 1: Active Users Per Endpoint
+
+Track how many distinct users hit each endpoint using HLL:
+
+```elixir
+# Simulate 100K requests across 5 endpoints from 5000 unique users
+endpoints = ["/api/users", "/api/orders", "/api/products", "/api/search", "/api/health"]
+
+requests = for i <- 1..100_000 do
+  endpoint = Enum.at(endpoints, rem(i, length(endpoints)))
+  user_id = "user_#{rem(i, 5000)}"
+  latency_ms = 10 + :rand.uniform(490)
+  %{endpoint: endpoint, user_id: user_id, latency_ms: latency_ms}
+end
+
+# Build HLL per endpoint
+endpoint_sketches = endpoints
+  |> Enum.map(fn ep ->
+    users = requests
+      |> Enum.filter(&(&1.endpoint == ep))
+      |> Enum.map(& &1.user_id)
+    sketch = ExDataSketch.HLL.from_enumerable(users, p: 12)
+    {ep, sketch}
+  end)
+  |> Map.new()
+
+IO.puts("Distinct users per endpoint:")
+for {ep, sketch} <- endpoint_sketches do
+  IO.puts("  #{ep}: #{Float.round(ExDataSketch.HLL.estimate(sketch), 0)} unique users")
+end
+
+total_memory = endpoint_sketches
+  |> Map.values()
+  |> Enum.map(&ExDataSketch.HLL.size_bytes/1)
+  |> Enum.sum()
+IO.puts("\nTotal memory: #{total_memory} bytes (~#{Float.round(total_memory/1024, 1)} KB)")
+```
+
+## Section 2: Request Latency Distribution
+
+Monitor p50/p90/p99 latencies using REQ (Random Ensemble Quantiles):
+
+```elixir
+# Track latency distribution per endpoint
+latency_sketches = endpoints
+  |> Enum.map(fn ep ->
+    latencies = requests
+      |> Enum.filter(&(&1.endpoint == ep))
+      |> Enum.map(& &1.latency_ms)
+    sketch = ExDataSketch.REQ.from_enumerable(latencies, k: 200)
+    {ep, sketch}
+  end)
+  |> Map.new()
+
+IO.puts("Latency distribution per endpoint:")
+for {ep, sketch} <- latency_sketches do
+  p50 = ExDataSketch.REQ.quantile(sketch, 0.50)
+  p90 = ExDataSketch.REQ.quantile(sketch, 0.90)
+  p99 = ExDataSketch.REQ.quantile(sketch, 0.99)
+  IO.puts("  #{ep}: p50=#{Float.round(p50, 1)}ms, p90=#{Float.round(p90, 1)}ms, p99=#{Float.round(p99, 1)}ms")
+end
+```
+
+## Section 3: Rate Limiting with Theta Sketch
+
+Theta sketches provide set difference operations useful for detecting
+anomalous request patterns:
+
+```elixir
+# Normal traffic baseline
+normal_users = ExDataSketch.Theta.from_enumerable(
+  Stream.map(1..10_000, fn i -> "user_#{i}" end),
+  k: 4096
+)
+
+# Current traffic
+current_users = ExDataSketch.Theta.from_enumerable(
+  Stream.map(1..15_000, fn i -> "user_#{i + 5000}" end),
+  k: 4096
+)
+
+# Estimate how many current users are NEW (not in baseline)
+# Using Jaccard-like comparison via merge
+merged = ExDataSketch.Theta.merge(normal_users, current_users)
+normal_estimate = ExDataSketch.Theta.estimate(normal_users)
+current_estimate = ExDataSketch.Theta.estimate(current_users)
+merged_estimate = ExDataSketch.Theta.estimate(merged)
+
+# Approximate intersection: a + b - merge
+intersection_estimate = normal_estimate + current_estimate - merged_estimate
+new_users_estimate = current_estimate - intersection_estimate
+
+IO.puts("Normal baseline: #{Float.round(normal_estimate, 0)} users")
+IO.puts("Current traffic: #{Float.round(current_estimate, 0)} users")
+IO.puts("Merged total: #{Float.round(merged_estimate, 0)} users")
+IO.puts("Estimated NEW users: #{Float.round(max(new_users_estimate, 0), 0)}")
+```
+
+## Section 4: Telemetry Wiring in Phoenix
+
+Wire ExDataSketch telemetry into Phoenix's telemetry pipeline:
+
+```elixir
+# Pattern for Phoenix application telemetry.ex
+# This attaches ExDataSketch events to your metrics pipeline
+
+# Simulate what a Phoenix app's telemetry setup would look like
+handlers = ExDataSketch.Telemetry.all_event_names()
+  |> Enum.map(fn event_name ->
+    handler_id = {"phoenix_metrics", event_name}
+    :telemetry.attach(handler_id, event_name, fn name, measurements, metadata, _config ->
+      # In a real Phoenix app, this would go to Telemetry.Metrics -> LiveDashboard
+      # Here we just log it
+      IO.puts("[METRIC] #{inspect(name)} #{inspect(measurements)} #{inspect(metadata)}")
+    end, nil)
+    handler_id
+  end)
+
+# Trigger some telemetry events by doing sketch operations
+sketch = ExDataSketch.HLL.from_enumerable(1..1000, p: 10)
+
+# Cleanup
+for handler_id <- handlers do
+  :telemetry.detach(handler_id)
+end
+```
+
+## Section 5: Persistence for Cross-Request State
+
+Store rolling sketches in ETS for access across Phoenix requests:
+
+```elixir
+# In a Phoenix app, the ETS table would be created in application.ex
+table = :ets.new(:phoenix_sketches, [:set, :public])
+
+# Simulate periodic save from a request handler
+daily_hll = ExDataSketch.HLL.from_enumerable(1..5000, p: 14)
+:ok = ExDataSketch.Storage.ETS.save(daily_hll, table, "daily_active_users:2024-01-15")
+
+# Simulate a merge from a new batch of requests
+new_batch = ExDataSketch.HLL.from_enumerable(5001..8000, p: 14)
+:ok = ExDataSketch.Storage.ETS.merge(new_batch, table, "daily_active_users:2024-01-15")
+
+# Read it back from any process (any Phoenix request handler)
+{:ok, current} = ExDataSketch.Storage.ETS.load(ExDataSketch.HLL, table, "daily_active_users:2024-01-15")
+IO.puts("Current DAU estimate: #{Float.round(ExDataSketch.HLL.estimate(current), 0)}")
+
+# Also track latency percentiles
+latency_req = ExDataSketch.REQ.from_enumerable(
+  Stream.map(1..10_000, fn _ -> 10 + :rand.uniform(990) end),
+  k: 200
+)
+:ok = ExDataSketch.Storage.ETS.save(latency_req, table, "latency_p50:2024-01-15")
+
+cleanup = :ets.delete(table)
+```
+
+## Section 6: Operational Architecture
+
+```elixir
+# In a Phoenix application, the typical architecture is:
+#
+# 1. Request comes in -> plug extracts user_id, endpoint, latency
+# 2. PeriodicAggregator accumulates sketch updates
+# 3. Every N seconds, aggregator flushes to:
+#    - ETS for real-time reading
+#    - Telemetry events for dashboard
+#    - DETS or Ecto for persistence
+#
+# Example plug:
+#
+#   defmodule MyAppWeb.SketchPlug do
+#     def call(conn, _opts) do
+#       sketch_key = "endpoint:#{conn.path_info |> Enum.join("/")}"
+#       user = conn.assigns.current_user_id
+#
+#       # This would be done via a GenServer (PeriodicAggregator)
+#       # that accumulates updates and flushes periodically
+#       sketch = ExDataSketch.HLL.update(sketch, user)
+#
+#       conn
+#     end
+#   end
+#
+# Example GenServer for periodic aggregation:
+#
+#   defmodule MyApp.SketchAggregator do
+#     use GenServer
+#
+#     def init(opts) do
+#       schedule_flush()
+#       {:ok, %{hll: ExDataSketch.HLL.new(p: 14), table: opts[:table]}}
+#     end
+#
+#     def handle_info(:flush, state) do
+#       ExDataSketch.Storage.ETS.merge(state.hll, state.table, "dau")
+#       estimate = ExDataSketch.HLL.estimate(state.hll)
+#       :telemetry.execute([:my_app, :dau], %{estimate: estimate})
+#       schedule_flush()
+#       {:noreply, %{state | hll: ExDataSketch.HLL.new(p: 14)}}
+#     end
+#   end
+
+IO.puts("See comments above for Phoenix plug and GenServer patterns")
+IO.puts("\nKey insight: sketches are O(2^p) bytes regardless of traffic volume.")
+IO.puts("At p=14, tracking 1M daily active users uses just 16KB.")
+```
+
+## Section 7: Memory Comparison
+
+```elixir
+# Compare exact vs. sketch-based memory for Phoenix observability
+exact_dau = MapSet.new(Enum.take(Stream.map(1..100_000, fn i -> "user_#{rem(i, 5000)}" end), 100_000))
+sketch_daup = ExDataSketch.HLL.from_enumerable(
+  Stream.map(1..100_000, fn i -> "user_#{rem(i, 5000)}" end),
+  p: 14
+)
+
+exact_bytes = :erlang.term_to_binary(exact_daup) |> byte_size()
+sketch_bytes = ExDataSketch.HLL.size_bytes(sketch_daup)
+
+IO.puts("=== Memory Comparison for 100K requests, 5K unique users ===")
+IO.puts("  MapSet (exact):   #{exact_bytes} bytes (~#{Float.round(exact_bytes / 1024, 1)} KB)")
+IO.puts("  HLL p=14:         #{sketch_bytes} bytes (~#{Float.round(sketch_bytes / 1024, 1)} KB)")
+IO.puts("  Compression:      #{Float.round(100 * (1 - sketch_bytes / exact_bytes), 1)}%")
+IO.puts("  Accuracy:         #{Float.round(ExDataSketch.HLL.estimate(sketch_daup), 0)} vs #{MapSet.size(exact_daup)} true")
+```
+
+## Section 8: Operational Guidance
+
+**Recommended sketch configurations for Phoenix**:
+
+| Metric | Sketch | Config | Memory | Error |
+|--------|--------|--------|--------|-------|
+| Daily Active Users | HLL | p=14 | 16KB | <1% |
+| Unique sessions/endpoint | ULL | p=12 | 4KB | <2% |
+| Request latency p50/p90/p99 | REQ | k=200 | ~2KB | <1% at p90 |
+| Top-K endpoints | MisraGries | k=20 | ~1KB | heavy hitters |
+| Per-endpoint request count | CMS | w=256,d=5 | ~1.3KB | <3% over |
+| Prompt/content dedup | Bloom | cap=1M | ~1.2MB | <1% FP |
+| Anomaly detection (set diff) | Theta | k=4096 | ~32KB | ~1.5% |
+
+**Update pattern**: Use `PeriodicAggregator` or `SketchConsumer` to batch
+updates in-process, then flush to ETS + telemetry every 1-60 seconds.
