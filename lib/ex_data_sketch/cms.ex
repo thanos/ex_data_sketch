@@ -418,7 +418,7 @@ defmodule ExDataSketch.CMS do
       %{sketch_type: :cms},
       :sketch,
       fn -> new(opts) |> update_many(enumerable) end,
-      fn _sketch -> %{} end
+      fn sketch -> %{size_bytes: size_bytes(sketch)} end
     )
   end
 

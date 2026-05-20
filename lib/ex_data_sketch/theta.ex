@@ -424,7 +424,7 @@ defmodule ExDataSketch.Theta do
       %{sketch_type: :theta},
       :sketch,
       fn -> new(opts) |> update_many(enumerable) end,
-      fn _sketch -> %{} end
+      fn sketch -> %{size_bytes: size_bytes(sketch)} end
     )
   end
 

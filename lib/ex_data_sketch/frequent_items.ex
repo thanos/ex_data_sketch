@@ -234,6 +234,19 @@ defmodule ExDataSketch.FrequentItems do
   end
 
   @doc """
+  Returns the size of the sketch state in bytes.
+
+  ## Examples
+
+      iex> sketch = ExDataSketch.FrequentItems.new(k: 10) |> ExDataSketch.FrequentItems.update_many(["a", "b"])
+      iex> ExDataSketch.FrequentItems.size_bytes(sketch) > 0
+      true
+
+  """
+  @spec size_bytes(t()) :: non_neg_integer()
+  def size_bytes(%__MODULE__{state: state}), do: byte_size(state)
+
+  @doc """
   Returns the frequency estimate for a given item.
 
   Returns `{:ok, estimate_map}` if the item is tracked, where `estimate_map`
@@ -428,7 +441,7 @@ defmodule ExDataSketch.FrequentItems do
       %{sketch_type: :frequent_items},
       :sketch,
       fn -> new(opts) |> update_many(enumerable) end,
-      fn _sketch -> %{} end
+      fn sketch -> %{size_bytes: size_bytes(sketch)} end
     )
   end
 

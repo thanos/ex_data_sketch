@@ -254,11 +254,5 @@ defmodule ExDataSketch.Storage.DETS do
     result
   end
 
-  defp sketch_type_from_module(module) do
-    module
-    |> Module.split()
-    |> List.last()
-    |> Macro.underscore()
-    |> String.to_atom()
-  end
+  defp sketch_type_from_module(module), do: Telemetry.sketch_type_from_module(module)
 end

@@ -407,7 +407,7 @@ defmodule ExDataSketch.ULL do
       %{sketch_type: :ull},
       :sketch,
       fn -> new(opts) |> update_many(enumerable) end,
-      fn _sketch -> %{} end
+      fn sketch -> %{size_bytes: size_bytes(sketch)} end
     )
   end
 

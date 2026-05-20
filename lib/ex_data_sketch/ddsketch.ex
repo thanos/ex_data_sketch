@@ -424,7 +424,7 @@ defmodule ExDataSketch.DDSketch do
       %{sketch_type: :ddsketch},
       :sketch,
       fn -> new(opts) |> update_many(enumerable) end,
-      fn _sketch -> %{} end
+      fn sketch -> %{size_bytes: size_bytes(sketch)} end
     )
   end
 

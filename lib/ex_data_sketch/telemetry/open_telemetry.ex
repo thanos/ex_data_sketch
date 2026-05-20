@@ -107,8 +107,6 @@ defmodule ExDataSketch.Telemetry.OpenTelemetry do
     Enum.each(Telemetry.all_event_names(), fn event_name ->
       :telemetry.detach({@handler_id, event_name})
     end)
-  rescue
-    _ -> :ok
   end
 
   if Code.ensure_loaded?(OpenTelemetry.Tracer) do

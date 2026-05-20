@@ -21,7 +21,9 @@ defmodule ExDataSketch.Integration do
   whether the dependency is loaded.
 
   When not explicitly configured, availability defaults to whether the
-  dependency is loaded at compile time.
+  dependency is loaded at compile time. This means adding a dependency
+  to `mix.exs` after compilation requires a full recompile
+  (`mix deps.compile`) for the availability check to return `true`.
 
   ## Supported Integrations
 

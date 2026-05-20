@@ -378,7 +378,7 @@ defmodule ExDataSketch.Bloom do
       %{sketch_type: :bloom},
       :sketch,
       fn -> new(opts) |> put_many(enumerable) end,
-      fn _sketch -> %{} end
+      fn sketch -> %{size_bytes: size_bytes(sketch)} end
     )
   end
 

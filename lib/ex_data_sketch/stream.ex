@@ -95,7 +95,7 @@ defmodule ExDataSketch.Stream do
       true
 
   """
-  @spec theta(enumerable :: Enumerable.t(), opts :: keyword()) :: Theta.t()
+  @spec theta(Enumerable.t(), keyword()) :: Theta.t()
   def theta(enumerable, opts \\ []), do: Theta.from_enumerable(enumerable, opts)
 
   @doc """
@@ -352,11 +352,5 @@ defmodule ExDataSketch.Stream do
     )
   end
 
-  defp sketch_type_from_module(module) do
-    module
-    |> Module.split()
-    |> List.last()
-    |> Macro.underscore()
-    |> String.to_atom()
-  end
+  defp sketch_type_from_module(module), do: Telemetry.sketch_type_from_module(module)
 end

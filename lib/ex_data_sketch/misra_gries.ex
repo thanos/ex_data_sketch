@@ -401,7 +401,7 @@ defmodule ExDataSketch.MisraGries do
       %{sketch_type: :misra_gries},
       :sketch,
       fn -> new(opts) |> update_many(enumerable) end,
-      fn _sketch -> %{} end
+      fn sketch -> %{size_bytes: size_bytes(sketch)} end
     )
   end
 

@@ -285,6 +285,26 @@ defmodule ExDataSketch.Telemetry do
       other.__struct__ |> Module.split() |> List.last() |> Macro.underscore() |> String.to_atom()
 
   @doc """
+  Returns the sketch type atom for a sketch module.
+
+  Used internally by storage backends to derive telemetry metadata
+  from a module atom (e.g., `ExDataSketch.HLL` -> `:hll`).
+
+  ## Examples
+
+      iex> ExDataSketch.Telemetry.sketch_type_from_module(ExDataSketch.HLL)
+      :hll
+
+      iex> ExDataSketch.Telemetry.sketch_type_from_module(ExDataSketch.CMS)
+      :cms
+
+  """
+  @spec sketch_type_from_module(module()) :: atom()
+  def sketch_type_from_module(module) do
+    module |> Module.split() |> List.last() |> Macro.underscore() |> String.to_atom()
+  end
+
+  @doc """
   Returns all supported event categories.
 
   ## Examples

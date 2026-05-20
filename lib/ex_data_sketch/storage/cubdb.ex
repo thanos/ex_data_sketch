@@ -15,6 +15,12 @@ defmodule ExDataSketch.Storage.CubDB do
   - CubDB supports concurrent reads via MVCC.
   - `merge/3` uses a CubDB transaction for atomicity.
 
+  > #### Non-executable examples {: .info}
+  >
+  > The examples below use `CubDB.start_link/1` which requires the `:cubdb`
+  > dependency. They are included for documentation purposes and will not
+  > run in the standard test suite.
+
   ## Examples
 
       # Start a CubDB database (application concern)
@@ -281,11 +287,5 @@ defmodule ExDataSketch.Storage.CubDB do
     end
   end
 
-  defp sketch_type_from_module(module) do
-    module
-    |> Module.split()
-    |> List.last()
-    |> Macro.underscore()
-    |> String.to_atom()
-  end
+  defp sketch_type_from_module(module), do: Telemetry.sketch_type_from_module(module)
 end

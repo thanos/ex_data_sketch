@@ -15,16 +15,22 @@ defmodule ExDataSketch.Storage.Ecto do
 
   1. Add the migration to your application:
 
-      mix ex_data_sketch.gen.migration --repo MyApp.Repo
+       mix ex_data_sketch.gen.migration --repo MyApp.Repo
 
   2. Run the migration:
 
-      mix ecto.migrate
+       mix ecto.migrate
 
   3. Use the storage API:
 
-      ExDataSketch.Storage.Ecto.save(sketch, MyApp.Repo, "cardinality:2024-01")
-      {:ok, sketch} = ExDataSketch.Storage.Ecto.load(ExDataSketch.HLL, MyApp.Repo, "cardinality:2024-01")
+       ExDataSketch.Storage.Ecto.save(sketch, MyApp.Repo, "cardinality:2024-01")
+       {:ok, sketch} = ExDataSketch.Storage.Ecto.load(ExDataSketch.HLL, MyApp.Repo, "cardinality:2024-01")
+
+  > #### Non-executable examples {: .info}
+  >
+  > The examples below use `MyApp.Repo` which must be configured in your
+  > application. They are included for documentation purposes and will not
+  > run in the standard test suite.
 
   ## Examples
 
@@ -327,11 +333,5 @@ defmodule ExDataSketch.Storage.Ecto do
     end
   end
 
-  defp sketch_type_from_module(module) do
-    module
-    |> Module.split()
-    |> List.last()
-    |> Macro.underscore()
-    |> String.to_atom()
-  end
+  defp sketch_type_from_module(module), do: Telemetry.sketch_type_from_module(module)
 end

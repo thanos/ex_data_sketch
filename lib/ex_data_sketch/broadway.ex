@@ -21,7 +21,7 @@ defmodule ExDataSketch.Broadway do
         def handle_batch(:default, messages, _batch_info, _context) do
           key_fn = fn msg -> msg.data.user_id end
           sketch = ExDataSketch.Broadway.accumulate(messages, ExDataSketch.HLL, p: 14, key_fn: key_fn)
-          :telemetry.execute([:my_app, :cardinality], %{estimate: HLL.estimate(sketch)})
+          :telemetry.execute([:my_app, :cardinality], %{estimate: ExDataSketch.HLL.estimate(sketch)})
           messages
         end
       end

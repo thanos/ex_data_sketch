@@ -480,7 +480,7 @@ defmodule ExDataSketch.IBLT do
       %{sketch_type: :iblt},
       :sketch,
       fn -> new(opts) |> put_many(enumerable) end,
-      fn _sketch -> %{} end
+      fn sketch -> %{size_bytes: size_bytes(sketch)} end
     )
   end
 
