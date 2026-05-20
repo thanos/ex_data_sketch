@@ -4,7 +4,7 @@ defmodule ExDataSketch.Storage.MnesiaExtraTest do
   alias ExDataSketch.Storage.Mnesia
 
   setup_all do
-    :mnesia.start()
+    Application.ensure_started(:mnesia)
     on_exit(fn -> :mnesia.stop() end)
     :ok
   end

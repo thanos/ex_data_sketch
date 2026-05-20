@@ -28,8 +28,7 @@ for size <- sizes do
     },
     time: 3,
     memory_time: 1,
-    print: [configuration: false],
-    print: [benchmarking: false]
+    print: [configuration: false, benchmarking: false]
   )
 end
 
@@ -49,8 +48,7 @@ for size <- sizes do
     },
     time: 3,
     memory_time: 1,
-    print: [configuration: false],
-    print: [benchmarking: false]
+    print: [configuration: false, benchmarking: false]
   )
 end
 
@@ -70,8 +68,7 @@ for size <- sizes do
     },
     time: 3,
     memory_time: 1,
-    print: [configuration: false],
-    print: [benchmarking: false]
+    print: [configuration: false, benchmarking: false]
   )
 end
 

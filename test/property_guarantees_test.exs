@@ -420,8 +420,11 @@ defmodule ExDataSketch.PropertyGuaranteesTest do
 
         case Binary.decode(corrupted) do
           {:ok, _decoded} ->
-            assert {:ok, restored} = HLL.deserialize(corrupted)
+            {:ok, restored} = HLL.deserialize(corrupted)
             assert HLL.estimate(restored) >= 0.0
+
+            assert HLL.estimate(restored) < :math.pow(2, 32),
+                   "bit-flipped frame produced wildly invalid estimate"
 
           {:error, %DeserializationError{}} ->
             :ok
@@ -448,9 +451,17 @@ defmodule ExDataSketch.PropertyGuaranteesTest do
         corrupted = <<head::binary, Bitwise.bxor(b, mask), tail::binary>>
 
         case HLL.deserialize(corrupted) do
-          {:ok, _restored} -> :ok
-          {:error, %DeserializationError{}} -> :ok
-          {:error, %_{}} = err -> flunk("unexpected error shape: #{inspect(err)}")
+          {:ok, restored} ->
+            assert HLL.estimate(restored) >= 0.0
+
+            assert HLL.estimate(restored) < :math.pow(2, 32),
+                   "bit-flipped frame produced wildly invalid estimate"
+
+          {:error, %DeserializationError{}} ->
+            :ok
+
+          {:error, err} ->
+            flunk("unexpected error shape: #{inspect(err)}")
         end
       end
     end

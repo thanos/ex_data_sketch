@@ -47,9 +47,16 @@ defmodule ExDataSketch.MixProject do
   end
 
   def application do
-    [
-      extra_applications: [:logger, :mnesia]
-    ]
+    extra_apps = [:logger]
+
+    extra_apps =
+      if Mix.env() == :test do
+        [:mnesia | extra_apps]
+      else
+        extra_apps
+      end
+
+    [extra_applications: extra_apps]
   end
 
   defp elixirc_paths(:test), do: ["lib", "test/support"]

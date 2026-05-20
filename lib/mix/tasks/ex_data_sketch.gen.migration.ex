@@ -26,7 +26,16 @@ defmodule Mix.Tasks.ExDataSketch.Gen.Migration do
       Keyword.get(opts, :repo) ||
         Mix.raise("Expected --repo to be given, for example: --repo MyApp.Repo")
 
-    repo_module = String.to_atom("Elixir." <> repo)
+    repo_module =
+      try do
+        String.to_existing_atom("Elixir." <> repo)
+      rescue
+        ArgumentError ->
+          Mix.raise(
+            "Expected --repo to be an existing loaded module, got: #{inspect(repo)}. " <>
+              "Make sure the module is compiled and available."
+          )
+      end
 
     migration_dir = Path.join([priv_dir(repo_module), "migrations"])
     File.mkdir_p!(migration_dir)

@@ -18,7 +18,9 @@ defmodule ExDataSketch.Storage.Mnesia do
   ## Prerequisite
 
   Mnesia must be running before calling `save/3`, `load/3`, `merge/3`, or
-  `delete/2`. Call `setup/1` first, or start Mnesia manually with
+  `delete/2`. `setup/1` automatically starts Mnesia via
+  `Application.ensure_started/2` if it is not already running. You may also
+  start Mnesia manually with `Application.ensure_started(:mnesia)` or
   `:mnesia.start/0` if you manage Mnesia startup yourself.
 
   ## Distributed Operations
@@ -306,31 +308,15 @@ defmodule ExDataSketch.Storage.Mnesia do
   end
 
   defp ensure_mnesia_running do
-    case :mnesia.system_info(:is_running) do
-      :yes ->
+    case Application.ensure_started(:mnesia) do
+      :ok ->
         :ok
 
-      :no ->
-        :mnesia.start()
-
-      :starting ->
-        wait_for_mnesia(10)
-    end
-  end
-
-  defp wait_for_mnesia(0), do: :ok
-
-  defp wait_for_mnesia(n) do
-    case :mnesia.system_info(:is_running) do
-      :yes ->
+      {:error, {:already_started, :mnesia}} ->
         :ok
 
-      :starting ->
-        Process.sleep(100)
-        wait_for_mnesia(n - 1)
-
-      :no ->
-        :mnesia.start()
+      {:error, reason} ->
+        raise "Failed to start :mnesia: #{inspect(reason)}"
     end
   end
 

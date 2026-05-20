@@ -123,7 +123,8 @@ defmodule ExDataSketch.Broadway do
   def accumulate_into(messages, sketch, opts \\ []) do
     Integration.require_broadway!()
 
-    {key_fn, sketch_opts} = Keyword.pop(opts, :key_fn, fn msg -> msg.data end)
+    {key_fn, user_opts} = Keyword.pop(opts, :key_fn, fn msg -> msg.data end)
+    sketch_opts = Keyword.merge(sketch.opts, user_opts)
 
     Telemetry.span(
       Telemetry.event_name(:pipeline, :accumulate),
