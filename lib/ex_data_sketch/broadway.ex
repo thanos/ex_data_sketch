@@ -95,21 +95,27 @@ defmodule ExDataSketch.Broadway do
   Accumulates sketch data from a list of Broadway messages into an existing
   sketch.
 
-  Like `accumulate/3`, but merges the batch result into the provided `sketch`
-  using the sketch module derived from `sketch.__struct__`.
+  Builds a batch sketch from the messages using `sketch_module.from_enumerable/2`,
+  then merges it into the provided `sketch` using `sketch_module.merge/2`.
+  This works with all mergeable sketch types, including those that use `put/2`
+  instead of `update/2` (e.g., Bloom, Quotient).
 
   ## Arguments
 
   - `messages` -- a list of Broadway messages.
   - `sketch` -- an existing sketch struct to merge into.
-  - `opts` -- keyword list with `:key_fn` (same as `accumulate/3`).
+  - `opts` -- keyword list:
+    - `:key_fn` -- function `(message -> term)` that extracts the value
+      from each message. Defaults to `fn msg -> msg.data end`.
+    - All other options are forwarded to `sketch_module.from_enumerable/2`
+      when building the batch sketch.
 
   ## Examples
 
-      iex> existing = ExDataSketch.HLL.new(p: 10)
+      iex> existing = ExDataSketch.HLL.new(p: 10) |> ExDataSketch.HLL.update("existing")
       iex> messages = [%{data: "a"}, %{data: "b"}]
-      iex> sketch = ExDataSketch.Broadway.accumulate_into(messages, existing)
-      iex> ExDataSketch.HLL.estimate(sketch) > 0.0
+      iex> sketch = ExDataSketch.Broadway.accumulate_into(messages, existing, p: 10)
+      iex> ExDataSketch.HLL.estimate(sketch) >= 3
       true
 
   """
@@ -117,7 +123,7 @@ defmodule ExDataSketch.Broadway do
   def accumulate_into(messages, sketch, opts \\ []) do
     Integration.require_broadway!()
 
-    {key_fn, _rest} = Keyword.pop(opts, :key_fn, fn msg -> msg.data end)
+    {key_fn, sketch_opts} = Keyword.pop(opts, :key_fn, fn msg -> msg.data end)
 
     Telemetry.span(
       Telemetry.event_name(:pipeline, :accumulate),
@@ -125,10 +131,11 @@ defmodule ExDataSketch.Broadway do
       %{sketch_type: Telemetry.sketch_type(sketch), batch_size: length(messages)},
       :pipeline,
       fn ->
-        values = Enum.map(messages, key_fn)
         sketch_module = sketch.__struct__
+        values = Enum.map(messages, key_fn)
 
-        Enum.reduce(values, sketch, fn value, acc -> sketch_module.update(acc, value) end)
+        batch = sketch_module.from_enumerable(values, sketch_opts)
+        sketch_module.merge(sketch, batch)
       end
     )
   end
