@@ -96,26 +96,25 @@ defmodule ExDataSketch.Broadway do
   sketch.
 
   Like `accumulate/3`, but merges the batch result into the provided `sketch`
-  using `sketch_module.merge/2`.
+  using the sketch module derived from `sketch.__struct__`.
 
   ## Arguments
 
   - `messages` -- a list of Broadway messages.
   - `sketch` -- an existing sketch struct to merge into.
-  - `sketch_module` -- the sketch module atom.
   - `opts` -- keyword list with `:key_fn` (same as `accumulate/3`).
 
   ## Examples
 
       iex> existing = ExDataSketch.HLL.new(p: 10)
       iex> messages = [%{data: "a"}, %{data: "b"}]
-      iex> sketch = ExDataSketch.Broadway.accumulate_into(messages, existing, ExDataSketch.HLL)
+      iex> sketch = ExDataSketch.Broadway.accumulate_into(messages, existing)
       iex> ExDataSketch.HLL.estimate(sketch) > 0.0
       true
 
   """
-  @spec accumulate_into([term()], struct(), module(), keyword()) :: struct()
-  def accumulate_into(messages, sketch, _sketch_module, opts \\ []) do
+  @spec accumulate_into([term()], struct(), keyword()) :: struct()
+  def accumulate_into(messages, sketch, opts \\ []) do
     Integration.require_broadway!()
 
     {key_fn, _rest} = Keyword.pop(opts, :key_fn, fn msg -> msg.data end)

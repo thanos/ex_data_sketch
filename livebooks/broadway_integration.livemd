@@ -35,7 +35,7 @@ IO.puts("Count of 'user_1': #{ExDataSketch.CMS.estimate(cms, "user_1")}")
 
 ## Section 2: Accumulate Into an Existing Sketch
 
-`accumulate_into/4` merges batch results into an existing sketch, enabling
+`accumulate_into/3` merges batch results into an existing sketch, enabling
 incremental processing across multiple batches:
 
 ```elixir
@@ -44,12 +44,12 @@ existing = ExDataSketch.HLL.new(p: 14)
 
 # Process a batch and merge it into the existing sketch
 batch1 = for i <- 1..2000, do: %{data: "user_#{i}"}
-updated = ExDataSketch.Broadway.accumulate_into(batch1, existing, ExDataSketch.HLL)
+updated = ExDataSketch.Broadway.accumulate_into(batch1, existing)
 IO.puts("After batch 1: #{Float.round(ExDataSketch.HLL.estimate(updated), 0)} unique users")
 
 # Process another batch
 batch2 = for i <- 1500..3500, do: %{data: "user_#{i}"}
-final = ExDataSketch.Broadway.accumulate_into(batch2, updated, ExDataSketch.HLL)
+final = ExDataSketch.Broadway.accumulate_into(batch2, updated)
 IO.puts("After batch 2: #{Float.round(ExDataSketch.HLL.estimate(final), 0)} unique users")
 ```
 

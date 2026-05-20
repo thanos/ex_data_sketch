@@ -23,7 +23,7 @@ reading order is:
 4. **Rolling Telemetry** -- Time-windowed sketch accumulation, persistence, and
    `:telemetry` event attachment. No extra dependencies.
 
-5. **Broadway Integration** -- `accumulate/3`, `accumulate_into/4`,
+5. **Broadway Integration** -- `accumulate/3`, `accumulate_into/3`,
    `PeriodicAggregator`. Requires `:broadway`.
 
 6. **GenStage Aggregation** -- `SketchConsumer`, `SketchProducer`, flushing,

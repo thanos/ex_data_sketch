@@ -43,12 +43,12 @@ defmodule ExDataSketch.BroadwayTest do
     end
   end
 
-  describe "accumulate_into/4" do
+  describe "accumulate_into/3" do
     test "merges batch into existing sketch" do
       existing = ExDataSketch.HLL.new(p: 10) |> ExDataSketch.HLL.update("existing")
       messages = [%{data: "a"}, %{data: "b"}]
 
-      result = Broadway.accumulate_into(messages, existing, ExDataSketch.HLL)
+      result = Broadway.accumulate_into(messages, existing)
       assert ExDataSketch.HLL.estimate(result) >= 3
     end
 
@@ -56,7 +56,7 @@ defmodule ExDataSketch.BroadwayTest do
       existing = ExDataSketch.HLL.from_enumerable(["keep_me"], p: 10)
       messages = [%{data: "new_item"}]
 
-      result = Broadway.accumulate_into(messages, existing, ExDataSketch.HLL)
+      result = Broadway.accumulate_into(messages, existing)
       assert ExDataSketch.HLL.estimate(result) > 1
     end
   end

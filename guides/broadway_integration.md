@@ -37,13 +37,13 @@ defmodule MyPipeline do
 end
 ```
 
-### `accumulate_into/4`
+### `accumulate_into/3`
 
 To merge a batch into an existing sketch:
 
 ```elixir
 existing = ExDataSketch.HLL.new(p: 14)
-sketch = ExDataSketch.Broadway.accumulate_into(messages, existing, ExDataSketch.HLL)
+sketch = ExDataSketch.Broadway.accumulate_into(messages, existing)
 ```
 
 ## Periodic Aggregation
