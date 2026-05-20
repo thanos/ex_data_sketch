@@ -4,9 +4,7 @@ defmodule ExDataSketch.Storage.DETSTest do
   alias ExDataSketch.Storage.DETS
 
   setup do
-    temp_dir = System.tmp_dir!()
-    temp_file = Path.join(temp_dir, "dets_test_#{System.system_time()}")
-    table = :"#{temp_file}"
+    table = build_table_path("dets_test_")
     {:ok, _} = :dets.open_file(table, type: :set)
     on_exit(fn -> :dets.close(table) end)
     %{table: table}
@@ -70,5 +68,11 @@ defmodule ExDataSketch.Storage.DETSTest do
     test "delete is idempotent for missing key", %{table: table} do
       assert DETS.delete(table, "nonexistent") == :ok
     end
+  end
+
+  defp build_table_path(label) do
+    System.tmp_dir!()
+    |> Path.join("#{label}#{System.system_time()}")
+    |> String.to_atom()
   end
 end

@@ -81,7 +81,7 @@ defmodule ExDataSketch.Storage.PropertiesTest do
     @tag :integration
     property "DETS save then load produces equivalent HLL sketch" do
       check all(items <- string_list(5, 20, 1, 50)) do
-        table = :"ex_data_sketch_prop_hll_#{System.unique_integer([:positive])}"
+        table = build_table_path("ex_data_sketch_prop_hll_")
         {:ok, _} = :dets.open_file(table, type: :set)
 
         sketch = ExDataSketch.HLL.new(p: 10) |> ExDataSketch.HLL.update_many(items)
@@ -102,7 +102,7 @@ defmodule ExDataSketch.Storage.PropertiesTest do
               items_a <- string_list(3, 8, 5, 30),
               items_b <- string_list(3, 8, 5, 30)
             ) do
-        table = :"ex_data_sketch_prop_mrg_#{System.unique_integer([:positive])}"
+        table = build_table_path("ex_data_sketch_prop_mrg_")
         {:ok, _} = :dets.open_file(table, type: :set)
 
         sketch_a = ExDataSketch.HLL.new(p: 10) |> ExDataSketch.HLL.update_many(items_a)
@@ -123,5 +123,11 @@ defmodule ExDataSketch.Storage.PropertiesTest do
         :dets.close(table)
       end
     end
+  end
+
+  defp build_table_path(label) do
+    System.tmp_dir!()
+    |> Path.join("#{label}#{System.system_time()}")
+    |> String.to_atom()
   end
 end
