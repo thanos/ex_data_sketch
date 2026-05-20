@@ -138,7 +138,7 @@ defmodule ExDataSketch.Storage.ETSTest do
 
       :ok = ETS.save(sketch, table, "bloom:rt")
       {:ok, loaded} = ETS.load(ExDataSketch.Bloom, table, "bloom:rt")
-      assert ExDataSketch.Bloom.member?(loaded, "hello") != false
+      assert ExDataSketch.Bloom.member?(loaded, "hello")
     end
   end
 end

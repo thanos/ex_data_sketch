@@ -29,7 +29,7 @@ to route these events into LiveDashboard-compatible metrics:
   "hll-ingest-handler",
   [:ex_data_sketch, :sketch, :ingest],
   fn _name, measurements, metadata, _config ->
-    IO.puts("[INGEST] #{metadata.sketch_type}: #{measurements.count} items, #{measurements.duration}ns")
+    IO.puts("[INGEST] #{metadata[:sketch_type]}: #{measurements[:duration]}ns")
   end,
   nil
 )
@@ -39,7 +39,7 @@ to route these events into LiveDashboard-compatible metrics:
   "persistence-handler",
   [:ex_data_sketch, :persistence, :save],
   fn _name, measurements, metadata, _config ->
-    IO.puts("[SAVE] #{metadata.sketch_type} -> #{metadata.backend}:#{metadata.key}, #{measurements.size_bytes} bytes, #{measurements.duration}ns")
+    IO.puts("[SAVE] #{metadata[:sketch_type]} -> #{metadata[:backend]}:#{metadata[:key]}, #{measurements[:size_bytes]} bytes, #{measurements[:duration]}ns")
   end,
   nil
 )
@@ -80,7 +80,7 @@ In a Phoenix application, you wire ExDataSketch events into
 #   )
 #
 #   counter("ex_data_sketch.sketch.ingest.count",
-#     description: "Number of sketet ingest operations"
+#     description: "Number of sketch ingest operations"
 #   )
 #
 #   last_value("ex_data_sketch.sketch.ingest.count",
@@ -147,7 +147,7 @@ IO.puts("Categories: #{inspect(categories)}")
 
 # Per-category events
 IO.puts("\nSketch events:")
-for action <- [:create, :ingest, :merge, :serialize, :deserialize] do
+for action <- [:ingest, :merge, :serialize, :deserialize] do
   IO.puts("  #{inspect(ExDataSketch.Telemetry.event_name(:sketch, action))}")
 end
 

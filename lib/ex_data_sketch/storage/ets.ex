@@ -52,7 +52,8 @@ defmodule ExDataSketch.Storage.ETS do
 
   ## Returns
 
-  `:ok` on success.
+  `:ok` always. Unlike other storage backends, ETS `insert/2` does not produce
+  errors; this function always succeeds.
 
   ## Raises
 
@@ -165,7 +166,8 @@ defmodule ExDataSketch.Storage.ETS do
 
   ## Returns
 
-  `:ok` on success.
+  `:ok` always. Unlike other storage backends, ETS operations do not produce
+  errors from `insert/2`.
 
   ## Examples
 

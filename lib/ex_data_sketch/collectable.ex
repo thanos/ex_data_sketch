@@ -8,7 +8,7 @@ defimpl Collectable, for: ExDataSketch.HLL do
     collector_fn = fn
       acc, {:cont, item} -> ExDataSketch.HLL.update(acc, item)
       acc, :done -> acc
-      _acc, :halt -> :ok
+      acc, :halt -> acc
     end
 
     {sketch, collector_fn}
@@ -25,7 +25,7 @@ defimpl Collectable, for: ExDataSketch.CMS do
     collector_fn = fn
       acc, {:cont, item} -> ExDataSketch.CMS.update(acc, item)
       acc, :done -> acc
-      _acc, :halt -> :ok
+      acc, :halt -> acc
     end
 
     {sketch, collector_fn}
@@ -42,7 +42,7 @@ defimpl Collectable, for: ExDataSketch.Theta do
     collector_fn = fn
       acc, {:cont, item} -> ExDataSketch.Theta.update(acc, item)
       acc, :done -> acc
-      _acc, :halt -> :ok
+      acc, :halt -> acc
     end
 
     {sketch, collector_fn}
@@ -59,7 +59,7 @@ defimpl Collectable, for: ExDataSketch.KLL do
     collector_fn = fn
       acc, {:cont, item} -> ExDataSketch.KLL.update(acc, item)
       acc, :done -> acc
-      _acc, :halt -> :ok
+      acc, :halt -> acc
     end
 
     {sketch, collector_fn}
@@ -77,7 +77,7 @@ defimpl Collectable, for: ExDataSketch.DDSketch do
     collector_fn = fn
       acc, {:cont, item} -> ExDataSketch.DDSketch.update(acc, item)
       acc, :done -> acc
-      _acc, :halt -> :ok
+      acc, :halt -> acc
     end
 
     {sketch, collector_fn}
@@ -94,7 +94,7 @@ defimpl Collectable, for: ExDataSketch.REQ do
     collector_fn = fn
       acc, {:cont, item} -> ExDataSketch.REQ.update(acc, item)
       acc, :done -> acc
-      _acc, :halt -> :ok
+      acc, :halt -> acc
     end
 
     {sketch, collector_fn}
@@ -111,7 +111,7 @@ defimpl Collectable, for: ExDataSketch.ULL do
     collector_fn = fn
       acc, {:cont, item} -> ExDataSketch.ULL.update(acc, item)
       acc, :done -> acc
-      _acc, :halt -> :ok
+      acc, :halt -> acc
     end
 
     {sketch, collector_fn}
@@ -129,7 +129,7 @@ defimpl Collectable, for: ExDataSketch.FrequentItems do
     collector_fn = fn
       acc, {:cont, item} -> ExDataSketch.FrequentItems.update(acc, item)
       acc, :done -> acc
-      _acc, :halt -> :ok
+      acc, :halt -> acc
     end
 
     {sketch, collector_fn}
@@ -147,7 +147,7 @@ defimpl Collectable, for: ExDataSketch.MisraGries do
     collector_fn = fn
       acc, {:cont, item} -> ExDataSketch.MisraGries.update(acc, item)
       acc, :done -> acc
-      _acc, :halt -> :ok
+      acc, :halt -> acc
     end
 
     {sketch, collector_fn}
@@ -164,7 +164,7 @@ defimpl Collectable, for: ExDataSketch.Bloom do
     collector_fn = fn
       acc, {:cont, item} -> ExDataSketch.Bloom.put(acc, item)
       acc, :done -> acc
-      _acc, :halt -> :ok
+      acc, :halt -> acc
     end
 
     {sketch, collector_fn}
@@ -182,7 +182,7 @@ defimpl Collectable, for: ExDataSketch.Quotient do
     collector_fn = fn
       acc, {:cont, item} -> ExDataSketch.Quotient.put(acc, item)
       acc, :done -> acc
-      _acc, :halt -> :ok
+      acc, :halt -> acc
     end
 
     {sketch, collector_fn}
@@ -199,7 +199,7 @@ defimpl Collectable, for: ExDataSketch.CQF do
     collector_fn = fn
       acc, {:cont, item} -> ExDataSketch.CQF.put(acc, item)
       acc, :done -> acc
-      _acc, :halt -> :ok
+      acc, :halt -> acc
     end
 
     {sketch, collector_fn}
@@ -216,7 +216,7 @@ defimpl Collectable, for: ExDataSketch.IBLT do
     collector_fn = fn
       acc, {:cont, item} -> ExDataSketch.IBLT.put(acc, item)
       acc, :done -> acc
-      _acc, :halt -> :ok
+      acc, :halt -> acc
     end
 
     {sketch, collector_fn}

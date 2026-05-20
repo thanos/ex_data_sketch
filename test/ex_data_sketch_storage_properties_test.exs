@@ -68,6 +68,10 @@ defmodule ExDataSketch.Storage.PropertiesTest do
       real_estimate = ExDataSketch.HLL.estimate(merged)
 
       if expected > 0 do
+        # Tolerance is empirical, not derived from the HLL RSE bound.
+        # At p=10, variance is high for small cardinalities (<5).
+        # 60% for expected<5 and 30% otherwise allow for this variance
+        # while still catching grossly incorrect merge behaviour.
         tolerance = if expected < 5, do: 0.6, else: 0.3
         assert abs(real_estimate - expected) / max(expected, 1) < tolerance
       end
@@ -119,6 +123,8 @@ defmodule ExDataSketch.Storage.PropertiesTest do
         expected = MapSet.new(items_a ++ items_b) |> MapSet.size()
         real_estimate = ExDataSketch.HLL.estimate(merged)
 
+        # Tolerance is empirical, not derived from the HLL RSE bound.
+        # At p=10, variance is high for small cardinalities (<5).
         tolerance = if expected < 5, do: 0.6, else: 0.3
         assert abs(real_estimate - expected) / max(expected, 1) < tolerance
 

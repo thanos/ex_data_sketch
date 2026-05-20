@@ -6,7 +6,7 @@ defmodule ExDataSketch.StreamTest do
   describe "hll/2" do
     test "builds HLL from enumerable" do
       sketch = S.hll(1..100, p: 10)
-      assert ExDataSketch.HLL.estimate(sketch) > 0.0
+      assert_in_delta ExDataSketch.HLL.estimate(sketch), 100.0, 10.0
     end
 
     test "builds HLL from lazy stream" do
@@ -15,7 +15,7 @@ defmodule ExDataSketch.StreamTest do
         |> Stream.map(&to_string/1)
         |> S.hll(p: 10)
 
-      assert ExDataSketch.HLL.estimate(sketch) > 0.0
+      assert_in_delta ExDataSketch.HLL.estimate(sketch), 100.0, 10.0
     end
 
     test "empty enumerable produces zero-cardinality HLL" do
@@ -46,7 +46,7 @@ defmodule ExDataSketch.StreamTest do
   describe "theta/2" do
     test "builds Theta from enumerable" do
       sketch = S.theta(1..50, k: 1024)
-      assert ExDataSketch.Theta.estimate(sketch) > 0.0
+      assert_in_delta ExDataSketch.Theta.estimate(sketch), 50.0, 5.0
     end
 
     test "empty enumerable produces zero estimate" do
@@ -85,7 +85,7 @@ defmodule ExDataSketch.StreamTest do
   describe "ull/2" do
     test "builds ULL from enumerable" do
       sketch = S.ull(1..100, p: 10)
-      assert ExDataSketch.ULL.estimate(sketch) > 0.0
+      assert_in_delta ExDataSketch.ULL.estimate(sketch), 100.0, 10.0
     end
 
     test "empty enumerable produces zero estimate" do
@@ -148,13 +148,13 @@ defmodule ExDataSketch.StreamTest do
   describe "reduce_into/3" do
     test "reduces into a new HLL via module atom" do
       sketch = S.reduce_into(1..100, ExDataSketch.HLL, p: 10)
-      assert ExDataSketch.HLL.estimate(sketch) > 0.0
+      assert_in_delta ExDataSketch.HLL.estimate(sketch), 100.0, 10.0
     end
 
     test "reduces into an existing HLL" do
       existing = ExDataSketch.HLL.new(p: 10)
       sketch = S.reduce_into(["a", "b", "c"], existing)
-      assert ExDataSketch.HLL.estimate(sketch) > 0.0
+      assert_in_delta ExDataSketch.HLL.estimate(sketch), 3.0, 1.0
     end
 
     test "reduces into a new CMS via module atom" do
@@ -194,7 +194,7 @@ defmodule ExDataSketch.StreamTest do
         |> Stream.map(&to_string/1)
         |> S.reduce_partitioned(ExDataSketch.HLL, partitions: 4, p: 10)
 
-      assert ExDataSketch.HLL.estimate(sketch) > 0.0
+      assert_in_delta ExDataSketch.HLL.estimate(sketch), 1000.0, 100.0
     end
 
     test "partitioned result matches single-pass for cardinality sketches" do
@@ -232,15 +232,14 @@ defmodule ExDataSketch.StreamTest do
     end
 
     test "empty enumerable returns valid empty sketch" do
-      items = Enum.map(1..100, &to_string/1)
-      sketch = S.reduce_partitioned(items, ExDataSketch.HLL, partitions: 4, p: 10)
-      assert ExDataSketch.HLL.estimate(sketch) > 0.0
+      sketch = S.reduce_partitioned([], ExDataSketch.HLL, partitions: 4, p: 10)
+      assert ExDataSketch.HLL.estimate(sketch) == 0.0
     end
 
     test "default partitions uses System.schedulers_online" do
       items = Enum.map(1..100, &to_string/1)
       sketch = S.reduce_partitioned(items, ExDataSketch.HLL, p: 10)
-      assert ExDataSketch.HLL.estimate(sketch) > 0.0
+      assert_in_delta ExDataSketch.HLL.estimate(sketch), 100.0, 10.0
     end
 
     test "single partition is equivalent to from_enumerable" do

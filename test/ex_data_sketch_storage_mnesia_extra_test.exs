@@ -67,7 +67,7 @@ defmodule ExDataSketch.Storage.MnesiaExtraTest do
       sketch = ExDataSketch.Bloom.new(capacity: 1000) |> ExDataSketch.Bloom.put("hello")
       :ok = Mnesia.save(sketch, table, "bloom:rt")
       {:ok, loaded} = Mnesia.load(ExDataSketch.Bloom, table, "bloom:rt")
-      assert ExDataSketch.Bloom.member?(loaded, "hello") != false
+      assert ExDataSketch.Bloom.member?(loaded, "hello")
     end
 
     test "merge with CMS sketch", %{table: table} do

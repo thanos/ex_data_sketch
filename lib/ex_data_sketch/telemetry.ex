@@ -279,8 +279,6 @@ defmodule ExDataSketch.Telemetry do
   def sketch_type(%ExDataSketch.Quotient{}), do: :quotient
   def sketch_type(%ExDataSketch.CQF{}), do: :cqf
   def sketch_type(%ExDataSketch.IBLT{}), do: :iblt
-  def sketch_type(%ExDataSketch.XorFilter{}), do: :xor_filter
-  def sketch_type(%ExDataSketch.FilterChain{}), do: :filter_chain
 
   def sketch_type(other),
     do:

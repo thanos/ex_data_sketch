@@ -306,10 +306,15 @@ defmodule ExDataSketch.Stream do
   merge associativity to produce results identical to a single-pass
   `from_enumerable/2`.
 
+  Processing is sequential within this function. For parallel processing,
+  use `ExDataSketch.Flow` with `Flow.partition/2`.
+
   ## Options
 
   - `:partitions` - number of chunks to split the input into
     (default: `System.schedulers_online()`). Must be a positive integer.
+  - `:update_many_chunk_size` - chunk size for `from_enumerable/2` calls
+    within each partition. Defaults to `max(1, div(10_000, partitions))`.
   - All other options are forwarded to the sketch module's `new/1` and
     `from_enumerable/2`.
 
@@ -323,7 +328,9 @@ defmodule ExDataSketch.Stream do
   @spec reduce_partitioned(Enumerable.t(), module(), keyword()) :: struct()
   def reduce_partitioned(enumerable, module, opts \\ []) do
     {partitions, sketch_opts} = Keyword.pop(opts, :partitions, System.schedulers_online())
-    chunk_size = max(1, div(10_000, partitions))
+
+    chunk_size =
+      Keyword.get(sketch_opts, :update_many_chunk_size, max(1, div(10_000, partitions)))
 
     Telemetry.span_with_result(
       Telemetry.event_name(:stream, :partition_merge),
@@ -331,10 +338,15 @@ defmodule ExDataSketch.Stream do
       %{sketch_type: sketch_type_from_module(module)},
       :stream,
       fn ->
-        enumerable
-        |> Stream.chunk_every(chunk_size)
-        |> Enum.map(fn chunk -> module.from_enumerable(chunk, sketch_opts) end)
-        |> module.merge_many()
+        partials =
+          enumerable
+          |> Stream.chunk_every(chunk_size)
+          |> Enum.map(fn chunk -> module.from_enumerable(chunk, sketch_opts) end)
+
+        case partials do
+          [] -> module.new(sketch_opts)
+          _ -> module.merge_many(partials)
+        end
       end,
       fn _result -> %{} end
     )

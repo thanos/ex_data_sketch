@@ -20,14 +20,15 @@ sketch per time window and merge windows as they age out.
 defmodule RollingWindow do
   use GenServer
 
-  @window_ms 60_000  # 1-minute windows
+  @window_ms 100  # 100ms windows for demo purposes
 
   def start_link(opts) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    name = Keyword.get(opts, :name, __MODULE__)
+    GenServer.start_link(__MODULE__, opts, name: name)
   end
 
-  def track(item), do: GenServer.cast(__MODULE__, {:track, item})
-  def estimate, do: GenServer.call(__MODULE__, :estimate)
+  def track(item, name \\ __MODULE__), do: GenServer.cast(name, {:track, item})
+  def estimate(name \\ __MODULE__), do: GenServer.call(name, :estimate)
 
   def init(opts) do
     sketch_mod = Keyword.get(opts, :sketch_module, ExDataSketch.HLL)
@@ -62,19 +63,33 @@ defmodule RollingWindow do
   def handle_info(:flush, state) do
     new_windows = [state.current | state.windows]
                    |> Enum.take(state.window_count)
+    schedule_flush()
     {:noreply, %{state | current: state.sketch_mod.new(state.sketch_opts), windows: new_windows}}
   end
 
   defp schedule_flush, do: Process.send_after(self(), :flush, @window_ms)
 end
 
-# Start a 5-minute rolling window (5 x 1-minute windows)
+# Start a rolling window (5 x 100ms windows)
 {:ok, _pid} = RollingWindow.start_link(windows: 5)
 
-# Track events
-for i <- 1..1000, do: RollingWindow.track("user_#{rem(i, 800)}")
+# Batch 1: 200 distinct users
+for i <- 1..1000, do: RollingWindow.track("user_#{rem(i, 200)}")
+IO.puts("After batch 1 (200 users): #{Float.round(RollingWindow.estimate(), 0)}")
 
-IO.puts("Current estimate: #{Float.round(RollingWindow.estimate(), 0)} (true: 800)")
+# Wait for flush to rotate the window
+Process.sleep(150)
+
+# Batch 2: 500 distinct users (new window)
+for i <- 1..1000, do: RollingWindow.track("user_#{rem(i, 500)}")
+IO.puts("After batch 2 (500 users in new window): #{Float.round(RollingWindow.estimate(), 0)}")
+
+# Wait for another flush
+Process.sleep(150)
+
+# Batch 3: only 50 distinct users (demonstrates window aging)
+for i <- 1..100, do: RollingWindow.track("user_#{rem(i, 50)}")
+IO.puts("After batch 3 (50 users, older windows still held): #{Float.round(RollingWindow.estimate(), 0)}")
 ```
 
 ## Section 2: Persistence for Long-Term Storage
