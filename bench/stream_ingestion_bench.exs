@@ -2,7 +2,8 @@
 #
 # Run with: MIX_ENV=dev mix run bench/stream_ingestion_bench.exs
 
-alias ExDataSketch.{HLL, CMS, Bloom, Stream, as: S}
+alias ExDataSketch.{HLL, CMS, Bloom}
+alias ExDataSketch.Stream, as: S
 
 IO.puts("ExDataSketch Stream Ingestion Benchmark")
 IO.puts("=========================================")
@@ -95,6 +96,5 @@ Benchee.run(
   },
   time: 5,
   memory_time: 2,
-  print: [configuration: false],
-  print: [benchmarking: false]
+  print: [configuration: false, benchmarking: false]
 )
