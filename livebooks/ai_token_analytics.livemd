@@ -1,0 +1,195 @@
+<!-- livebook:{"app_settings":{"auto_dependency_loading":true}} -->
+
+# AI Token Stream Analytics
+
+```elixir
+Mix.install([
+  {:ex_data_sketch, "~> 0.9.0"}
+])
+```
+
+## Introduction
+
+LLM token streams pose unique analytics challenges: high cardinality (millions
+of tokens), throughput demands (100K+ tokens/sec per model), and the need for
+real-time monitoring across multiple dimensions. Probabilistic sketches provide
+O(1)-per-update data structures that answer these questions in bounded memory.
+
+This Livebook demonstrates using ExDataSketch for AI/ML workloads: tracking
+unique users, token distributions, frequent prompt patterns, and membership
+filtering.
+
+## Section 1: Unique User and Session Tracking
+
+Track distinct users and sessions across a token stream using HLL:
+
+```elixir
+# Simulate a stream of 100K inference requests from 5000 unique users
+requests = for i <- 1..100_000 do
+  user_id = "user_#{rem(i, 5000)}"
+  session_id = "session_#{rem(i, 20_000)}"
+  tokens = 50 + :rand.uniform(450)
+  %{user_id: user_id, session_id: session_id, tokens: tokens}
+end
+
+# Count unique users and sessions
+unique_users = ExDataSketch.HLL.from_enumerable(
+  Stream.map(requests, & &1.user_id),
+  p: 14
+)
+unique_sessions = ExDataSketch.ULL.from_enumerable(
+  Stream.map(requests, & &1.session_id),
+  p: 14
+)
+
+IO.puts("Unique users estimate: #{Float.round(ExDataSketch.HLL.estimate(unique_users), 0)} (true: 5000)")
+IO.puts("Unique sessions estimate: #{Float.round(ExDataSketch.ULL.estimate(unique_sessions), 0)} (true: 20000)")
+IO.puts("User HLL memory: #{ExDataSketch.HLL.size_bytes(unique_users)} bytes")
+IO.puts("Session ULL memory: #{ExDataSketch.ULL.size_bytes(unique_sessions)} bytes")
+```
+
+## Section 2: Token Distribution Analysis
+
+Track the distribution of output token counts using DDSketch and KLL:
+
+```elixir
+# Extract token counts from requests
+token_counts = Enum.map(requests, & &1.tokens)
+
+# DDSketch: quantile-centric distribution sketch
+ddsketch = ExDataSketch.DDSketch.from_enumerable(token_counts, alpha: 0.01)
+
+IO.puts("Token distribution (DDSketch):")
+IO.puts("  p50: #{Float.round(ExDataSketch.DDSketch.quantile(ddsketch, 0.50), 1)}")
+IO.puts("  p90: #{Float.round(ExDataSketch.DDSketch.quantile(ddsketch, 0.90), 1)}")
+IO.puts("  p99: #{Float.round(ExDataSketch.DDSketch.quantile(ddsketch, 0.99), 1)}")
+IO.puts("  Memory: #{ExDataSketch.DDSketch.size_bytes(ddsketch)} bytes")
+
+# KLL: more compact quantile sketch
+kll = ExDataSketch.KLL.from_enumerable(token_counts, k: 200)
+IO.puts("\nToken distribution (KLL):")
+IO.puts("  p50: #{Float.round(ExDataSketch.KLL.quantile(kll, 0.50), 1)}")
+IO.puts("  p90: #{Float.round(ExDataSketch.KLL.quantile(kll, 0.90), 1)}")
+IO.puts("  p99: #{Float.round(ExDataSketch.KLL.quantile(kll, 0.99), 1)}")
+IO.puts("  Memory: #{ExDataSketch.KLL.size_bytes(kll)} bytes")
+```
+
+## Section 3: Frequent Prompt Patterns
+
+Identify the most common prompt prefixes or model calls using
+MisraGries and FrequentItems:
+
+```elixir
+# Simulate prompt patterns: some models are much more popular
+prompt_patterns = for i <- 1..100_000 do
+  cond do
+    rem(i, 3) == 0 -> "gpt-4o/chat"
+    rem(i, 5) == 0 -> "gpt-4o/completion"
+    rem(i, 7) == 0 -> "claude-3.5/chat"
+    true -> "gpt-4o-mini/chat"
+  end
+end
+
+# MisraGries: memory-bounded heavy hitter detection
+mg = ExDataSketch.MisraGries.from_enumerable(prompt_patterns, k: 10)
+IO.puts("MisraGries top patterns:")
+for {item, count} <- ExDataSketch.MisraGries.top_k(mg, 5) do
+  IO.puts("  #{item}: ~#{count} (estimated)")
+end
+
+# FrequentItems: similar but with different guarantees.
+# Note: `top_k/2` takes a keyword list (limit: N); returned maps expose
+# :item, :estimate, :error, :lower, :upper (no :count field).
+fi = ExDataSketch.FrequentItems.from_enumerable(prompt_patterns, k: 10)
+IO.puts("\nFrequentItems top patterns:")
+for item <- ExDataSketch.FrequentItems.top_k(fi, limit: 5) do
+  IO.puts("  #{item.item}: ~#{item.estimate}")
+end
+```
+
+## Section 4: CMS for Rate Tracking
+
+Count-Min Sketch tracks per-key frequency in bounded space, ideal for
+tracking token usage per user or per model:
+
+```elixir
+# Track per-model token usage
+cms = ExDataSketch.CMS.new(width: 256, depth: 5)
+
+cms = Enum.reduce(requests, cms, fn req, acc ->
+  ExDataSketch.CMS.update(acc, req.user_id)
+end)
+
+IO.puts("CMS frequency estimates:")
+sample_users = ["user_0", "user_1", "user_999"]
+for user <- sample_users do
+  IO.puts("  #{user}: ~#{ExDataSketch.CMS.estimate(cms, user)} occurrences")
+end
+
+IO.puts("CMS memory: #{ExDataSketch.CMS.size_bytes(cms)} bytes")
+IO.puts("(vs ~5000 * 8 = #{5000 * 8} bytes for exact per-user counts)")
+```
+
+## Section 5: Bloom Filters for Deduplication
+
+Bloom filters allow fast approximate deduplication of prompt hashes:
+
+```elixir
+# Check if a prompt has been seen before (approximate)
+bloom = ExDataSketch.Bloom.from_enumerable(
+  Stream.map(1..50_000, fn i -> "prompt_hash_#{i}" end),
+  capacity: 100_000
+)
+
+IO.puts("Bloom filter membership:")
+IO.puts("  Seen prompt 42: #{ExDataSketch.Bloom.member?(bloom, "prompt_hash_42")}")
+IO.puts("  Seen prompt 99999: #{ExDataSketch.Bloom.member?(bloom, "prompt_hash_99999")}")
+IO.puts("  Unseen prompt: #{ExDataSketch.Bloom.member?(bloom, "prompt_hash_unseen")}")
+IO.puts("  Memory: #{ExDataSketch.Bloom.size_bytes(bloom)} bytes")
+```
+
+## Section 6: Multi-Dimensional Dashboard
+
+Combine multiple sketches for a comprehensive real-time view:
+
+```elixir
+# Build a composite dashboard of sketches
+dashboard = %{
+  unique_users: ExDataSketch.HLL.from_enumerable(Stream.map(requests, & &1.user_id), p: 12),
+  unique_sessions: ExDataSketch.ULL.from_enumerable(Stream.map(requests, & &1.session_id), p: 12),
+  token_dist: ExDataSketch.DDSketch.from_enumerable(Stream.map(requests, & &1.tokens), alpha: 0.01),
+  request_freq: ExDataSketch.CMS.new(width: 256, depth: 5)
+    |> then(fn cms ->
+      Enum.reduce(requests, cms, fn req, acc -> ExDataSketch.CMS.update(acc, req.user_id) end)
+    end)
+}
+
+total_memory = ExDataSketch.HLL.size_bytes(dashboard.unique_users) +
+               ExDataSketch.ULL.size_bytes(dashboard.unique_sessions) +
+               ExDataSketch.DDSketch.size_bytes(dashboard.token_dist) +
+               ExDataSketch.CMS.size_bytes(dashboard.request_freq)
+
+IO.puts("=== AI Token Analytics Dashboard ===")
+IO.puts("Unique users: #{Float.round(ExDataSketch.HLL.estimate(dashboard.unique_users), 0)}")
+IO.puts("Unique sessions: #{Float.round(ExDataSketch.ULL.estimate(dashboard.unique_sessions), 0)}")
+IO.puts("Token p50: #{Float.round(ExDataSketch.DDSketch.quantile(dashboard.token_dist, 0.50), 1)}")
+IO.puts("Token p99: #{Float.round(ExDataSketch.DDSketch.quantile(dashboard.token_dist, 0.99), 1)}")
+IO.puts("Total dashboard memory: #{total_memory} bytes (~#{Float.round(total_memory / 1024, 1)} KB)")
+IO.puts("(vs ~#{Float.round(100_000 * 50 / 1024, 0)} KB for raw request storage)")
+```
+
+## Section 7: Operational Guidance
+
+**Sketch selection for AI workloads**:
+
+| Question | Sketch | Memory | Error |
+|----------|--------|--------|-------|
+| How many unique users? | HLL p=14 | 16KB | ~0.8% |
+| How many unique sessions? | ULL p=14 | 16KB | ~0.6% |
+| Token count distribution? | DDSketch alpha=0.01 | ~5KB | 1% quantile error |
+| Most frequent models? | MisraGries k=10 | ~1KB | top-k heavy hitters |
+| Per-user request count? | CMS w=256,d=5 | ~1.3KB | ~3% overestimate |
+| Prompt deduplication? | Bloom cap=100K | ~120KB | ~1% false positive |
+
+**Update throughput**: All sketches support >1M updates/sec per core in NIF mode.
+For multi-billion token streams, use partition-local aggregation then merge.

@@ -4,9 +4,10 @@ Production-grade streaming data sketching algorithms for Elixir.
 
 ExDataSketch provides probabilistic data structures for approximate counting,
 frequency estimation, quantile computation, heavy-hitter detection, membership
-testing with deletion, and set reconciliation on streaming data. All sketch
-state is stored as Elixir-owned binaries, enabling straightforward
-serialization, distribution, and persistence.
+testing with deletion, and set reconciliation on streaming data. Stream-native
+integration with Elixir's `Collectable`, `GenStage`, `Broadway`, and `Flow`,
+plus `:telemetry`/OpenTelemetry instrumentation, persistence backends (ETS,
+DETS, CubDB, Mnesia, Ecto), and nine production-oriented Livebooks.
 
 [![CI](https://github.com/thanos/ex_data_sketch/actions/workflows/ci.yml/badge.svg)](https://github.com/thanos/ex_data_sketch/actions/workflows/ci.yml)
 [![Hex version](https://img.shields.io/hexpm/v/ex_data_sketch.svg)](https://hex.pm/packages/ex_data_sketch)
@@ -65,7 +66,7 @@ Add `ex_data_sketch` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:ex_data_sketch, "~> 0.8.0"}
+    {:ex_data_sketch, "~> 0.9.0"}
   ]
 end
 ```
@@ -77,6 +78,20 @@ end
 hll = ExDataSketch.HLL.new() |> ExDataSketch.HLL.update_many(1..100_000)
 ExDataSketch.HLL.estimate(hll)  # ~100_000
 
+# Stream API: build from lazy enumerables
+sketch = 1..100_000 |> Stream.map(&to_string/1) |> ExDataSketch.Stream.hll(p: 14)
+
+# Collectable: Enum.into works with any mergeable sketch
+sketch = Enum.into(1..50_000, ExDataSketch.ULL.new(p: 14))
+
+# Partitioned parallel reduction
+sketch = ExDataSketch.Stream.reduce_partitioned(1..1_000_000, ExDataSketch.HLL, partitions: 8, p: 14)
+
+# Persistence: save and load from ETS
+:ets.new(:sketches, [:set, :public, :named_table])
+ExDataSketch.Storage.ETS.save(sketch, :sketches, "daily:2024-01-15")
+{:ok, loaded} = ExDataSketch.Storage.ETS.load(ExDataSketch.HLL, :sketches, "daily:2024-01-15")
+
 # KLL: quantile estimation
 kll = ExDataSketch.KLL.new() |> ExDataSketch.KLL.update_many(1..100_000)
 ExDataSketch.KLL.quantile(kll, 0.5)   # approximate median (~50_000)
@@ -87,16 +102,16 @@ bloom = ExDataSketch.Bloom.new(capacity: 100_000)
 bloom = ExDataSketch.Bloom.put_many(bloom, 1..50_000)
 ExDataSketch.Bloom.member?(bloom, 42)      # true
 ExDataSketch.Bloom.member?(bloom, 99_999)  # false (probably)
-
-# Cuckoo: membership testing with deletion
-cuckoo = ExDataSketch.Cuckoo.new(capacity: 100_000)
-{:ok, cuckoo} = ExDataSketch.Cuckoo.put(cuckoo, "user_42")
-ExDataSketch.Cuckoo.member?(cuckoo, "user_42")  # true
-{:ok, cuckoo} = ExDataSketch.Cuckoo.delete(cuckoo, "user_42")
-ExDataSketch.Cuckoo.member?(cuckoo, "user_42")  # false
 ```
 
 See the [Quick Start Guide](guides/quick_start.md) for more examples.
+
+## Livebooks
+
+Nine production-oriented Livebooks demonstrate real-world patterns, from
+basic stream consumption to distributed merge semantics and AI workload
+analytics. See [Livebooks Guide](guides/livebooks.md) for the recommended
+reading order and what each Livebook teaches.
 
 ## Documentation
 
@@ -106,7 +121,10 @@ Full documentation is available at [HexDocs](https://hexdocs.pm/ex_data_sketch).
 
 - **Binary state**: All sketch state is canonical Elixir binaries. No opaque NIF resources.
 - **Backend system**: Pure Elixir reference implementation with optional Rust NIF acceleration. The Rust backend falls back to Pure automatically when unavailable.
-- **Serialization**: ExDataSketch-native format (EXSK) for all sketches, plus Apache DataSketches CompactSketch interop for Theta.
+- **Streaming native**: `ExDataSketch.Stream`, `Collectable`, and `from_enumerable/2` for lazy stream consumption. Broadway, GenStage, and Flow integration for production pipelines.
+- **Persistence**: ETS, DETS, CubDB, Mnesia, and Ecto backends with atomic `save/load/merge/delete` operations. All storage uses EXSK v2 binary format with CRC32C checksum.
+- **Observability**: Structured `:telemetry` events at batch boundaries, optional OpenTelemetry span bridge, category-based enable/disable.
+- **Serialization**: ExDataSketch-native format (EXSK) for all sketches, plus Apache DataSketches CompactSketch interop for Theta. v1 format escape hatch for backward compatibility.
 - **Deterministic hashing**: Stable 64-bit hash (`ExDataSketch.Hash`) for reproducible results.
 - **Backend parity**: Both backends produce byte-identical serialized output for the same inputs.
 
@@ -117,9 +135,11 @@ The following guarantees apply within the v0.x release series:
 - **EXSK serialization**: The ExDataSketch-native binary format is stable. Binaries produced by any v0.x release can be deserialized by any other v0.x release.
 - **Pure vs Rust parity**: Given identical inputs, both backends produce byte-identical serialized state and identical estimates.
 - **Deterministic output**: The same input sequence always produces the same sketch state and estimate, regardless of backend.
+- **Backward compatibility**: v0.7.x EXSK v1 frames are decodable by v0.9.0. `HLL.serialize(sketch, format: :v1)` produces backward-compatible v0.7.x output (requires `:phash2` hash strategy).
 
 Not guaranteed:
 
+- **ULL estimate stability**: ULL estimates at very low cardinalities (p < 12, n < 500) differ between v0.8.0 and v0.9.0 due to accuracy corrections. The v0.9.0 estimates are more accurate.
 - **Cross-language interop**: Only Theta supports Apache DataSketches CompactSketch format. HLL and CMS DataSketches interop is not implemented.
 - **Performance stability**: Benchmark results may vary across hardware and OTP versions.
 - **EXSK format across major versions**: The binary format may change in future major releases.
@@ -157,7 +177,7 @@ mix docs
 | v0.7.0 | ULL (UltraLogLog) -- improved cardinality estimation with Pure + Rust NIF | Released |
 | v0.7.1 | NIF batch hashing, hash customization, quotient filter fix, merge safety | Released |
 | v0.8.0 | Deterministic Foundations -- pluggable hash registry (XXHash3 + Murmur3), binary stability and corruption detection, HLL hot-path optimization, precompiled NIFs, property-based validation | Released |
-| v0.9.0 | Streaming Integrations -- `ExDataSketch.Stream`, Broadway / GenStage support, ETS / DETS / CubDB persistence, `:telemetry` + OpenTelemetry instrumentation | Planned |
+| v0.9.0 | Streaming Integrations -- Stream/Collectable API, Broadway/GenStage/Flow integration, persistence (ETS/DETS/CubDB/Mnesia/Ecto), telemetry + OpenTelemetry, ULL accuracy fix, v1 serialization escape hatch | Released |
 | v0.10.0 | Apache Interoperability -- full cross-language KLL and HLL exchange, golden binary corpus, validation suite | Planned |
 | v0.11.0 | New Sketch Families -- CPC (Compressed Probabilistic Counting), Tuple Sketch (weighted distinct counting) | Planned |
 | v0.12.0 | Similarity & Sampling -- MinHash, Weighted MinHash, VarOpt sampling | Planned |

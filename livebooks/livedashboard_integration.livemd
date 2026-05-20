@@ -1,0 +1,191 @@
+<!-- livebook:{"app_settings":{"auto_dependency_loading":true}} -->
+
+# LiveDashboard Integration
+
+```elixir
+Mix.install([
+  {:ex_data_sketch, "~> 0.9.0"}
+])
+```
+
+## Introduction
+
+Phoenix LiveDashboard provides real-time visibility into running BEAM
+applications. This Livebook shows how to wire ExDataSketch telemetry
+events into LiveDashboard metrics, and how to expose sketch estimates
+via custom LiveDashboard pages.
+
+LiveDashboard is a Phoenix dependency. In a Livebook we demonstrate the
+telemetry wiring patterns that transfer directly to a Phoenix application.
+
+## Section 1: Attach Telemetry Handlers
+
+ExDataSketch emits telemetry events at batch boundaries. Attach handlers
+to route these events into LiveDashboard-compatible metrics:
+
+```elixir
+# Track cardinality estimates from HLL ingest events
+:telemetry.attach(
+  "hll-ingest-handler",
+  [:ex_data_sketch, :sketch, :ingest],
+  fn _name, measurements, metadata, _config ->
+    IO.puts("[INGEST] #{metadata[:sketch_type]}: #{measurements[:duration]}ns")
+  end,
+  nil
+)
+
+# Track persistence operations
+:telemetry.attach(
+  "persistence-handler",
+  [:ex_data_sketch, :persistence, :save],
+  fn _name, measurements, metadata, _config ->
+    IO.puts("[SAVE] #{metadata[:sketch_type]} -> #{metadata[:backend]}:#{metadata[:key]}, #{measurements[:size_bytes]} bytes, #{measurements[:duration]}ns")
+  end,
+  nil
+)
+
+# Trigger an ingest event
+sketch = ExDataSketch.HLL.from_enumerable(1..10_000, p: 14)
+IO.puts("HLL estimate: #{Float.round(ExDataSketch.HLL.estimate(sketch), 0)}")
+
+:telemetry.detach("hll-ingest-handler")
+:telemetry.detach("persistence-handler")
+```
+
+## Section 2: Phoenix Metrics Telemetry
+
+In a Phoenix application, you wire ExDataSketch events into
+`Telemetry.Metrics` for LiveDashboard display:
+
+```elixir
+# This pattern goes in your application's telemetry.ex file.
+# It is not directly executable in this Livebook but demonstrates
+# the integration pattern.
+
+# In lib/my_app_web/telemetry.ex:
+#
+#   summary("ex_data_sketch.sketch.ingest.duration",
+#     unit: {:native, :millisecond},
+#     description: "Time to ingest items into a sketch"
+#   )
+#
+#   summary("ex_data_sketch.sketch.merge.duration",
+#     unit: {:native, :millisecond},
+#     description: "Time to merge sketches"
+#   )
+#
+#   summary("ex_data_sketch.persistence.save.duration",
+#     unit: {:native, :millisecond},
+#     description: "Time to persist a sketch"
+#   )
+#
+#   counter("ex_data_sketch.sketch.ingest.count",
+#     description: "Number of sketch ingest operations"
+#   )
+#
+#   last_value("ex_data_sketch.sketch.ingest.count",
+#     description: "Items ingested in last batch"
+#   )
+
+IO.puts("See above for Phoenix telemetry metrics wiring pattern")
+```
+
+## Section 3: Custom LiveDashboard Page for Sketch Metrics
+
+Expose rolling sketch estimates through a custom LiveDashboard page:
+
+```elixir
+# In a Phoenix app, create a custom LiveDashboard page:
+#
+# defmodule MyAppWeb.LiveDashboard.SketchPage do
+#   use Phoenix.LiveDashboard.Web, :live_view
+#
+#   @impl true
+#   def mount(params, session, socket) do
+#     socket =
+#       assign(socket,
+#         hll_estimate: get_sketch_estimate(:hll),
+#         ull_estimate: get_sketch_estimate(:ull),
+#         cms_estimate: get_sketch_estimate(:cms)
+#       )
+#     {:ok, socket, temporary_assigns: [hll_estimate: nil]}
+#   end
+#
+#   defp get_sketch_estimate(type) do
+#     case ExDataSketch.Storage.ETS.load(sketch_mod, :metrics_table, "dashboard:#{type}") do
+#       {:ok, sketch} -> sketch_mod.estimate(sketch)
+#       {:error, _} -> 0.0
+#     end
+#   end
+# end
+#
+# In your router:
+#   live_dashboard "/dashboard", additional_pages: [
+#     sketches: MyAppWeb.LiveDashboard.SketchPage
+#   ]
+
+IO.puts("See above for LiveDashboard custom page pattern")
+```
+
+## Section 4: All Available Telemetry Events
+
+```elixir
+# ExDataSketch.Telemetry.all_event_names/0 returns all canonical events
+events = ExDataSketch.Telemetry.all_event_names()
+IO.puts("Total telemetry events: #{length(events)}")
+IO.puts("Events:")
+for event <- events do
+  IO.puts("  #{inspect(event)}")
+end
+```
+
+## Section 5: Event Categories
+
+```elixir
+categories = ExDataSketch.Telemetry.categories()
+IO.puts("Categories: #{inspect(categories)}")
+
+# Per-category events
+IO.puts("\nSketch events:")
+for action <- [:ingest, :merge, :serialize, :deserialize] do
+  IO.puts("  #{inspect(ExDataSketch.Telemetry.event_name(:sketch, action))}")
+end
+
+IO.puts("\nPersistence events:")
+for action <- [:save, :load, :merge, :delete] do
+  IO.puts("  #{inspect(ExDataSketch.Telemetry.event_name(:persistence, action))}")
+end
+
+IO.puts("\nStream events:")
+for action <- [:reduce, :partition_merge] do
+  IO.puts("  #{inspect(ExDataSketch.Telemetry.event_name(:stream, action))}")
+end
+
+IO.puts("\nPipeline events:")
+for action <- [:accumulate, :periodic_flush] do
+  IO.puts("  #{inspect(ExDataSketch.Telemetry.event_name(:pipeline, action))}")
+end
+```
+
+## Section 6: Operational Guidance
+
+**Enable/disable telemetry**:
+```elixir
+# Disable all telemetry (zero overhead)
+Application.put_env(:ex_data_sketch, :telemetry_enabled, false)
+
+# Disable only persistence events
+Application.put_env(:ex_data_sketch, :telemetry, persistence: false)
+
+# Re-enable all
+Application.put_env(:ex_data_sketch, :telemetry_enabled, true)
+Application.delete_env(:ex_data_sketch, :telemetry)
+```
+
+**OpenTelemetry bridge**: When `:opentelemetry_api` is available:
+```elixir
+# In application.ex start callback:
+ExDataSketch.Telemetry.OpenTelemetry.setup()
+```
+
+This creates OTEL spans for all ExDataSketch operations.

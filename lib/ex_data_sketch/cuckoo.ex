@@ -58,7 +58,7 @@ defmodule ExDataSketch.Cuckoo do
   For mergeable membership filters, use `ExDataSketch.Bloom`.
   """
 
-  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash}
+  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash, Telemetry}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -401,7 +401,14 @@ defmodule ExDataSketch.Cuckoo do
   """
   @spec from_enumerable(Enumerable.t(), keyword()) :: {:ok, t()} | {:error, :full, t()}
   def from_enumerable(enumerable, opts \\ []) do
-    new(opts) |> put_many(enumerable)
+    Telemetry.span_with_result(
+      Telemetry.event_name(:sketch, :ingest),
+      %{},
+      %{sketch_type: :cuckoo},
+      :sketch,
+      fn -> new(opts) |> put_many(enumerable) end,
+      fn _sketch -> %{} end
+    )
   end
 
   @doc """

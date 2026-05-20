@@ -59,6 +59,28 @@ defmodule ExDataSketch do
   - `reducer/1` — returns a 2-arity function for use with `Enum.reduce/3`, Flow, etc.
   - `merger/1` — returns a 2-arity function for merging sketches in reduce operations.
 
+  ## Stream Integration
+
+  `ExDataSketch.Stream` provides terminal stream consumers that build sketches
+  from lazy enumerables without buffering the entire input:
+
+      1..100_000
+      |> Stream.map(&to_string/1)
+      |> ExDataSketch.Stream.hll(p: 14)
+      |> ExDataSketch.HLL.estimate()
+
+  For partition-local reduction:
+
+      1..1_000_000
+      |> ExDataSketch.Stream.reduce_partitioned(ExDataSketch.HLL, partitions: 8, p: 14)
+
+  ## Collectable
+
+  All mergeable sketches implement the `Collectable` protocol, enabling
+  `Enum.into/2` usage:
+
+      sketch = Enum.into(1..1000, ExDataSketch.HLL.new(p: 14))
+
   See the [Integration Guide](integrations.md) for examples with Flow, Broadway,
   Explorer, Nx, and other ecosystem libraries.
 

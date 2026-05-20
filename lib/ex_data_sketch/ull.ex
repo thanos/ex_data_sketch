@@ -21,6 +21,46 @@ defmodule ExDataSketch.ULL do
   | 14 | 16,384    | ~16 KiB | 0.65%        | 0.81%        |
   | 16 | 65,536    | ~64 KiB | 0.33%        | 0.41%        |
 
+  ## Estimation Strategy
+
+  The ULL estimator selects between two estimators based on whether any
+  register is still empty:
+
+  1. **Linear counting** (`zeros > 0`): when at least one register is empty,
+     the formula `m * ln(m / zeros)` is used. Linear counting is the
+     maximum-likelihood estimator in this regime and is the dominant
+     estimator for realistic workloads (any cardinality where the load
+     factor leaves empty registers, roughly `n < m * ln(m)`). It also
+     significantly outperforms the FGRA estimator at low precision
+     (`p < 12`), where FGRA carries non-trivial bias for moderate
+     `n / m`. The FGRA Horner loop is skipped on this branch.
+
+  2. **FGRA estimator** (`zeros == 0`): when every register is occupied,
+     the Flajolet-style geometric rank aggregation with sigma/tau
+     convergence from Algorithm 4 of Ertl 2017 is used. This is the
+     large-cardinality regime, and the published relative standard error
+     `~0.835 / sqrt(m)` applies here.
+
+  3. **Large range correction**: applied on top of FGRA when the raw
+     estimate exceeds `2^56 / 30`. The hash-space bias correction
+     `-2^64 * ln(1 - raw_estimate / 2^64)` is used. This branch is
+     effectively unreachable with 64-bit hashes.
+
+  Note that for typical workloads (where cardinality is comparable to or
+  smaller than `m * ln(m)`) the linear counting branch is taken; the FGRA
+  branch is exercised primarily in the very-large-`n` regime.
+
+  ## Recommended Precision
+
+  - `p >= 12` is recommended for production use. Below `p = 12`, the
+    transition between linear counting and FGRA (at `zeros = 0`) can
+    exhibit increased relative error because FGRA's small-`p` bias is
+    significant and linear counting at very few empty registers
+    (`zeros < ~m * e^(-5)`) has high variance.
+  - When `p >= 12`, linear counting provides reliable estimates across
+    the entire small-to-moderate cardinality range, and FGRA's RSE
+    bound is tight when it engages.
+
   ## Binary State Layout (ULL1)
 
   All multi-byte fields are little-endian.
@@ -39,6 +79,9 @@ defmodule ExDataSketch.ULL do
 
   - `:p` - precision parameter, integer 4..26 (default: 14)
   - `:backend` - backend module (default: `ExDataSketch.Backend.Pure`)
+  - `:update_many_chunk_size` - chunk size for `update_many/2` internal
+    batching (default: 10000). Must be set at creation time; cannot be
+    overridden on a per-call basis.
 
   ## Merge Properties
 
@@ -47,7 +90,7 @@ defmodule ExDataSketch.ULL do
   same result, making ULL safe for parallel and distributed aggregation.
   """
 
-  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash}
+  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash, Telemetry}
   alias ExDataSketch.Errors.DeserializationError
 
   @type t :: %__MODULE__{
@@ -95,7 +138,11 @@ defmodule ExDataSketch.ULL do
     clean_opts =
       [p: p, hash_strategy: hash_strategy] ++
         if(hash_fn, do: [hash_fn: hash_fn], else: []) ++
-        if(seed, do: [seed: seed], else: [])
+        if(seed, do: [seed: seed], else: []) ++
+        if(Keyword.has_key?(opts, :update_many_chunk_size),
+          do: [update_many_chunk_size: Keyword.fetch!(opts, :update_many_chunk_size)],
+          else: []
+        )
 
     state = backend.ull_new(clean_opts)
     %__MODULE__{state: state, opts: clean_opts, backend: backend}
@@ -127,6 +174,9 @@ defmodule ExDataSketch.ULL do
   More efficient than calling `update/2` repeatedly because it minimizes
   intermediate binary allocations.
 
+  The internal batch size is controlled by `:update_many_chunk_size`,
+  which must be set at `new/1` time and cannot be changed per call.
+
   ## Examples
 
       iex> sketch = ExDataSketch.ULL.new(p: 10) |> ExDataSketch.ULL.update_many(["a", "b", "c"])
@@ -134,14 +184,16 @@ defmodule ExDataSketch.ULL do
       true
 
   """
-  @update_many_chunk_size 10_000
+  @default_update_many_chunk_size 10_000
 
   @spec update_many(t(), Enumerable.t()) :: t()
   def update_many(%__MODULE__{opts: opts, backend: backend} = sketch, items)
       when backend == Backend.Pure do
+    chunk_size = Keyword.get(opts, :update_many_chunk_size, @default_update_many_chunk_size)
+
     new_state =
       items
-      |> Stream.chunk_every(@update_many_chunk_size)
+      |> Stream.chunk_every(chunk_size)
       |> Enum.reduce(sketch.state, fn chunk, state_acc ->
         hashes = Enum.map(chunk, &hash_item(&1, opts))
         backend.ull_update_many(state_acc, hashes, opts)
@@ -151,13 +203,15 @@ defmodule ExDataSketch.ULL do
   end
 
   def update_many(%__MODULE__{opts: opts, backend: backend} = sketch, items) do
+    chunk_size = Keyword.get(opts, :update_many_chunk_size, @default_update_many_chunk_size)
+
     use_raw =
       backend == Backend.Rust and Keyword.get(opts, :hash_fn) == nil and
         Keyword.get(opts, :hash_strategy) != :phash2
 
     new_state =
       items
-      |> Stream.chunk_every(@update_many_chunk_size)
+      |> Stream.chunk_every(chunk_size)
       |> Enum.reduce(sketch.state, fn chunk, state_acc ->
         if use_raw do
           Backend.Rust.ull_update_many_raw(state_acc, chunk, opts)
@@ -266,14 +320,26 @@ defmodule ExDataSketch.ULL do
   """
   @spec serialize(t()) :: binary()
   def serialize(%__MODULE__{state: state, opts: opts}) do
+    start_time = System.monotonic_time()
     p = Keyword.fetch!(opts, :p)
     hs = hash_strategy_byte(opts)
     params_bin = <<p::unsigned-8, hs::unsigned-8>>
 
-    Binary.encode(
-      Binary.metadata_from_opts(Codec.sketch_id_ull(), 1, opts),
-      Binary.build_payload(params_bin, state)
-    )
+    binary =
+      Binary.encode(
+        Binary.metadata_from_opts(Codec.sketch_id_ull(), 1, opts),
+        Binary.build_payload(params_bin, state)
+      )
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:sketch, :serialize),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: :ull},
+        :sketch
+      )
+
+    binary
   end
 
   @doc """
@@ -289,19 +355,32 @@ defmodule ExDataSketch.ULL do
   """
   @spec deserialize(binary()) :: {:ok, t()} | {:error, Exception.t()}
   def deserialize(binary) when is_binary(binary) do
-    with {:ok, decoded} <- Binary.decode(binary),
-         :ok <- validate_sketch_id(decoded.sketch_id),
-         {:ok, opts} <- decode_params(decoded.params),
-         :ok <- validate_state(decoded.state, opts) do
-      backend = Backend.default()
+    start_time = System.monotonic_time()
 
-      {:ok,
-       %__MODULE__{
-         state: decoded.state,
-         opts: opts,
-         backend: backend
-       }}
-    end
+    result =
+      with {:ok, decoded} <- Binary.decode(binary),
+           :ok <- validate_sketch_id(decoded.sketch_id),
+           {:ok, opts} <- decode_params(decoded.params),
+           :ok <- validate_state(decoded.state, opts) do
+        backend = Backend.default()
+
+        {:ok,
+         %__MODULE__{
+           state: decoded.state,
+           opts: opts,
+           backend: backend
+         }}
+      end
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:sketch, :deserialize),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: :ull},
+        :sketch
+      )
+
+    result
   end
 
   @doc """
@@ -322,7 +401,14 @@ defmodule ExDataSketch.ULL do
   """
   @spec from_enumerable(Enumerable.t(), keyword()) :: t()
   def from_enumerable(enumerable, opts \\ []) do
-    new(opts) |> update_many(enumerable)
+    Telemetry.span_with_result(
+      Telemetry.event_name(:sketch, :ingest),
+      %{},
+      %{sketch_type: :ull},
+      :sketch,
+      fn -> new(opts) |> update_many(enumerable) end,
+      fn sketch -> %{size_bytes: size_bytes(sketch)} end
+    )
   end
 
   @doc """
@@ -341,7 +427,15 @@ defmodule ExDataSketch.ULL do
   """
   @spec merge_many(Enumerable.t()) :: t()
   def merge_many(sketches) do
-    Enum.reduce(sketches, fn sketch, acc -> merge(acc, sketch) end)
+    sketches_list = Enum.to_list(sketches)
+
+    Telemetry.span(
+      Telemetry.event_name(:sketch, :merge),
+      %{merge_count: length(sketches_list)},
+      %{sketch_type: :ull},
+      :sketch,
+      fn -> Enum.reduce(sketches_list, fn sketch, acc -> merge(acc, sketch) end) end
+    )
   end
 
   @doc """

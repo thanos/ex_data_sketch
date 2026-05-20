@@ -28,7 +28,12 @@ scripts = [
   "bench/filter_chain_bench.exs",
   "bench/req_bench.exs",
   "bench/misra_gries_bench.exs",
-  "bench/xxhash3_bench.exs"
+  "bench/xxhash3_bench.exs",
+  "bench/stream_ingestion_bench.exs",
+  "bench/persistence_bench.exs",
+  "bench/serialization_bench.exs",
+  "bench/merge_throughput_bench.exs",
+  "bench/update_many_chunk_bench.exs"
 ]
 
 for script <- scripts do

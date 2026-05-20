@@ -1,0 +1,153 @@
+<!-- livebook:{"app_settings":{"auto_dependency_loading":true}} -->
+
+# Persistence Snapshots
+
+```elixir
+Mix.install([
+  {:ex_data_sketch, "~> 0.9.0"}
+])
+```
+
+## Introduction
+
+ExDataSketch provides five persistence backends for saving, loading, and
+merging sketches. All backends serialize sketches using the EXSK v2 binary
+format with CRC32C checksums, ensuring data integrity across storage
+boundaries.
+
+This Livebook demonstrates ETS (in-memory) and DETS (disk-backed) storage,
+plus serialization for network transfer.
+
+## Section 1: ETS -- Fast In-Memory Storage
+
+ETS provides the fastest persistence option. Data lives as long as the
+owning process. Ideal for caching, process-local state, and read-heavy
+workloads.
+
+```elixir
+# Create an ETS table
+table = :ets.new(:sketch_cache, [:set, :public])
+
+# Build a sketch and save it
+sketch = ExDataSketch.HLL.from_enumerable(1..10_000, p: 14)
+:ok = ExDataSketch.Storage.ETS.save(sketch, table, "daily:2024-01-15")
+
+# Load it back
+{:ok, loaded} = ExDataSketch.Storage.ETS.load(ExDataSketch.HLL, table, "daily:2024-01-15")
+IO.puts("Loaded cardinality: #{Float.round(ExDataSketch.HLL.estimate(loaded), 0)}")
+
+# Atomic merge: merge a partial sketch into the stored value
+partial = ExDataSketch.HLL.from_enumerable(10_001..15_000, p: 14)
+:ok = ExDataSketch.Storage.ETS.merge(partial, table, "daily:2024-01-15")
+
+# Verify the merge
+{:ok, merged} = ExDataSketch.Storage.ETS.load(ExDataSketch.HLL, table, "daily:2024-01-15")
+IO.puts("After merge: #{Float.round(ExDataSketch.HLL.estimate(merged), 0)} (expected ~15000)")
+
+# Cleanup
+:ok = ExDataSketch.Storage.ETS.delete(table, "daily:2024-01-15")
+:ets.delete(table)
+```
+
+## Section 2: DETS -- Durable Disk Storage
+
+DETS stores sketches on disk, surviving process and node restarts. Slower
+than ETS but provides durability without requiring a database.
+
+```elixir
+# Open a DETS table
+{:ok, _} = :dets.open_file(:sketch_dets, [type: :set])
+
+# Save a sketch
+sketch = ExDataSketch.ULL.from_enumerable(1..5000, p: 14)
+:ok = ExDataSketch.Storage.DETS.save(sketch, :sketch_dets, "metrics:hourly")
+
+# Load it back
+{:ok, loaded} = ExDataSketch.Storage.DETS.load(ExDataSketch.ULL, :sketch_dets, "metrics:hourly")
+IO.puts("Loaded ULL cardinality: #{Float.round(ExDataSketch.ULL.estimate(loaded), 0)}")
+
+# Merge into stored value
+partial = ExDataSketch.ULL.from_enumerable(5001..8000, p: 14)
+:ok = ExDataSketch.Storage.DETS.merge(partial, :sketch_dets, "metrics:hourly")
+
+{:ok, merged} = ExDataSketch.Storage.DETS.load(ExDataSketch.ULL, :sketch_dets, "metrics:hourly")
+IO.puts("After merge: #{Float.round(ExDataSketch.ULL.estimate(merged), 0)} (expected ~8000)")
+
+# Cleanup
+:ok = ExDataSketch.Storage.DETS.delete(:sketch_dets, "metrics:hourly")
+:ok = :dets.close(:sketch_dets)
+```
+
+## Section 3: Serialization and Transport
+
+Serialize sketches for network transfer, message queues, or file storage:
+
+```elixir
+sketch = ExDataSketch.CMS.from_enumerable(
+  Stream.map(1..10_000, fn i -> "item_#{rem(i, 100)}" end),
+  width: 128,
+  depth: 5
+)
+
+# Serialize to binary (EXSK v2 with CRC32C checksum)
+binary = ExDataSketch.CMS.serialize(sketch)
+IO.puts("Serialized size: #{byte_size(binary)} bytes")
+
+# Deserialize
+{:ok, restored} = ExDataSketch.CMS.deserialize(binary)
+IO.puts("Count of 'item_1': #{ExDataSketch.CMS.estimate(restored, "item_1")}")
+
+# Performance comparison: serialize overhead
+sketch_h = ExDataSketch.HLL.from_enumerable(1..10_000, p: 14)
+{ser_time, binary} = :timer.tc(fn -> ExDataSketch.HLL.serialize(sketch_h) end)
+IO.puts("HLL serialize: #{div(ser_time, 1000)}ms for #{byte_size(binary)} bytes")
+
+# Deserialize round-trip
+{:ok, roundtrip} = ExDataSketch.HLL.deserialize(binary)
+IO.puts("Round-trip estimate: #{Float.round(ExDataSketch.HLL.estimate(roundtrip), 0)} (original: #{Float.round(ExDataSketch.HLL.estimate(sketch_h), 0)})")
+```
+
+## Section 4: Multi-Backend Strategy
+
+```elixir
+# Pattern: ETS for hot data, DETS for warm, serialize for cold storage
+hot_table = :ets.new(:hot_sketches, [:set, :public])
+
+# Hot: in-memory ETS for sub-millisecond access
+sketch = ExDataSketch.HLL.from_enumerable(1..50_000, p: 14)
+:ok = ExDataSketch.Storage.ETS.save(sketch, hot_table, "active:users")
+
+# Warm: periodic DETS snapshots for restart recovery
+{:ok, _} = :dets.open_file(:warm_sketches, [type: :set])
+:ok = ExDataSketch.Storage.DETS.save(sketch, :warm_sketches, "active:users")
+
+# Cold: serialized binary for archival or cross-node transfer
+binary = ExDataSketch.HLL.serialize(sketch)
+IO.puts("Archive size: #{byte_size(binary)} bytes")
+
+# Cleanup
+:ets.delete(hot_table)
+:ok = :dets.close(:warm_sketches)
+```
+
+## Section 5: Operational Guidance
+
+**Choose ETS when**:
+- You need sub-millisecond reads
+- Data can be lost on node restart (ephemeral caching)
+- Multiple processes need concurrent read access
+
+**Choose DETS when**:
+- You need durability across process restarts
+- Write throughput is moderate (DETS serializes writes)
+- 2GB file size limit is acceptable
+
+**Choose external storage (Ecto, Mnesia, CubDB) when**:
+- You need multi-node replication (Mnesia)
+- You need query capabilities (Ecto/SQL)
+- You need atomic multi-key transactions (CubDB)
+
+**Serialization overhead**:
+- HLL at p=14: 16KB serialized (negligible serialize/deserialize cost)
+- CMS (128x5): ~2KB
+- Theta (k=4096): ~32KB

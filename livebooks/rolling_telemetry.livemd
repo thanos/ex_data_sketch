@@ -1,0 +1,135 @@
+<!-- livebook:{"app_settings":{"auto_dependency_loading":true}} -->
+
+# Rolling Telemetry Windows
+
+```elixir
+Mix.install([
+  {:ex_data_sketch, "~> 0.9.0"}
+])
+```
+
+## Introduction
+
+Rolling telemetry windows track metrics over time intervals using
+probabilistic sketches. Instead of storing every event, maintain a
+sketch per time window and merge windows as they age out.
+
+## Section 1: Basic Time-Windowed Sketch
+
+```elixir
+defmodule RollingWindow do
+  use GenServer
+
+  @window_ms 100  # 100ms windows for demo purposes
+
+  def start_link(opts) do
+    name = Keyword.get(opts, :name, __MODULE__)
+    GenServer.start_link(__MODULE__, opts, name: name)
+  end
+
+  def track(item, name \\ __MODULE__), do: GenServer.cast(name, {:track, item})
+  def estimate(name \\ __MODULE__), do: GenServer.call(name, :estimate)
+
+  def init(opts) do
+    sketch_mod = Keyword.get(opts, :sketch_module, ExDataSketch.HLL)
+    sketch_opts = Keyword.get(opts, :sketch_opts, [p: 14])
+    window_count = Keyword.get(opts, :windows, 5)
+
+    schedule_flush()
+
+    {:ok, %{
+      sketch_mod: sketch_mod,
+      sketch_opts: sketch_opts,
+      current: sketch_mod.new(sketch_opts),
+      windows: [],
+      window_count: window_count
+    }}
+  end
+
+  def handle_cast({:track, item}, state) do
+    updated = state.sketch_mod.update(state.current, item)
+    {:noreply, %{state | current: updated}}
+  end
+
+  def handle_call(:estimate, _from, state) do
+    merged_windows = case state.windows do
+      [] -> state.current
+      windows -> state.sketch_mod.merge_many([state.current | windows])
+    end
+    estimate = state.sketch_mod.estimate(merged_windows)
+    {:reply, estimate, state}
+  end
+
+  def handle_info(:flush, state) do
+    new_windows = [state.current | state.windows]
+                   |> Enum.take(state.window_count)
+    schedule_flush()
+    {:noreply, %{state | current: state.sketch_mod.new(state.sketch_opts), windows: new_windows}}
+  end
+
+  defp schedule_flush, do: Process.send_after(self(), :flush, @window_ms)
+end
+
+# Start a rolling window (5 x 100ms windows)
+{:ok, _pid} = RollingWindow.start_link(windows: 5)
+
+# Batch 1: 200 distinct users
+for i <- 1..1000, do: RollingWindow.track("user_#{rem(i, 200)}")
+IO.puts("After batch 1 (200 users): #{Float.round(RollingWindow.estimate(), 0)}")
+
+# Wait for flush to rotate the window
+Process.sleep(150)
+
+# Batch 2: 500 distinct users (new window)
+for i <- 1..1000, do: RollingWindow.track("user_#{rem(i, 500)}")
+IO.puts("After batch 2 (500 users in new window): #{Float.round(RollingWindow.estimate(), 0)}")
+
+# Wait for another flush
+Process.sleep(150)
+
+# Batch 3: only 50 distinct users (demonstrates window aging)
+for i <- 1..100, do: RollingWindow.track("user_#{rem(i, 50)}")
+IO.puts("After batch 3 (50 users, older windows still held): #{Float.round(RollingWindow.estimate(), 0)}")
+```
+
+## Section 2: Persistence for Long-Term Storage
+
+Persist window snapshots to ETS for recovery after crashes:
+
+```elixir
+# Save the current window to ETS
+table = :ets.new(:sketch_windows, [:set, :public, :named_table])
+
+window_sketch = ExDataSketch.HLL.from_enumerable(1..500, p: 14)
+ExDataSketch.Storage.ETS.save(window_sketch, table, "window:2024-01-15:00")
+
+# Load it back
+{:ok, loaded} = ExDataSketch.Storage.ETS.load(ExDataSketch.HLL, table, "window:2024-01-15:00")
+IO.puts("Loaded estimate: #{Float.round(ExDataSketch.HLL.estimate(loaded), 0)}")
+
+:ets.delete(table)
+```
+
+## Section 3: Telemetry Integration
+
+Attach handlers to observe sketch operations:
+
+```elixir
+:telemetry.attach("demo-handler", [:ex_data_sketch, :sketch, :ingest], fn _name, measurements, metadata, _config ->
+  IO.puts("Ingested #{metadata.sketch_type}: #{measurements.duration}ns")
+end, nil)
+
+# This will emit a telemetry event
+sketch = ExDataSketch.HLL.from_enumerable(1..1000, p: 14)
+
+:telemetry.detach("demo-handler")
+```
+
+## Section 4: Operational Guidance
+
+**Window sizing**:
+- 1-minute windows, 5 deep = 5 minutes of history (good for dashboards)
+- 5-minute windows, 12 deep = 1 hour (good for alerting)
+- 1-hour windows, 24 deep = 1 day (good for reporting)
+
+**Memory**: At p=14, each window = 16KB. 24 windows = 384KB total.

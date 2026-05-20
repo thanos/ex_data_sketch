@@ -7,6 +7,135 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-05-19
+
+Release theme: **Streaming Integrations.** Transforms ex_data_sketch from a collection of probabilistic algorithms into a BEAM-native streaming approximate analytics infrastructure layer. Stream/Collectable integration, Broadway/GenStage/Flow pipelines, five persistence backends, production-grade telemetry + OpenTelemetry, ULL accuracy fixes, and comprehensive educational materials.
+
+### Added
+
+- **Stream and Collectable integration (Phase 1).**
+  - `ExDataSketch.Stream` -- terminal stream consumers (`hll/2`, `cms/2`, `theta/2`, `ull/2`, `kll/2`, `ddsketch/2`, `req/2`, `bloom/2`, `quotient/2`, `cqf/2`, `iblt/2`, `frequent_items/2`, `misra_gries//2`).
+  - `ExDataSketch.Stream.reduce_into/3` -- reduce an enumerable into a module or existing sketch.
+  - `ExDataSketch.Stream.reduce_partitioned/3` -- partitioned parallel reduction with merge.
+  - `Collectable` protocol for all mergeable sketches -- `Enum.into/2` and `for` comprehensions.
+  - `from_enumerable/2` on all 13 mergeable sketch modules.
+  - `reducer/1` and `merger/1` on all mergeable sketch modules for `Enum.reduce/3` and `Flow.reduce/3` ergonomics.
+
+- **Broadway, GenStage, and Flow integration (Phase 2).**
+  - `ExDataSketch.Broadway.accumulate/3` and `accumulate_into/4` -- build sketches from Broadway message batches.
+  - `ExDataSketch.Broadway.PeriodicAggregator` -- GenServer that accumulates sketches and flushes on a timer with optional callback.
+  - `ExDataSketch.GenStage.SketchConsumer` -- GenStage consumer that accumulates events into a sketch, supports periodic flush.
+  - `ExDataSketch.GenStage.SketchProducer` -- GenStage producer that emits accumulated sketches on demand.
+  - `ExDataSketch.GenStage.SketchStage` -- combined producer-consumer that accumulates and emits.
+  - `ExDataSketch.Flow.reduce/3` and `merge/2` -- parallel partition-local reduction with merge for Flow pipelines.
+  - All integration modules are optional and gated behind dependency availability checks (`ExDataSketch.Integration`).
+
+- **Persistence surfaces (Phase 3).**
+  - `ExDataSketch.Storage.ETS` -- in-memory persistence with `save/3`, `load/3`, `merge/3`, `delete/2`.
+  - `ExDataSketch.Storage.DETS` -- disk-backed persistence with same API.
+  - `ExDataSketch.Storage.CubDB` -- CubDB persistence for atomic key-value storage.
+  - `ExDataSketch.Storage.Mnesia` -- distributed persistence for multi-node scenarios.
+  - `ExDataSketch.Storage.Ecto` -- SQL database persistence with schema and migration helpers.
+  - `ExDataSketch.Storage.Ecto.Schema` and `ExDataSketch.Storage.Ecto.Migration` -- Ecto schema and migration for sketch storage.
+  - `ExDataSketch.Storage` -- shared behaviour documentation and types for all backends.
+  - All backends serialize via EXSK v2 binary format with CRC32C checksum; no raw state is ever stored.
+  - Configuration-driven backend availability via `config :ex_data_sketch, :persistence_backends`.
+
+- **Telemetry and observability (Phase 4).**
+  - `ExDataSketch.Telemetry` -- structured telemetry event emission at batch/compound operation boundaries (not per-update).
+  - Four event categories: `:sketch` (create, ingest, merge, serialize, deserialize), `:persistence` (save, load, merge, delete), `:stream` (reduce, partition_merge), `:pipeline` (accumulate, periodic_flush).
+  - `Telemetry.execute/4`, `Telemetry.span/5`, `Telemetry.span_with_result/6` -- timing wrappers with category-based enable/disable.
+  - `Telemetry.event_name/2` and `all_event_names/0` for programmatic handler attachment.
+  - `ExDataSketch.Telemetry.OpenTelemetry` -- OTEL span bridge (requires `:opentelemetry_api ~> 1.0`).
+  - Configuration: `config :ex_data_sketch, telemetry_enabled: false` or per-category `config :ex_data_sketch, :telemetry, sketch: true, persistence: false`.
+  - Telemetry events instrumented in all 13 sketch modules, all 5 storage backends, `Stream`, and `Broadway`/`GenStage`/`Flow`.
+
+- **ULL accuracy correction (Phase 5).**
+  - ULL linear counting correction: `zeros > 0` threshold (not HLL-style `raw_estimate <= 2.5*m && zeros > 0`). Empirical validation shows linear counting always more accurate for ULL when empty registers exist.
+  - ULL large range correction: bias correction for very high cardinality estimates, matching Ertl 2023.
+  - Both Pure Elixir and Rust NIF backends updated; property tests updated with tiered accuracy bounds (35%/25%/15% at p=8).
+
+- **Configurable `update_many` chunk size (Phase 5).**
+  - `update_many_chunk_size` option on HLL, ULL, CMS, and Theta (via `new/1` opts). Default 10,000 (backward compatible).
+
+- **EXSK v1 serialization escape hatch (Phase 5).**
+  - `HLL.serialize(sketch, format: :v1)` produces a backward-compatible v0.7.x binary (requires `:phash2` hash strategy, raises `ArgumentError` for other strategies).
+  - `Binary.encode_v1/4` utility for custom v1 encoding.
+  - v0.7.x binaries remain decodable via `Binary.decode/1` (version sniffing).
+
+- **Generalized corruption propagation properties (Phase 5).**
+  - HLL, ULL, and CMS bit-flip properties in `property_guarantees_test.exs` asserting that corrupted frames either fail CRC or produce estimates within 10x of the truthful estimate (never silently catastrophic).
+  - Quotient filter delete property: count reduction (not `member?` becomes false).
+
+- **Benchmarks and property tests (Phase 6).**
+  - `bench/persistence_bench.exs` -- ETS save/load/merge overhead.
+  - `bench/serialization_bench.exs` -- serialize/deserialize throughput.
+  - `bench/merge_throughput_bench.exs` -- HLL/ULL/CMS `merge_many` benchmarks.
+  - `bench/update_many_chunk_bench.exs` -- configurable chunk size impact on throughput.
+  - `bench/stream_ingestion_bench.exs` -- stream ingestion latency and throughput.
+  - `test/ex_data_sketch_serialization_stability_test.exs` -- 7 round-trip properties (HLL v2/v1, ULL, CMS, Theta, Bloom, v1-v2 cross-version).
+  - Expanded stream properties: ULL stream equivalence, ULL partition merge, ULL merge associativity, Theta stream equivalence, CMS merge associativity.
+  - Expanded storage properties: DETS save/load, DETS merge.
+
+- **Educational materials.**
+  - `guides/aggregation_wall.md` (188 lines) -- why exact aggregation breaks at scale, BEAM's natural fit, common patterns.
+  - `guides/distributed_merge_semantics.md` (328 lines) -- associativity/commutativity proofs, fan-in/tree/partition patterns, anti-patterns.
+  - `guides/livebooks.md` -- Livebook catalogue with recommended order and learning objectives.
+  - Updated `guides/telemetry.md` -- pipeline/stream event tables, `all_event_names/0` reference.
+  - Updated `guides/streaming_sketches.md` -- Stream API, Collectable, partitioned reduction.
+  - Updated `guides/broadway_integration.md` -- `accumulate/3`, `accumulate_into/4`, `PeriodicAggregator`.
+  - Updated `guides/genstage_integration.md` -- `SketchConsumer`, `SketchProducer`, `SketchStage`.
+  - Updated `guides/persistence.md` -- all 5 backends, configuration, EXSK v2 storage contract.
+  - Updated `guides/observability.md` -- telemetry categories, event names, OTEL bridge.
+
+- **Livebooks.**
+  - `livebooks/streaming_cardinality.livemd` -- Stream API, precision tradeoffs, ULL vs HLL.
+  - `livebooks/broadway_integration.livemd` -- accumulate, PeriodicAggregator, partition handling.
+  - `livebooks/genstage_aggregation.livemd` -- SketchConsumer, SketchProducer, flush patterns.
+  - `livebooks/rolling_telemetry.livemd` -- time-windowed sketches, ETS persistence.
+  - `livebooks/distributed_merges.livemd` -- associativity, tree aggregation, ETS sharding.
+  - `livebooks/persistence_snapshots.livemd` -- ETS/DETS, serialization, multi-backend strategy.
+  - `livebooks/livedashboard_integration.livemd` -- telemetry wiring, custom dashboard pages.
+  - `livebooks/ai_token_analytics.livemd` -- LLM workload multi-dimensional sketch dashboard.
+  - `livebooks/phoenix_observability.livemd` -- DAU, latency, rate limiting, ETS persistence.
+
+### Changed
+
+- **`ExDataSketch.HLL.new/1`** now accepts `update_many_chunk_size` option (default 10,000).
+- **`ExDataSketch.ULL.new/1`** now accepts `update_many_chunk_size` option (default 10,000).
+- **`ExDataSketch.CMS.new/1`** now accepts `update_many_chunk_size` option (default 10,000).
+- **`ExDataSketch.Theta.new/1`** now accepts `update_many_chunk_size` option (default 10,000).
+- **ULL accuracy** at low cardinalities significantly improved via linear counting + large range correction. Users may see different estimates for sketches with very few items; the new estimates are more accurate.
+- **`ExDataSketch.ULL` moduledoc** updated with estimation strategy description and p>=12 recommendation.
+
+### Fixed
+
+- **ULL low-precision accuracy**: p=8 with n=1000 improved from ~62.5% relative error to ~0.8% via linear counting correction.
+- **ETS merge test tolerance**: 60% tolerance for cardinality < 5 (HLL at p=10 has high relative error at tiny cardinalities).
+- **Quotient filter delete property**: corrected from asserting `member?` becomes false (not guaranteed) to asserting count reduction.
+- **DETS API**: corrected `close_file` to `:dets.close/1` in property tests.
+- **`PeriodicAggregator` telemetry metadata**: uses `sketch_type` only (removed non-existent `state.id`).
+- **OTEL handler IDs**: tuples `{"ex_data_sketch_opentelemetry", event_name}`, not strings.
+
+### Migration
+
+See `guides/v0.8.0_migration_notes.md` for the v0.7.x to v0.8.0 migration guide. For v0.8.0 to v0.9.0:
+
+- **No code changes required for most users.** All new modules are additive; existing APIs are backward compatible.
+- **ULL estimates may change** at very low cardinalities (p < 12, n < 500). The new estimates are more accurate. If you depend on exact numeric values in tests, add tolerance for small cardinalities.
+- **`update_many_chunk_size`** defaults to 10,000 (matching v0.8.0 behavior). No change needed unless you want to tune batch throughput.
+- **v1 serialization** is an opt-in escape hatch via `format: :v1`. Default serialization remains EXSK v2.
+- **Telemetry** is enabled by default. Disable with `config :ex_data_sketch, telemetry_enabled: false`.
+- **Persistence backends** are enabled by default when their runtime dependencies are available. Disable individuals via `config :ex_data_sketch, :persistence_backends, ets: [enabled: false]`.
+
+### Stats
+
+- **+21 new modules**: `Stream`, `Broadway`, `Broadway.PeriodicAggregator`, `Flow`, `GenStage`, `GenStage.SketchConsumer`, `GenStage.SketchProducer`, `GenStage.SketchStage`, `Storage`, `Storage.ETS`, `Storage.DETS`, `Storage.CubDB`, `Storage.Mnesia`, `Storage.Ecto`, `Storage.Ecto.Schema`, `Storage.Ecto.Migration`, `Telemetry`, `Telemetry.OpenTelemetry`, `Integration`, `Binary`, `Binary.encode_v1/4` utility.
+- **1558 tests, 204 doctests, 199 properties, 0 failures** (NIF on).
+- **9 Livebooks**, **20 guides** (3 new educational guides + 6 updated + `livebooks.md` index).
+- **5 new benchmark suites**, **7 new property test groups**.
+- **`:telemetry ~> 1.0`** required dependency; **`:opentelemetry_api ~> 1.0`**, **`:broadway`**, **`:flow`**, **`:cubdb`**, **`:ecto_sql`**, **`:mnesia`** optional dependencies.
+
 ## [0.8.0] - 2026-05-12
 
 Release theme: **Deterministic Foundations.** Transforms ex_data_sketch from a collection of probabilistic algorithms into a production-grade probabilistic runtime for the BEAM. Focus: deterministic hashing, binary stability, corruption detection, hot-path performance, and installation reliability.

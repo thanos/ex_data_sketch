@@ -12,6 +12,10 @@ Every sketch module (`HLL`, `CMS`, `Theta`) exposes four convenience functions:
 | `reducer/1`          | Returns a 2-arity function for reduce chains |
 | `merger/1`           | Returns a 2-arity function for merging       |
 
+Since v0.9.0, sketches also support `ExDataSketch.Stream` and the
+`Collectable` protocol. See [Streaming Sketches](streaming_sketches.md) for
+full documentation.
+
 ## Enum and Stream
 
 ### Building a sketch from a collection
@@ -48,6 +52,42 @@ The `reducer/1` function returns a function compatible with `Enum.reduce/3`:
 reducer_fn = HLL.reducer()
 sketch = Enum.reduce(user_ids, HLL.new(), reducer_fn)
 ```
+
+### ExDataSketch.Stream
+
+Since v0.9.0, `ExDataSketch.Stream` provides terminal stream consumers:
+
+```elixir
+# Consume a lazy stream directly
+sketch =
+  File.stream!("events.csv")
+  |> Stream.map(&parse_user_id/1)
+  |> Stream.filter(&valid?/1)
+  |> ExDataSketch.Stream.hll(p: 14)
+
+# Partitioned reduction for large streams
+sketch =
+  large_stream
+  |> ExDataSketch.Stream.reduce_partitioned(ExDataSketch.HLL, partitions: 8, p: 14)
+
+# Reduce into a module or existing sketch
+sketch = ExDataSketch.Stream.reduce_into(items, ExDataSketch.HLL, p: 14)
+sketch = ExDataSketch.Stream.reduce_into(more_items, existing_sketch)
+```
+
+### Collectable
+
+All mergeable sketches implement the `Collectable` protocol:
+
+```elixir
+# Build from a range
+sketch = Enum.into(1..1000, ExDataSketch.HLL.new(p: 14))
+
+# Build from a comprehension
+sketch = for i <- 1..1000, into: ExDataSketch.HLL.new(p: 14), do: "item_#{i}"
+```
+
+See [Streaming Sketches](streaming_sketches.md) for full documentation.
 
 ## Flow
 
