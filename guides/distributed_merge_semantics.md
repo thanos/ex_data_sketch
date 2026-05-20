@@ -322,6 +322,13 @@ from the previous period.
 
 ## Further Reading
 
+- Flajolet et al., "HyperLogLog: The Analysis of a Near-Optimal Cardinality
+  Estimation Algorithm" (2007) -- HLL register-wise max merge semilattice
+- Cormode and Muthukrishnan, "An Improved Data Stream Summary: The
+  Count-Min Sketch and Its Applications" (2005) -- CMS point-wise max merge
+- Heule, Nunkesser, and Hall, "HyperLogLog in Practice: Algorithmic
+  Engineering of a State of The Art Cardinality Estimation Algorithm" (2013)
+  -- ULL sparse/dense representation and linear counting
 - `guides/streaming_sketches.md` -- Stream API for local accumulation
 - `guides/broadway_integration.md` -- Broadway pipeline integration
 - `guides/genstage_integration.md` -- GenStage consumer integration

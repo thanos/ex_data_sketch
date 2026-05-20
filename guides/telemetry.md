@@ -37,15 +37,15 @@ Disable specific categories:
 
 | Event | Measurements | Metadata |
 |-------|-------------|----------|
-| `[:ex_data_sketch, :sketch, :ingest]` | `duration`, `size_bytes` (HLL only) | `sketch_type` |
+| `[:ex_data_sketch, :sketch, :ingest]` | `duration`, `size_bytes` | `sketch_type` |
 | `[:ex_data_sketch, :sketch, :merge]` | `duration`, `merge_count` | `sketch_type` |
 | `[:ex_data_sketch, :sketch, :serialize]` | `duration`, `size_bytes` | `sketch_type` |
 | `[:ex_data_sketch, :sketch, :deserialize]` | `duration`, `size_bytes` | `sketch_type` |
 
-> **Note:** The `:ingest` event's `size_bytes` measurement is only available
-> for HLL. All other sketch types emit `%{duration}` only. This is because
-> `from_enumerable/2` consumes a lazy stream and the item count is not
-> available without forcing evaluation.
+> **Note:** The `:ingest` event's `size_bytes` measurement reflects the
+> serialized size of the resulting sketch. Since the sketch is fully
+> constructed before this measurement is taken, it is always available
+> regardless of sketch type.
 
 ### Persistence Events
 

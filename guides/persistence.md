@@ -7,12 +7,17 @@ with CRC32C checksum integrity.
 ## Supported Backends
 
 | Backend  | Module                            | Distribution | Durability      | Transactional |
-|----------|-----------------------------------|--------------|----------------|---------------|
-| ETS      | `ExDataSketch.Storage.ETS`        | Per-node     | Process lifetime| No            |
+|----------|-----------------------------------|--------------|-----------------|---------------|
+| ETS      | `ExDataSketch.Storage.ETS`        | Per-node     | Process lifetime| No (RMW)      |
 | DETS     | `ExDataSketch.Storage.DETS`       | Per-node     | Disk            | No (file lock)|
 | CubDB    | `ExDataSketch.Storage.CubDB`      | Per-node     | Disk            | Yes (MVCC)    |
 | Mnesia   | `ExDataSketch.Storage.Mnesia`     | Multi-node   | Disk+RAM        | Yes (ACID)    |
 | Ecto     | `ExDataSketch.Storage.Ecto`      | Multi-node   | Database        | Yes (DB)      |
+
+> **Note:** ETS `merge/3` uses a read-modify-write cycle without table-level
+> locking, so concurrent writers may overwrite each other. For atomic merge
+> guarantees, use Mnesia or Ecto. DETS provides file-lock serialization for
+> single-node atomicity only.
 
 ## Unified API
 
@@ -25,7 +30,7 @@ Every backend implements the same operations:
 # Load a sketch by key and module
 {:ok, sketch} = Backend.load(SketchModule, storage, key)
 
-# Atomic merge into persisted sketch
+# Merge into persisted sketch
 :ok = Backend.merge(sketch, storage, key)
 
 # Delete a sketch by key

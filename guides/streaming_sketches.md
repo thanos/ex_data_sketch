@@ -145,6 +145,9 @@ Skipped sketches:
   mergeable.
 - **Cuckoo** -- bounded capacity means `put/2` can return `{:error, :full}`;
   `Collectable` has no error signalling mechanism.
+- **Bloom** -- included in `Collectable` above, but note that Bloom filters
+  have fixed capacity; `put/2` does not return an error, but items added
+  beyond the intended capacity degrade the false-positive rate.
 
 ## Merge and Partition Awareness
 
