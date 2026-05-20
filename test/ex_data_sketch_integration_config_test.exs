@@ -3,6 +3,11 @@ defmodule ExDataSketch.IntegrationConfigTest do
 
   alias ExDataSketch.Integration
 
+  @broadway_available Code.ensure_loaded?(Broadway)
+  @flow_available Code.ensure_loaded?(Flow)
+  @cubdb_available Code.ensure_loaded?(CubDB)
+  @ecto_available Code.ensure_loaded?(Ecto.Adapters.SQL)
+
   describe "broadway_available?/0 with config override" do
     test "returns false when explicitly disabled" do
       original = Application.get_env(:ex_data_sketch, :integrations)
@@ -16,10 +21,10 @@ defmodule ExDataSketch.IntegrationConfigTest do
       end
     end
 
-    test "returns true when explicitly enabled" do
+    test "respects compile-time availability when explicitly enabled" do
       original = Application.get_env(:ex_data_sketch, :integrations)
       Application.put_env(:ex_data_sketch, :integrations, broadway: true)
-      assert Integration.broadway_available?() == true
+      assert Integration.broadway_available?() == @broadway_available
 
       if original do
         Application.put_env(:ex_data_sketch, :integrations, original)
@@ -30,10 +35,10 @@ defmodule ExDataSketch.IntegrationConfigTest do
   end
 
   describe "flow_available?/0 with config override" do
-    test "returns true when explicitly enabled" do
+    test "respects compile-time availability when explicitly enabled" do
       original = Application.get_env(:ex_data_sketch, :integrations)
       Application.put_env(:ex_data_sketch, :integrations, flow: true)
-      assert Integration.flow_available?() == true
+      assert Integration.flow_available?() == @flow_available
 
       if original do
         Application.put_env(:ex_data_sketch, :integrations, original)
@@ -48,10 +53,10 @@ defmodule ExDataSketch.IntegrationConfigTest do
       assert is_boolean(Integration.cubdb_available?())
     end
 
-    test "returns true when backend enabled in config" do
+    test "respects compile-time availability when backend enabled in config" do
       original = Application.get_env(:ex_data_sketch, :persistence_backends)
       Application.put_env(:ex_data_sketch, :persistence_backends, cubdb: [enabled: true])
-      assert Integration.cubdb_available?() == true
+      assert Integration.cubdb_available?() == @cubdb_available
 
       if original do
         Application.put_env(:ex_data_sketch, :persistence_backends, original)
@@ -78,10 +83,10 @@ defmodule ExDataSketch.IntegrationConfigTest do
       assert is_boolean(Integration.ecto_available?())
     end
 
-    test "returns true when backend enabled in config" do
+    test "respects compile-time availability when backend enabled in config" do
       original = Application.get_env(:ex_data_sketch, :persistence_backends)
       Application.put_env(:ex_data_sketch, :persistence_backends, ecto: [enabled: true])
-      assert Integration.ecto_available?() == true
+      assert Integration.ecto_available?() == @ecto_available
 
       if original do
         Application.put_env(:ex_data_sketch, :persistence_backends, original)
@@ -108,7 +113,13 @@ defmodule ExDataSketch.IntegrationConfigTest do
       original_backends = Application.get_env(:ex_data_sketch, :persistence_backends)
       Application.put_env(:ex_data_sketch, :persistence_backends, cubdb: [enabled: true])
 
-      assert Integration.require_cubdb!() == :ok
+      if @cubdb_available do
+        assert Integration.require_cubdb!() == :ok
+      else
+        assert_raise RuntimeError, ~r/CubDB persistence requires/, fn ->
+          Integration.require_cubdb!()
+        end
+      end
 
       if original_backends do
         Application.put_env(:ex_data_sketch, :persistence_backends, original_backends)
@@ -151,11 +162,11 @@ defmodule ExDataSketch.IntegrationConfigTest do
   end
 
   describe "configured_with_backends?/2 edge cases" do
-    test "returns true when backend config is true (not a keyword list)" do
+    test "respects compile-time availability when backend config is true (not a keyword list)" do
       original = Application.get_env(:ex_data_sketch, :persistence_backends)
       Application.put_env(:ex_data_sketch, :persistence_backends, cubdb: true)
 
-      assert Integration.cubdb_available?() == true
+      assert Integration.cubdb_available?() == @cubdb_available
 
       if original do
         Application.put_env(:ex_data_sketch, :persistence_backends, original)

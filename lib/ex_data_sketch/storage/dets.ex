@@ -92,7 +92,8 @@ defmodule ExDataSketch.Storage.DETS do
 
   - `{:ok, sketch}` on success.
   - `{:error, :not_found}` if the key does not exist.
-  - `{:error, reason}` if deserialization or DETS fails.
+  - `{:error, %DeserializationError{}}` if the stored binary is corrupted.
+  - `{:error, reason}` on DETS or other deserialization failures.
 
   ## Examples
 
@@ -142,7 +143,11 @@ defmodule ExDataSketch.Storage.DETS do
 
   If no sketch exists at the key, this is equivalent to `save/3`. Otherwise,
   the persisted sketch is loaded, merged with the given sketch, and saved back.
-  The read-modify-write cycle occurs while the DETS table lock is held.
+
+  The read-modify-write cycle occurs while the DETS table lock is held. This
+  provides atomicity for single-node writers. DETS file-level locking does
+  not extend across distributed nodes; for distributed atomicity, use
+  `ExDataSketch.Storage.Mnesia`.
 
   ## Arguments
 
@@ -211,7 +216,8 @@ defmodule ExDataSketch.Storage.DETS do
 
   ## Returns
 
-  `:ok` always (even if the key did not exist).
+  - `:ok` on success (including when the key did not exist).
+  - `{:error, reason}` if the DETS operation fails.
 
   ## Examples
 
@@ -227,10 +233,15 @@ defmodule ExDataSketch.Storage.DETS do
       :ok
 
   """
-  @spec delete(atom(), ExDataSketch.Storage.key()) :: :ok
+  @spec delete(atom(), ExDataSketch.Storage.key()) :: :ok | {:error, term()}
   def delete(table, key) do
     start_time = System.monotonic_time()
-    :dets.delete(table, key)
+
+    result =
+      case :dets.delete(table, key) do
+        :ok -> :ok
+        {:error, _} = err -> err
+      end
 
     :ok =
       Telemetry.execute(
@@ -240,7 +251,7 @@ defmodule ExDataSketch.Storage.DETS do
         :persistence
       )
 
-    :ok
+    result
   end
 
   defp sketch_type_from_module(module) do

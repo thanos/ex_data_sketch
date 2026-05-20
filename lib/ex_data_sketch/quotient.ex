@@ -232,12 +232,14 @@ defmodule ExDataSketch.Quotient do
   """
   @spec merge_many(Enumerable.t()) :: t()
   def merge_many(filters) do
+    filters_list = Enum.to_list(filters)
+
     Telemetry.span(
       Telemetry.event_name(:sketch, :merge),
-      %{merge_count: Enum.count(filters)},
+      %{merge_count: length(filters_list)},
       %{sketch_type: :quotient},
       :sketch,
-      fn -> Enum.reduce(filters, fn qf, acc -> merge(acc, qf) end) end
+      fn -> Enum.reduce(filters_list, fn qf, acc -> merge(acc, qf) end) end
     )
   end
 

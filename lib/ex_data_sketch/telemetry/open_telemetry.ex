@@ -44,6 +44,9 @@ defmodule ExDataSketch.Telemetry.OpenTelemetry do
   """
 
   @compile {:no_warn_undefined, OpenTelemetry.Tracer}
+  @compile {:no_warn_undefined, :opentelemetry}
+  @compile {:no_warn_undefined, :otel_tracer}
+  @compile {:no_warn_undefined, :otel_span}
 
   alias ExDataSketch.{Integration, Telemetry}
 
@@ -53,8 +56,10 @@ defmodule ExDataSketch.Telemetry.OpenTelemetry do
   Attaches OpenTelemetry span handlers for all ExDataSketch telemetry events.
 
   Creates one handler per event that starts an OTEL span with the event's
-  measurements and metadata as span attributes. The span name is derived
-  from the event name (e.g., `"ex_data_sketch.sketch.ingest"`).
+  measurements and metadata as span attributes. When a `duration` measurement
+  is present, the span's start and end times are set from it, producing a span
+  with the correct duration. Events without a `duration` measurement produce
+  signalling spans (start time equals end time).
 
   Calling `setup/0` when the `:opentelemetry_api` package is not available
   raises an error with installation instructions.
@@ -106,19 +111,26 @@ defmodule ExDataSketch.Telemetry.OpenTelemetry do
     _ -> :ok
   end
 
-  @compile {:no_warn_undefined, OpenTelemetry.Tracer}
-
   if Code.ensure_loaded?(OpenTelemetry.Tracer) do
-    require OpenTelemetry.Tracer
-
     defp handle_event(event_name, measurements, metadata, _config) do
       if Integration.opentelemetry_available?() do
         span_name = event_name |> Enum.join(".")
         attributes = build_attributes(event_name, measurements, metadata)
 
-        OpenTelemetry.Tracer.with_span span_name, attributes: attributes do
-          :ok
-        end
+        end_time_ns = System.os_time(:nanosecond)
+        duration_native = Map.get(measurements, :duration, 0)
+        duration_ns = System.convert_time_unit(duration_native, :native, :nanosecond)
+        start_time_ns = end_time_ns - duration_ns
+
+        tracer = :opentelemetry.get_tracer()
+
+        span_ctx =
+          :otel_tracer.start_span(tracer, span_name, %{
+            start_time: start_time_ns,
+            attributes: attributes
+          })
+
+        :otel_span.end_span(span_ctx, end_time_ns)
       end
     end
   else
@@ -135,6 +147,7 @@ defmodule ExDataSketch.Telemetry.OpenTelemetry do
 
     measurements_attrs =
       measurements
+      |> Map.drop([:duration])
       |> Map.new(fn {k, v} -> {"ex_data_sketch.#{k}", v} end)
 
     metadata_attrs =

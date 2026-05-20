@@ -206,12 +206,14 @@ defmodule ExDataSketch.FrequentItems do
   """
   @spec merge_many(Enumerable.t()) :: t()
   def merge_many(sketches) do
+    sketches_list = Enum.to_list(sketches)
+
     Telemetry.span(
       Telemetry.event_name(:sketch, :merge),
-      %{merge_count: Enum.count(sketches)},
+      %{merge_count: length(sketches_list)},
       %{sketch_type: :frequent_items},
       :sketch,
-      fn -> Enum.reduce(sketches, fn sketch, acc -> merge(acc, sketch) end) end
+      fn -> Enum.reduce(sketches_list, fn sketch, acc -> merge(acc, sketch) end) end
     )
   end
 

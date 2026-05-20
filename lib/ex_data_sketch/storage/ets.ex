@@ -103,7 +103,8 @@ defmodule ExDataSketch.Storage.ETS do
 
   - `{:ok, sketch}` on success.
   - `{:error, :not_found}` if the key does not exist.
-  - `{:error, reason}` if deserialization fails.
+  - `{:error, %DeserializationError{}}` if the stored binary is corrupted.
+  - `{:error, reason}` on other deserialization failures.
 
   ## Examples
 
@@ -145,13 +146,16 @@ defmodule ExDataSketch.Storage.ETS do
   end
 
   @doc """
-  Atomically merges a sketch into the persisted value at the given key.
+  Merges a sketch into the persisted value at the given key via a
+  read-modify-write cycle.
 
   If no sketch exists at the key, this is equivalent to `save/3`. Otherwise,
   the persisted sketch is loaded, merged with the given sketch, and saved back.
 
-  Note: this is not truly atomic under concurrent writers. For distributed
-  atomicity, use `ExDataSketch.Storage.Mnesia`.
+  **Warning:** this is not atomic under concurrent writers. Two processes
+  calling `merge/3` on the same key may lose one merge. For atomic merge
+  guarantees, use `ExDataSketch.Storage.Mnesia` or
+  `ExDataSketch.Storage.Ecto`.
 
   ## Arguments
 

@@ -243,12 +243,14 @@ defmodule ExDataSketch.CQF do
   """
   @spec merge_many(Enumerable.t()) :: t()
   def merge_many(filters) do
+    filters_list = Enum.to_list(filters)
+
     Telemetry.span(
       Telemetry.event_name(:sketch, :merge),
-      %{merge_count: Enum.count(filters)},
+      %{merge_count: length(filters_list)},
       %{sketch_type: :cqf},
       :sketch,
-      fn -> Enum.reduce(filters, fn cqf, acc -> merge(acc, cqf) end) end
+      fn -> Enum.reduce(filters_list, fn cqf, acc -> merge(acc, cqf) end) end
     )
   end
 

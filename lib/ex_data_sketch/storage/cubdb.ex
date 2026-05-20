@@ -110,7 +110,8 @@ defmodule ExDataSketch.Storage.CubDB do
 
   - `{:ok, sketch}` on success.
   - `{:error, :not_found}` if the key does not exist.
-  - `{:error, reason}` if deserialization fails.
+  - `{:error, %DeserializationError{}}` if the stored binary is corrupted.
+  - `{:error, reason}` on other deserialization failures.
 
   ## Raises
 

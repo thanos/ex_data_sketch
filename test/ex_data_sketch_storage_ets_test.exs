@@ -33,7 +33,7 @@ defmodule ExDataSketch.Storage.ETSTest do
     end
 
     test "saves and loads a Theta sketch", %{table: table} do
-      sketch = ExDataSketch.Theta.new(log_k: 8) |> ExDataSketch.Theta.update("x")
+      sketch = ExDataSketch.Theta.new(k: 256) |> ExDataSketch.Theta.update("x")
       :ok = ETS.save(sketch, table, "theta:test")
       {:ok, loaded} = ETS.load(ExDataSketch.Theta, table, "theta:test")
       assert ExDataSketch.Theta.estimate(loaded) > 0.0

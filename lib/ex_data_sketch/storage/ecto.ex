@@ -139,7 +139,8 @@ defmodule ExDataSketch.Storage.Ecto do
 
   - `{:ok, sketch}` on success.
   - `{:error, :not_found}` if no entry exists for the key.
-  - `{:error, reason}` on deserialization or database failure.
+  - `{:error, %DeserializationError{}}` if the stored binary is corrupted.
+  - `{:error, reason}` on database failure.
 
   ## Raises
 

@@ -36,7 +36,7 @@ defmodule ExDataSketch.Storage.MnesiaTest do
     end
 
     test "saves and loads a Theta sketch", %{table: table} do
-      sketch = ExDataSketch.Theta.new(log_k: 8) |> ExDataSketch.Theta.update("x")
+      sketch = ExDataSketch.Theta.new(k: 256) |> ExDataSketch.Theta.update("x")
       :ok = Mnesia.save(sketch, table, "theta:test")
       {:ok, loaded} = Mnesia.load(ExDataSketch.Theta, table, "theta:test")
       assert ExDataSketch.Theta.estimate(loaded) > 0.0

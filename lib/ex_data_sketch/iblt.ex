@@ -314,12 +314,14 @@ defmodule ExDataSketch.IBLT do
   """
   @spec merge_many(Enumerable.t()) :: t()
   def merge_many(iblts) do
+    iblts_list = Enum.to_list(iblts)
+
     Telemetry.span(
       Telemetry.event_name(:sketch, :merge),
-      %{merge_count: Enum.count(iblts)},
+      %{merge_count: length(iblts_list)},
       %{sketch_type: :iblt},
       :sketch,
-      fn -> Enum.reduce(iblts, fn iblt, acc -> merge(acc, iblt) end) end
+      fn -> Enum.reduce(iblts_list, fn iblt, acc -> merge(acc, iblt) end) end
     )
   end
 

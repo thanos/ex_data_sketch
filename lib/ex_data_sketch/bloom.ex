@@ -212,12 +212,14 @@ defmodule ExDataSketch.Bloom do
   """
   @spec merge_many(Enumerable.t()) :: t()
   def merge_many(blooms) do
+    blooms_list = Enum.to_list(blooms)
+
     Telemetry.span(
       Telemetry.event_name(:sketch, :merge),
-      %{merge_count: Enum.count(blooms)},
+      %{merge_count: length(blooms_list)},
       %{sketch_type: :bloom},
       :sketch,
-      fn -> Enum.reduce(blooms, fn bloom, acc -> merge(acc, bloom) end) end
+      fn -> Enum.reduce(blooms_list, fn bloom, acc -> merge(acc, bloom) end) end
     )
   end
 

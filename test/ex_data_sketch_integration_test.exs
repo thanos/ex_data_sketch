@@ -16,14 +16,10 @@ defmodule ExDataSketch.IntegrationTest do
   end
 
   describe "require_broadway!/0" do
-    test "returns :ok when Broadway is available" do
+    test "returns :ok or raises depending on availability" do
       if Integration.broadway_available?() do
         assert Integration.require_broadway!() == :ok
-      end
-    end
-
-    test "raises clear error when Broadway is not available" do
-      unless Integration.broadway_available?() do
+      else
         assert_raise RuntimeError, ~r/Broadway integration requires/, fn ->
           Integration.require_broadway!()
         end
@@ -32,14 +28,10 @@ defmodule ExDataSketch.IntegrationTest do
   end
 
   describe "require_flow!/0" do
-    test "returns :ok when Flow is available" do
+    test "returns :ok or raises depending on availability" do
       if Integration.flow_available?() do
         assert Integration.require_flow!() == :ok
-      end
-    end
-
-    test "raises clear error when Flow is not available" do
-      unless Integration.flow_available?() do
+      else
         assert_raise RuntimeError, ~r/Flow integration requires/, fn ->
           Integration.require_flow!()
         end
@@ -60,14 +52,10 @@ defmodule ExDataSketch.IntegrationTest do
   end
 
   describe "require_cubdb!/0" do
-    test "returns :ok when CubDB is available" do
+    test "returns :ok or raises depending on availability" do
       if Integration.cubdb_available?() do
         assert Integration.require_cubdb!() == :ok
-      end
-    end
-
-    test "raises clear error when CubDB is not available" do
-      unless Integration.cubdb_available?() do
+      else
         assert_raise RuntimeError, ~r/CubDB persistence requires/, fn ->
           Integration.require_cubdb!()
         end
@@ -76,14 +64,10 @@ defmodule ExDataSketch.IntegrationTest do
   end
 
   describe "require_ecto!/0" do
-    test "returns :ok when Ecto is available" do
+    test "returns :ok or raises depending on availability" do
       if Integration.ecto_available?() do
         assert Integration.require_ecto!() == :ok
-      end
-    end
-
-    test "raises clear error when Ecto is not available" do
-      unless Integration.ecto_available?() do
+      else
         assert_raise RuntimeError, ~r/Ecto persistence requires/, fn ->
           Integration.require_ecto!()
         end

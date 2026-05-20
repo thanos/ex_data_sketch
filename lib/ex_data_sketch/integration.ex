@@ -9,15 +9,19 @@ defmodule ExDataSketch.Integration do
 
   ## Configuration
 
-  Optional dependencies can be explicitly enabled or disabled via
+  Optional dependencies can be explicitly disabled via
   application config:
 
       config :ex_data_sketch, :integrations,
-        broadway: true,
-        flow: true
+        broadway: false
+
+  Setting an integration to `true` does not override compile-time
+  availability. If the dependency is not loaded, `true` has no effect.
+  Setting to `false` always disables the integration regardless of
+  whether the dependency is loaded.
 
   When not explicitly configured, availability defaults to whether the
-  dependency is loaded at runtime.
+  dependency is loaded at compile time.
 
   ## Supported Integrations
 
@@ -43,7 +47,8 @@ defmodule ExDataSketch.Integration do
   @doc """
   Returns whether the Broadway library is available.
 
-  Checks compile-time availability and runtime configuration.
+  Checks compile-time availability and runtime configuration. Setting
+  `broadway: true` in config does not override compile-time unavailability.
 
   ## Examples
 
@@ -58,7 +63,8 @@ defmodule ExDataSketch.Integration do
   @doc """
   Returns whether the Flow library is available.
 
-  Checks compile-time availability and runtime configuration.
+  Checks compile-time availability and runtime configuration. Setting
+  `flow: true` in config does not override compile-time unavailability.
 
   ## Examples
 
@@ -121,7 +127,7 @@ defmodule ExDataSketch.Integration do
   defp configured?(key, default) do
     case Application.get_env(:ex_data_sketch, :integrations, []) |> Keyword.get(key) do
       nil -> default
-      true -> true
+      true -> default
       false -> false
       other -> other
     end
@@ -169,7 +175,9 @@ defmodule ExDataSketch.Integration do
   @doc """
   Returns whether the CubDB library is available.
 
-  Checks compile-time availability and runtime configuration.
+  Checks compile-time availability and runtime configuration. Setting
+  `cubdb: [enabled: true]` in config does not override compile-time
+  unavailability.
 
   ## Examples
 
@@ -184,7 +192,9 @@ defmodule ExDataSketch.Integration do
   @doc """
   Returns whether the Ecto library is available.
 
-  Checks compile-time availability and runtime configuration.
+  Checks compile-time availability and runtime configuration. Setting
+  `ecto: [enabled: true]` in config does not override compile-time
+  unavailability.
 
   ## Examples
 
@@ -248,10 +258,21 @@ defmodule ExDataSketch.Integration do
     backends = Application.get_env(:ex_data_sketch, :persistence_backends, [])
 
     case Keyword.get(backends, key) do
-      nil -> default
-      config when is_list(config) -> Keyword.get(config, :enabled, default)
-      true -> true
-      false -> false
+      nil ->
+        default
+
+      config when is_list(config) ->
+        case Keyword.get(config, :enabled) do
+          nil -> default
+          true -> default
+          false -> false
+        end
+
+      true ->
+        default
+
+      false ->
+        false
     end
   end
 end

@@ -12,7 +12,14 @@ defmodule ExDataSketch.Storage.Mnesia do
   ## Table Setup
 
   Call `setup/1` to create the Mnesia table before use. This creates a
-  `:set`-type table with attributes `[:key, :data]`.
+  `:set`-type table with attributes `[:key, :data]`. `setup/1` will start
+  Mnesia if it is not already running.
+
+  ## Prerequisite
+
+  Mnesia must be running before calling `save/3`, `load/3`, `merge/3`, or
+  `delete/2`. Call `setup/1` first, or start Mnesia manually with
+  `:mnesia.start/0` if you manage Mnesia startup yourself.
 
   ## Distributed Operations
 
@@ -146,7 +153,8 @@ defmodule ExDataSketch.Storage.Mnesia do
 
   - `{:ok, sketch}` on success.
   - `{:error, :not_found}` if the key does not exist.
-  - `{:error, reason}` on Mnesia or deserialization failure.
+  - `{:error, %DeserializationError{}}` if the stored binary is corrupted.
+  - `{:error, reason}` on Mnesia or other deserialization failures.
 
   ## Examples
 
@@ -165,7 +173,8 @@ defmodule ExDataSketch.Storage.Mnesia do
 
     result =
       case :mnesia.transaction(fn -> :mnesia.read(table, key) end) do
-        {:atomic, [{^table, ^key, binary}]} ->
+        {:atomic, records} when is_list(records) and records != [] ->
+          [{^table, ^key, binary} | _] = records
           sketch_module.deserialize(binary)
 
         {:atomic, []} ->
@@ -263,7 +272,8 @@ defmodule ExDataSketch.Storage.Mnesia do
 
   ## Returns
 
-  `:ok` always (even if the key did not exist).
+  - `:ok` on success (including when the key did not exist).
+  - `{:error, reason}` if the Mnesia transaction is aborted.
 
   ## Examples
 
@@ -274,10 +284,15 @@ defmodule ExDataSketch.Storage.Mnesia do
       iex> ExDataSketch.Storage.Mnesia.delete(:test_mnesia_del, "hll:test")
       :ok
   """
-  @spec delete(atom(), ExDataSketch.Storage.key()) :: :ok
+  @spec delete(atom(), ExDataSketch.Storage.key()) :: :ok | {:error, term()}
   def delete(table, key) do
     start_time = System.monotonic_time()
-    :mnesia.transaction(fn -> :mnesia.delete(table, key, :write) end)
+
+    result =
+      case :mnesia.transaction(fn -> :mnesia.delete(table, key, :write) end) do
+        {:atomic, :ok} -> :ok
+        {:aborted, reason} -> {:error, reason}
+      end
 
     :ok =
       Telemetry.execute(
@@ -287,7 +302,7 @@ defmodule ExDataSketch.Storage.Mnesia do
         :persistence
       )
 
-    :ok
+    result
   end
 
   defp ensure_mnesia_running do
