@@ -257,7 +257,7 @@ defmodule ExDataSketch do
   end
 
   def new(type, opts) when is_atom(type) and is_list(opts) do
-    fetch_module!(type).new(opts)
+    apply(fetch_module!(type), :new, [opts])
   end
 
   @doc """
