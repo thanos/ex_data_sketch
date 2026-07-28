@@ -49,23 +49,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - elixir: "1.16"
-            otp: "26"
-          - elixir: "1.17"
-            otp: "27"
           - elixir: "1.18"
             otp: "27"
           - elixir: "1.18"
             otp: "28"
           - elixir: "1.19"
             otp: "28"
-          - elixir: "1.20.0-rc.1"
+          - elixir: "1.20.2"
             otp: "28"
-            experimental: true
-          - elixir: "1.20.0-rc.1"
-            otp: "29.0-rc1"
-            experimental: true
-    continue-on-error: ${{ matrix.experimental || false }}
+          - elixir: "1.20.2"
+            otp: "29"
     steps:
       - uses: actions/checkout@v4
 
@@ -97,24 +90,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - elixir: "1.16"
-            otp: "26"
-          - elixir: "1.17"
-            otp: "27"
           - elixir: "1.18"
             otp: "27"
           - elixir: "1.18"
             otp: "28"
           - elixir: "1.19"
             otp: "28"
-            coverage: true
-          - elixir: "1.20.0-rc.1"
+          - elixir: "1.20.2"
             otp: "28"
-            experimental: true
-          - elixir: "1.20.0-rc.1"
-            otp: "29.0-rc1"
-            experimental: true
-    continue-on-error: ${{ matrix.experimental || false }}
+          - elixir: "1.20.2"
+            otp: "29"
+            coverage: true
     steps:
       - uses: actions/checkout@v4
 
@@ -211,8 +197,8 @@ jobs:
 
       - uses: erlef/setup-beam@v1
         with:
-          elixir-version: "1.17"
-          otp-version: "27"
+          elixir-version: "1.20.2"
+          otp-version: "29"
 
       - name: Cache deps
         uses: actions/cache@v4
@@ -224,8 +210,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: _build
-          key: build-dev-bench-1.17-27-${{ hashFiles('mix.lock') }}
-          restore-keys: build-dev-bench-1.17-27-
+          key: build-dev-bench-1.20.2-29-${{ hashFiles('mix.lock') }}
+          restore-keys: build-dev-bench-1.20.2-29-
 
       - run: mix deps.get
 
@@ -262,8 +248,8 @@ jobs:
 
       - uses: erlef/setup-beam@v1
         with:
-          elixir-version: "1.19"
-          otp-version: "28"
+          elixir-version: "1.20.2"
+          otp-version: "29"
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -277,8 +263,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: _build
-          key: build-test-rust-1.19-28-${{ hashFiles('mix.lock') }}-${{ hashFiles('native/ex_data_sketch_nif/Cargo.lock') }}
-          restore-keys: build-test-rust-1.19-28-
+          key: build-test-rust-1.20.2-29-${{ hashFiles('mix.lock') }}-${{ hashFiles('native/ex_data_sketch_nif/Cargo.lock') }}
+          restore-keys: build-test-rust-1.20.2-29-
 
       - name: Cache Rust target
         uses: actions/cache@v4
@@ -308,8 +294,8 @@ jobs:
 
       - uses: erlef/setup-beam@v1
         with:
-          elixir-version: "1.19"
-          otp-version: "28"
+          elixir-version: "1.20.2"
+          otp-version: "29"
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -323,8 +309,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: _build
-          key: build-dev-rust-1.19-28-${{ hashFiles('mix.lock') }}-${{ hashFiles('native/ex_data_sketch_nif/Cargo.lock') }}
-          restore-keys: build-dev-rust-1.19-28-
+          key: build-dev-rust-1.20.2-29-${{ hashFiles('mix.lock') }}-${{ hashFiles('native/ex_data_sketch_nif/Cargo.lock') }}
+          restore-keys: build-dev-rust-1.20.2-29-
 
       - name: Cache Rust target
         uses: actions/cache@v4
