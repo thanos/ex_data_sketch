@@ -2,6 +2,8 @@ defmodule ExDataSketch.FilterChainTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  doctest ExDataSketch.FilterChain
+
   alias ExDataSketch.{Bloom, CQF, Cuckoo, FilterChain, IBLT, Quotient, XorFilter}
 
   # -- new/0 --

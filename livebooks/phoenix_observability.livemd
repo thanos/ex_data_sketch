@@ -46,7 +46,7 @@ endpoint_sketches = endpoints
 
 IO.puts("Distinct users per endpoint:")
 for {ep, sketch} <- endpoint_sketches do
-  IO.puts("  #{ep}: #{Float.round(ExDataSketch.HLL.estimate(sketch), 0)} unique users")
+  IO.puts("  #{ep}: #{Float.round(ExDataSketch.HLL.estimate(sketch), 0)} unique users (true: ~5000)")
 end
 
 total_memory = endpoint_sketches
@@ -110,10 +110,10 @@ merged_estimate = ExDataSketch.Theta.estimate(merged)
 intersection_estimate = normal_estimate + current_estimate - merged_estimate
 new_users_estimate = current_estimate - intersection_estimate
 
-IO.puts("Normal baseline: #{Float.round(normal_estimate, 0)} users")
-IO.puts("Current traffic: #{Float.round(current_estimate, 0)} users")
-IO.puts("Merged total: #{Float.round(merged_estimate, 0)} users")
-IO.puts("Estimated NEW users: #{Float.round(max(new_users_estimate, 0), 0)}")
+IO.puts("Normal baseline: #{Float.round(normal_estimate, 0)} users (true: 10000)")
+IO.puts("Current traffic: #{Float.round(current_estimate, 0)} users (true: 15000)")
+IO.puts("Merged total: #{Float.round(merged_estimate, 0)} users (true: 20000)")
+IO.puts("Estimated NEW users: #{Float.round(max(new_users_estimate, 0), 0)} (true: 10000)")
 ```
 
 ## Section 4: Telemetry Wiring in Phoenix
@@ -163,7 +163,7 @@ new_batch = ExDataSketch.HLL.from_enumerable(5001..8000, p: 14)
 
 # Read it back from any process (any Phoenix request handler)
 {:ok, current} = ExDataSketch.Storage.ETS.load(ExDataSketch.HLL, table, "daily_active_users:2024-01-15")
-IO.puts("Current DAU estimate: #{Float.round(ExDataSketch.HLL.estimate(current), 0)}")
+IO.puts("Current DAU estimate: #{Float.round(ExDataSketch.HLL.estimate(current), 0)} (true: 8000)")
 
 # Also track latency percentiles
 latency_req = ExDataSketch.REQ.from_enumerable(

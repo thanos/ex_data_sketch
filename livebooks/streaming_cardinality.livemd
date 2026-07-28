@@ -31,7 +31,7 @@ IO.puts("Exact count: #{exact_count} in #{div(exact_time, 1000)}ms")
 # HLL estimation (fast, memory-efficient)
 {hll_time, hll} = :timer.tc(fn -> ExDataSketch.HLL.from_enumerable(items, p: 14) end)
 estimate = ExDataSketch.HLL.estimate(hll)
-IO.puts("HLL estimate: #{Float.round(estimate, 0)} in #{div(hll_time, 1000)}ms")
+IO.puts("HLL estimate: #{Float.round(estimate, 0)} in #{div(hll_time, 1000)}ms (true: 100000)")
 IO.puts("Memory: #{ExDataSketch.HLL.size_bytes(hll)} bytes")
 IO.puts("Error: #{Float.round(abs(estimate - 100_000) / 1000, 2)}%")
 ```
@@ -45,15 +45,15 @@ IO.puts("Error: #{Float.round(abs(estimate - 100_000) / 1000, 2)}%")
 stream = Stream.map(1..50_000, fn i -> "item_#{i}" end)
 
 sketch = ExDataSketch.Stream.hll(stream, p: 12)
-IO.puts("Stream.hll estimate: #{Float.round(ExDataSketch.HLL.estimate(sketch), 0)}")
+IO.puts("Stream.hll estimate: #{Float.round(ExDataSketch.HLL.estimate(sketch), 0)} (true: 50000)")
 
 # Stream.reduce_into/3 using Collectable
 sketch2 = ExDataSketch.Stream.reduce_into(1..50_000, ExDataSketch.HLL, p: 12)
-IO.puts("reduce_into estimate: #{Float.round(ExDataSketch.HLL.estimate(sketch2), 0)}")
+IO.puts("reduce_into estimate: #{Float.round(ExDataSketch.HLL.estimate(sketch2), 0)} (true: 50000)")
 
 # Stream.reduce_partitioned/3 for parallel reduction
 sketch3 = ExDataSketch.Stream.reduce_partitioned(1..50_000, ExDataSketch.HLL, partitions: 4, p: 12)
-IO.puts("partitioned estimate: #{Float.round(ExDataSketch.HLL.estimate(sketch3), 0)}")
+IO.puts("partitioned estimate: #{Float.round(ExDataSketch.HLL.estimate(sketch3), 0)} (true: 50000)")
 ```
 
 ## Section 3: Collectable Integration
@@ -63,15 +63,15 @@ All mergeable sketches implement the `Collectable` protocol:
 ```elixir
 # Collectable.into works with any enumerable
 sketch = Enum.into(1..10_000, ExDataSketch.HLL.new(p: 14), fn i -> "user_#{i}" end)
-IO.puts("Collectable estimate: #{Float.round(ExDataSketch.HLL.estimate(sketch), 0)}")
+IO.puts("Collectable estimate: #{Float.round(ExDataSketch.HLL.estimate(sketch), 0)} (true: 10000)")
 
 # Works with ULL too
 ull_sketch = Enum.into(1..10_000, ExDataSketch.ULL.new(p: 14), fn i -> "user_#{i}" end)
-IO.puts("ULL estimate: #{Float.round(ExDataSketch.ULL.estimate(ull_sketch), 0)}")
+IO.puts("ULL estimate: #{Float.round(ExDataSketch.ULL.estimate(ull_sketch), 0)} (true: 10000)")
 
 # Works with CMS for frequency estimation
 cms_sketch = Enum.into(["a", "b", "a", "c", "b", "a"], ExDataSketch.CMS.new(width: 128, depth: 5))
-IO.puts("CMS count of 'a': #{ExDataSketch.CMS.estimate(cms_sketch, "a")}")
+IO.puts("CMS count of 'a': #{ExDataSketch.CMS.estimate(cms_sketch, "a")} (true: 3)")
 ```
 
 ## Section 4: Choosing Precision
@@ -86,7 +86,7 @@ for p <- [8, 10, 12, 14, 16] do
   estimate = ExDataSketch.HLL.estimate(sketch)
   error_pct = Float.round(abs(estimate - 100_000) / 1000, 2)
   mem_kb = Float.round(ExDataSketch.HLL.size_bytes(sketch) / 1024, 1)
-  IO.puts("p=#{p}: estimate=#{Float.round(estimate, 0)}, error=#{error_pct}%, memory=#{mem_kb}KB")
+  IO.puts("p=#{p}: estimate=#{Float.round(estimate, 0)}, true=100000, error=#{error_pct}%, memory=#{mem_kb}KB")
 end
 ```
 
@@ -105,8 +105,8 @@ ull = ExDataSketch.ULL.from_enumerable(items, p: 14)
 hll_err = Float.round(abs(ExDataSketch.HLL.estimate(hll) - 100_000) / 1000, 2)
 ull_err = Float.round(abs(ExDataSketch.ULL.estimate(ull) - 100_000) / 1000, 2)
 
-IO.puts("HLL p=14: #{Float.round(ExDataSketch.HLL.estimate(hll), 0)} (error: #{hll_err}%)")
-IO.puts("ULL p=14: #{Float.round(ExDataSketch.ULL.estimate(ull), 0)} (error: #{ull_err}%)")
+IO.puts("HLL p=14: #{Float.round(ExDataSketch.HLL.estimate(hll), 0)} (true: 100000, error: #{hll_err}%)")
+IO.puts("ULL p=14: #{Float.round(ExDataSketch.ULL.estimate(ull), 0)} (true: 100000, error: #{ull_err}%)")
 IO.puts("Both use #{ExDataSketch.HLL.size_bytes(hll)} bytes")
 ```
 

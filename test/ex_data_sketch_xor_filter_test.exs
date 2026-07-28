@@ -2,6 +2,8 @@ defmodule ExDataSketch.XorFilterTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  doctest ExDataSketch.XorFilter
+
   alias ExDataSketch.{Codec, XorFilter}
 
   # -------------------------------------------------------

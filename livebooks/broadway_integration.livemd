@@ -1,5 +1,3 @@
-<!-- livebook:{"app_settings":{"auto_dependency_loading":true}} -->
-
 # Broadway Integration
 
 ```elixir
@@ -26,11 +24,11 @@ messages = for i <- 1..1000, do: %{data: "user_#{i}"}
 
 # Build an HLL sketch from message data
 sketch = ExDataSketch.Broadway.accumulate(messages, ExDataSketch.HLL, p: 14)
-IO.puts("Unique users from 1000 messages: #{Float.round(ExDataSketch.HLL.estimate(sketch), 0)}")
+IO.puts("Unique users from 1000 messages: #{Float.round(ExDataSketch.HLL.estimate(sketch), 0)} (true: 1000)")
 
 # Build a CMS sketch for frequency counting
 cms = ExDataSketch.Broadway.accumulate(messages, ExDataSketch.CMS, width: 128, depth: 5, key_fn: fn msg -> msg.data end)
-IO.puts("Count of 'user_1': #{ExDataSketch.CMS.estimate(cms, "user_1")}")
+IO.puts("Count of 'user_1': #{ExDataSketch.CMS.estimate(cms, "user_1")} (true: 1)")
 ```
 
 ## Section 2: Accumulate Into an Existing Sketch
@@ -45,12 +43,12 @@ existing = ExDataSketch.HLL.new(p: 14)
 # Process a batch and merge it into the existing sketch
 batch1 = for i <- 1..2000, do: %{data: "user_#{i}"}
 updated = ExDataSketch.Broadway.accumulate_into(batch1, existing)
-IO.puts("After batch 1: #{Float.round(ExDataSketch.HLL.estimate(updated), 0)} unique users")
+IO.puts("After batch 1: #{Float.round(ExDataSketch.HLL.estimate(updated), 0)} unique users (true: 2000)")
 
 # Process another batch
 batch2 = for i <- 1500..3500, do: %{data: "user_#{i}"}
 final = ExDataSketch.Broadway.accumulate_into(batch2, updated)
-IO.puts("After batch 2: #{Float.round(ExDataSketch.HLL.estimate(final), 0)} unique users")
+IO.puts("After batch 2: #{Float.round(ExDataSketch.HLL.estimate(final), 0)} unique users (true: 3500)")
 ```
 
 ## Section 3: Periodic Aggregation
@@ -75,11 +73,11 @@ partial2 = ExDataSketch.HLL.from_enumerable(300..800, p: 14)
 
 # Check current estimate without flushing
 current = ExDataSketch.Broadway.PeriodicAggregator.get(aggregator)
-IO.puts("Current estimate: #{Float.round(ExDataSketch.HLL.estimate(current), 0)}")
+IO.puts("Current estimate: #{Float.round(ExDataSketch.HLL.estimate(current), 0)} (true: 800)")
 
 # Flush to get the merged result and reset
 flushed = ExDataSketch.Broadway.PeriodicAggregator.flush(aggregator)
-IO.puts("Flushed estimate: #{Float.round(ExDataSketch.HLL.estimate(flushed), 0)}")
+IO.puts("Flushed estimate: #{Float.round(ExDataSketch.HLL.estimate(flushed), 0)} (true: 800)")
 
 # After flush, the aggregator starts fresh
 fresh = ExDataSketch.Broadway.PeriodicAggregator.get(aggregator)
@@ -101,7 +99,7 @@ or persistence:
   flush_interval: :infinity,
   flush_callback: fn sketch ->
     estimate = ExDataSketch.HLL.estimate(sketch)
-    IO.puts("[CALLBACK] Flushed estimate: #{Float.round(estimate, 0)}")
+    IO.puts("[CALLBACK] Flushed estimate: #{Float.round(estimate, 0)} (true: 5000)")
   end
 )
 
@@ -118,14 +116,16 @@ GenServer.stop(aggregator)
 ## Section 5: Architectural Tradeoffs
 
 **When to use Broadway + sketches**:
-- High-throughput event processing (>10K events/sec)
-- Need real-time cardinality/frequency estimates
-- Multiple processor partitions, need a merged view across all
+
+* High-throughput event processing (>10K events/sec)
+* Need real-time cardinality/frequency estimates
+* Multiple processor partitions, need a merged view across all
 
 **Tradeoff: latency vs accuracy**:
-- Flush every 1 second = low latency, slight merge overhead
-- Flush every 60 seconds = higher accuracy (full batch window), more latency
-- Choose based on your SLA requirements
+
+* Flush every 1 second = low latency, slight merge overhead
+* Flush every 60 seconds = higher accuracy (full batch window), more latency
+* Choose based on your SLA requirements
 
 **Memory consideration**: Each partition holds its own sketch.
 At p=14 with 4 partitions = 4 x 16KB = 64KB total for HLL.

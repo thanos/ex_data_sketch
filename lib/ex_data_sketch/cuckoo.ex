@@ -68,6 +68,8 @@ defmodule ExDataSketch.Cuckoo do
 
   defstruct [:state, :opts, :backend]
 
+  @behaviour ExDataSketch.Sketch
+
   @default_capacity 10_000
   @default_fingerprint_size 8
   @default_bucket_size 4
@@ -199,6 +201,49 @@ defmodule ExDataSketch.Cuckoo do
     case backend.cuckoo_put_many(state, hashes, opts) do
       {:ok, new_state} -> {:ok, %{cuckoo | state: new_state}}
       {:error, :full, partial_state} -> {:error, :full, %{cuckoo | state: partial_state}}
+    end
+  end
+
+  @doc """
+  Alias for `put!/2`, added so `ExDataSketch.Cuckoo` satisfies the
+  `ExDataSketch.Sketch` behaviour's generic `update/2` callback.
+
+  `put/2` (returning `{:ok, cuckoo} | {:error, :full}`) remains the
+  family-idiomatic name for callers who need to detect a full filter;
+  `update/2` raises instead, matching the bare-struct-return contract every
+  other family's `update/2` follows (see `ExDataSketch.update/2`).
+
+  ## Examples
+
+      iex> cuckoo = ExDataSketch.Cuckoo.new(capacity: 100) |> ExDataSketch.Cuckoo.update("hello")
+      iex> ExDataSketch.Cuckoo.member?(cuckoo, "hello")
+      true
+
+  """
+  @spec update(t(), term()) :: t()
+  def update(%__MODULE__{} = cuckoo, item), do: put!(cuckoo, item)
+
+  @doc """
+  Inserts every item in an enumerable, raising if the filter fills up partway
+  through.
+
+  Added so `ExDataSketch.Cuckoo` satisfies the `ExDataSketch.Sketch`
+  behaviour's generic `update_many/2` callback. `put_many/2` (returning
+  `{:ok, cuckoo} | {:error, :full, cuckoo}`) remains the family-idiomatic
+  name for callers who need the partially updated filter on failure.
+
+  ## Examples
+
+      iex> cuckoo = ExDataSketch.Cuckoo.new(capacity: 100) |> ExDataSketch.Cuckoo.update_many(["a", "b", "c"])
+      iex> ExDataSketch.Cuckoo.member?(cuckoo, "a")
+      true
+
+  """
+  @spec update_many(t(), Enumerable.t()) :: t()
+  def update_many(%__MODULE__{} = cuckoo, items) do
+    case put_many(cuckoo, items) do
+      {:ok, updated} -> updated
+      {:error, :full, _partial} -> raise "Cuckoo filter is full"
     end
   end
 

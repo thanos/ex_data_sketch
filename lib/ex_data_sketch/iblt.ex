@@ -46,6 +46,8 @@ defmodule ExDataSketch.IBLT do
 
   defstruct [:state, :opts, :backend]
 
+  @behaviour ExDataSketch.Sketch
+
   @default_cell_count 1000
   @default_hash_count 3
   @default_seed 0
@@ -146,6 +148,38 @@ defmodule ExDataSketch.IBLT do
     new_state = backend.iblt_put_many(state, pairs, opts)
     %{iblt | state: new_state}
   end
+
+  @doc """
+  Alias for `put/2`, added so `ExDataSketch.IBLT` satisfies the
+  `ExDataSketch.Sketch` behaviour's generic `update/2` callback.
+
+  `put/2` remains the family-idiomatic name and the one used throughout this
+  module's own documentation; `update/2` exists purely for cross-family
+  generic code (see `ExDataSketch.update/2`).
+
+  ## Examples
+
+      iex> iblt = ExDataSketch.IBLT.new() |> ExDataSketch.IBLT.update("hello")
+      iex> ExDataSketch.IBLT.member?(iblt, "hello")
+      true
+
+  """
+  @spec update(t(), term()) :: t()
+  def update(%__MODULE__{} = iblt, item), do: put(iblt, item)
+
+  @doc """
+  Alias for `put_many/2`, added so `ExDataSketch.IBLT` satisfies the
+  `ExDataSketch.Sketch` behaviour's generic `update_many/2` callback.
+
+  ## Examples
+
+      iex> iblt = ExDataSketch.IBLT.new() |> ExDataSketch.IBLT.update_many(["a", "b", "c"])
+      iex> ExDataSketch.IBLT.member?(iblt, "a")
+      true
+
+  """
+  @spec update_many(t(), Enumerable.t()) :: t()
+  def update_many(%__MODULE__{} = iblt, items), do: put_many(iblt, items)
 
   @doc """
   Tests whether an item may be a member.

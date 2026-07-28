@@ -2,6 +2,8 @@ defmodule ExDataSketch.BloomTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  doctest ExDataSketch.Bloom
+
   alias ExDataSketch.Bloom
 
   # Deterministic test data
