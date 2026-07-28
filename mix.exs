@@ -50,7 +50,7 @@ defmodule ExDataSketch.MixProject do
     extra_apps = [:logger]
 
     extra_apps =
-      if Mix.env() == :test do
+      if Mix.env() in [:test, :dev] do
         [:mnesia | extra_apps]
       else
         extra_apps
