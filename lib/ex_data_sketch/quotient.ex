@@ -61,6 +61,8 @@ defmodule ExDataSketch.Quotient do
 
   defstruct [:state, :opts, :backend]
 
+  @behaviour ExDataSketch.Sketch
+
   @default_q 16
   @default_r 8
   @default_seed 0
@@ -147,6 +149,38 @@ defmodule ExDataSketch.Quotient do
     new_state = backend.quotient_put_many(state, hashes, opts)
     %{qf | state: new_state}
   end
+
+  @doc """
+  Alias for `put/2`, added so `ExDataSketch.Quotient` satisfies the
+  `ExDataSketch.Sketch` behaviour's generic `update/2` callback.
+
+  `put/2` remains the family-idiomatic name and the one used throughout this
+  module's own documentation; `update/2` exists purely for cross-family
+  generic code (see `ExDataSketch.update/2`).
+
+  ## Examples
+
+      iex> qf = ExDataSketch.Quotient.new() |> ExDataSketch.Quotient.update("hello")
+      iex> ExDataSketch.Quotient.member?(qf, "hello")
+      true
+
+  """
+  @spec update(t(), term()) :: t()
+  def update(%__MODULE__{} = qf, item), do: put(qf, item)
+
+  @doc """
+  Alias for `put_many/2`, added so `ExDataSketch.Quotient` satisfies the
+  `ExDataSketch.Sketch` behaviour's generic `update_many/2` callback.
+
+  ## Examples
+
+      iex> qf = ExDataSketch.Quotient.new() |> ExDataSketch.Quotient.update_many(["a", "b", "c"])
+      iex> ExDataSketch.Quotient.member?(qf, "a")
+      true
+
+  """
+  @spec update_many(t(), Enumerable.t()) :: t()
+  def update_many(%__MODULE__{} = qf, items), do: put_many(qf, items)
 
   @doc """
   Tests whether an item may be a member of the set.

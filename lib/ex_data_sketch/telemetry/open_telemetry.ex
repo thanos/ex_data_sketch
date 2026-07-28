@@ -75,7 +75,7 @@ defmodule ExDataSketch.Telemetry.OpenTelemetry do
     Integration.require_opentelemetry!()
     detach_if_exists()
 
-    handler = &handle_event/4
+    handler = &__MODULE__.handle_event/4
 
     :ok =
       Enum.each(Telemetry.all_event_names(), fn event_name ->
@@ -109,8 +109,30 @@ defmodule ExDataSketch.Telemetry.OpenTelemetry do
     end)
   end
 
+  @doc """
+  Telemetry handler callback that starts and ends an OpenTelemetry span for a
+  single `:telemetry` event.
+
+  This function is attached by `setup/0` as a remote function capture (rather
+  than an anonymous function or a local capture) so that `:telemetry` can
+  dispatch to it without the performance penalty `:telemetry` warns about for
+  local captures. It is public so it can be captured as `&__MODULE__.handle_event/4`
+  and is not intended to be called directly.
+
+  ## Examples
+
+      ExDataSketch.Telemetry.OpenTelemetry.handle_event(
+        [:ex_data_sketch, :sketch, :ingest],
+        %{duration: 100, count: 50},
+        %{sketch_type: :hll},
+        nil
+      )
+      :ok
+
+  """
+  @spec handle_event([atom(), ...], map(), map(), term()) :: :ok
   if Code.ensure_loaded?(OpenTelemetry.Tracer) do
-    defp handle_event(event_name, measurements, metadata, _config) do
+    def handle_event(event_name, measurements, metadata, _config) do
       if Integration.opentelemetry_available?() do
         span_name = event_name |> Enum.join(".")
         attributes = build_attributes(event_name, measurements, metadata)
@@ -129,35 +151,38 @@ defmodule ExDataSketch.Telemetry.OpenTelemetry do
           })
 
         :otel_span.end_span(span_ctx, end_time_ns)
+        :ok
+      else
+        :ok
       end
     end
+
+    defp build_attributes(event_name, measurements, metadata) do
+      base = %{
+        "ex_data_sketch.category" => event_name |> Enum.at(1) |> to_string(),
+        "ex_data_sketch.action" => event_name |> Enum.at(2) |> to_string()
+      }
+
+      measurements_attrs =
+        measurements
+        |> Map.drop([:duration])
+        |> Map.new(fn {k, v} -> {"ex_data_sketch.#{k}", v} end)
+
+      metadata_attrs =
+        metadata
+        |> Map.new(fn {k, v} -> {"ex_data_sketch.#{k}", stringify(v)} end)
+
+      Map.merge(base, Map.merge(measurements_attrs, metadata_attrs))
+    end
+
+    defp stringify(v) when is_atom(v), do: Atom.to_string(v)
+    defp stringify(v) when is_binary(v), do: v
+    defp stringify(v) when is_integer(v), do: Integer.to_string(v)
+    defp stringify(v) when is_float(v), do: Float.to_string(v)
+    defp stringify(v), do: inspect(v)
   else
-    defp handle_event(_event_name, _measurements, _metadata, _config) do
+    def handle_event(_event_name, _measurements, _metadata, _config) do
       :ok
     end
   end
-
-  defp build_attributes(event_name, measurements, metadata) do
-    base = %{
-      "ex_data_sketch.category" => event_name |> Enum.at(1) |> to_string(),
-      "ex_data_sketch.action" => event_name |> Enum.at(2) |> to_string()
-    }
-
-    measurements_attrs =
-      measurements
-      |> Map.drop([:duration])
-      |> Map.new(fn {k, v} -> {"ex_data_sketch.#{k}", v} end)
-
-    metadata_attrs =
-      metadata
-      |> Map.new(fn {k, v} -> {"ex_data_sketch.#{k}", stringify(v)} end)
-
-    Map.merge(base, Map.merge(measurements_attrs, metadata_attrs))
-  end
-
-  defp stringify(v) when is_atom(v), do: Atom.to_string(v)
-  defp stringify(v) when is_binary(v), do: v
-  defp stringify(v) when is_integer(v), do: Integer.to_string(v)
-  defp stringify(v) when is_float(v), do: Float.to_string(v)
-  defp stringify(v), do: inspect(v)
 end

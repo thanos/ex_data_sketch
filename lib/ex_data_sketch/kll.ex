@@ -57,6 +57,8 @@ defmodule ExDataSketch.KLL do
 
   defstruct [:state, :opts, :backend]
 
+  @behaviour ExDataSketch.Sketch
+
   @default_k 200
   @min_k 8
   @max_k 65_535
@@ -542,6 +544,35 @@ defmodule ExDataSketch.KLL do
   @spec merger(keyword()) :: (t(), t() -> t())
   def merger(_opts \\ []) do
     fn a, b -> merge(a, b) end
+  end
+
+  @doc """
+  Returns the set of operation names supported by `ExDataSketch.KLL`.
+
+  See `ExDataSketch.Sketch` for the shared capability vocabulary.
+
+  ## Examples
+
+      iex> ExDataSketch.KLL.capabilities() |> MapSet.member?(:count)
+      true
+
+      iex> ExDataSketch.KLL.capabilities() |> MapSet.member?(:no_such_operation)
+      false
+
+  """
+  @spec capabilities() :: ExDataSketch.Sketch.capabilities()
+  @dialyzer {:no_opaque, capabilities: 0}
+  def capabilities do
+    MapSet.new([
+      :new,
+      :update,
+      :update_many,
+      :merge,
+      :merge_many,
+      :count,
+      :serialize,
+      :deserialize
+    ])
   end
 
   # -- Private --

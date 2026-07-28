@@ -1,6 +1,8 @@
 defmodule ExDataSketch.Telemetry.OpenTelemetryTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias ExDataSketch.Telemetry.OpenTelemetry
 
   @handler_id "ex_data_sketch_opentelemetry"
@@ -50,6 +52,20 @@ defmodule ExDataSketch.Telemetry.OpenTelemetryTest do
 
           assert Enum.empty?(otel_handlers)
         end)
+      end
+    end
+
+    @tag :opentelemetry
+    test "attaches a remote function capture, producing no :telemetry performance warning" do
+      if ExDataSketch.Integration.opentelemetry_available?() do
+        log =
+          capture_log(fn ->
+            :ok = OpenTelemetry.setup()
+            OpenTelemetry.teardown()
+          end)
+
+        refute log =~ "local function"
+        refute log =~ "performance penalty"
       end
     end
 

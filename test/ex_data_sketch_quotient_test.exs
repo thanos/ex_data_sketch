@@ -2,6 +2,8 @@ defmodule ExDataSketch.QuotientTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  doctest ExDataSketch.Quotient
+
   alias ExDataSketch.Quotient
 
   # ============================================================

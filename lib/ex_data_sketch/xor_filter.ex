@@ -28,6 +28,11 @@ defmodule ExDataSketch.XorFilter do
   `merge/2`. The struct has no meaningful empty state. Use `build/2` to construct
   a filter from a complete set of items.
 
+  It implements `ExDataSketch.Sketch`, but `new/1`, `update/2`, `update_many/2`,
+  and `merge/2` are all `@optional_callbacks` that this module deliberately
+  does not implement for the same reason -- see `ExDataSketch.new/2`, which
+  raises a clear error directing callers to `build/2` for this family.
+
   ## Parameters
 
   - `:fingerprint_bits` -- 8 (default, Xor8) or 16 (Xor16).
@@ -56,6 +61,8 @@ defmodule ExDataSketch.XorFilter do
         }
 
   defstruct [:state, :opts, :backend]
+
+  @behaviour ExDataSketch.Sketch
 
   @default_fingerprint_bits 8
   @default_seed 0

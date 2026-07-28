@@ -67,6 +67,8 @@ defmodule ExDataSketch.MisraGries do
 
   defstruct [:state, :opts, :backend]
 
+  @behaviour ExDataSketch.Sketch
+
   @default_k 10
 
   @doc """
@@ -431,6 +433,36 @@ defmodule ExDataSketch.MisraGries do
   @spec merger(keyword()) :: (t(), t() -> t())
   def merger(_opts \\ []) do
     fn a, b -> merge(a, b) end
+  end
+
+  @doc """
+  Returns the set of operation names supported by `ExDataSketch.MisraGries`.
+
+  See `ExDataSketch.Sketch` for the shared capability vocabulary.
+
+  ## Examples
+
+      iex> ExDataSketch.MisraGries.capabilities() |> MapSet.member?(:estimate)
+      true
+
+      iex> ExDataSketch.MisraGries.capabilities() |> MapSet.member?(:no_such_operation)
+      false
+
+  """
+  @spec capabilities() :: ExDataSketch.Sketch.capabilities()
+  @dialyzer {:no_opaque, capabilities: 0}
+  def capabilities do
+    MapSet.new([
+      :new,
+      :update,
+      :update_many,
+      :merge,
+      :merge_many,
+      :count,
+      :estimate,
+      :serialize,
+      :deserialize
+    ])
   end
 
   # -- Private --

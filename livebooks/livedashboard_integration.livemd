@@ -46,7 +46,7 @@ to route these events into LiveDashboard-compatible metrics:
 
 # Trigger an ingest event
 sketch = ExDataSketch.HLL.from_enumerable(1..10_000, p: 14)
-IO.puts("HLL estimate: #{Float.round(ExDataSketch.HLL.estimate(sketch), 0)}")
+IO.puts("HLL estimate: #{Float.round(ExDataSketch.HLL.estimate(sketch), 0)} (true: 10000)")
 
 :telemetry.detach("hll-ingest-handler")
 :telemetry.detach("persistence-handler")

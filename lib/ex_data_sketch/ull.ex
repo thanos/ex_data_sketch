@@ -101,6 +101,8 @@ defmodule ExDataSketch.ULL do
 
   defstruct [:state, :opts, :backend]
 
+  @behaviour ExDataSketch.Sketch
+
   @default_p 14
   @min_p 4
   @max_p 26
@@ -468,6 +470,36 @@ defmodule ExDataSketch.ULL do
   @spec merger(keyword()) :: (t(), t() -> t())
   def merger(_opts \\ []) do
     fn a, b -> merge(a, b) end
+  end
+
+  @doc """
+  Returns the set of operation names supported by `ExDataSketch.ULL`.
+
+  See `ExDataSketch.Sketch` for the shared capability vocabulary.
+
+  ## Examples
+
+      iex> ExDataSketch.ULL.capabilities() |> MapSet.member?(:estimate)
+      true
+
+      iex> ExDataSketch.ULL.capabilities() |> MapSet.member?(:no_such_operation)
+      false
+
+  """
+  @spec capabilities() :: ExDataSketch.Sketch.capabilities()
+  @dialyzer {:no_opaque, capabilities: 0}
+  def capabilities do
+    MapSet.new([
+      :new,
+      :update,
+      :update_many,
+      :merge,
+      :merge_many,
+      :estimate,
+      :count,
+      :serialize,
+      :deserialize
+    ])
   end
 
   # -- Private --

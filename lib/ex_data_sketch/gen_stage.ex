@@ -3,8 +3,14 @@ defmodule ExDataSketch.GenStage do
   GenStage integration for sketch aggregation.
 
   This module provides consumer and producer stages that accumulate sketch
-  data from event streams. GenStage is always available as part of OTP, so
-  no optional dependency is required.
+  data from event streams. GenStage is an optional dependency; the
+  sub-modules are only compiled when `:gen_stage` is available.
+
+  ## Dependency
+
+  This module requires the `:gen_stage` package. If GenStage is not
+  available, the sub-modules will not be compiled and calls to
+  `require_gen_stage!/0` will raise an error.
 
   ## Module Overview
 
@@ -34,4 +40,23 @@ defmodule ExDataSketch.GenStage do
   """
 
   @moduledoc since: "0.9.0"
+
+  if Code.ensure_loaded?(GenStage) do
+    @doc """
+    Returns whether GenStage is available at runtime.
+
+    Checks compile-time availability and runtime configuration. Setting
+    `gen_stage: true` in config does not override compile-time unavailability.
+
+    ## Examples
+
+        iex> is_boolean(ExDataSketch.GenStage.available?())
+        true
+    """
+    @spec available?() :: boolean()
+    def available?, do: ExDataSketch.Integration.gen_stage_available?()
+  else
+    @doc false
+    def available?, do: false
+  end
 end

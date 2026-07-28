@@ -29,7 +29,7 @@ defmodule ExDataSketch.Integration do
 
   | Integration  | Dependency        | Always available? |
   |-------------|-------------------|-------------------|
-  | GenStage    | OTP (always)      | Yes               |
+  | GenStage    | `:gen_stage`       | No                |
   | Broadway    | `:broadway`       | No                |
   | Flow        | `:flow`           | No                |
   | CubDB       | `:cubdb`          | No                |
@@ -42,6 +42,7 @@ defmodule ExDataSketch.Integration do
 
   @broadway_available Code.ensure_loaded?(Broadway)
   @flow_available Code.ensure_loaded?(Flow)
+  @gen_stage_available Code.ensure_loaded?(GenStage)
   @cubdb_available Code.ensure_loaded?(CubDB)
   @ecto_available Code.ensure_loaded?(Ecto.Adapters.SQL)
   @opentelemetry_available Code.ensure_loaded?(OpenTelemetry)
@@ -99,6 +100,46 @@ defmodule ExDataSketch.Integration do
     else
       raise "Broadway integration requires the :broadway dependency. " <>
               "Add {:broadway, \"~> 1.0\"} to your mix.exs dependencies."
+    end
+  end
+
+  @doc """
+  Returns whether the GenStage library is available.
+
+  Checks compile-time availability and runtime configuration. Setting
+  `gen_stage: true` in config does not override compile-time unavailability.
+
+  ## Examples
+
+      iex> is_boolean(ExDataSketch.Integration.gen_stage_available?())
+      true
+  """
+  @spec gen_stage_available?() :: boolean()
+  def gen_stage_available? do
+    configured?(:gen_stage, @gen_stage_available)
+  end
+
+  @doc """
+  Raises an error if GenStage is not available.
+
+  Provides a clear error message directing the user to add the dependency.
+
+  ## Examples
+
+      iex> ExDataSketch.Integration.require_gen_stage!()
+      :ok
+
+      # When GenStage is not available:
+      # ** (RuntimeError) GenStage integration requires the :gen_stage dependency.
+      # Add {:gen_stage, "~> 1.0"} to your mix.exs dependencies.
+  """
+  @spec require_gen_stage!() :: :ok
+  def require_gen_stage! do
+    if gen_stage_available?() do
+      :ok
+    else
+      raise "GenStage integration requires the :gen_stage dependency. " <>
+              "Add {:gen_stage, \"~> 1.0\"} to your mix.exs dependencies."
     end
   end
 

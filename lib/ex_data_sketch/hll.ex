@@ -54,6 +54,8 @@ defmodule ExDataSketch.HLL do
 
   defstruct [:state, :opts, :backend]
 
+  @behaviour ExDataSketch.Sketch
+
   @default_p 14
   @min_p 4
   @max_p 16
@@ -490,6 +492,35 @@ defmodule ExDataSketch.HLL do
   @spec merger(keyword()) :: (t(), t() -> t())
   def merger(_opts \\ []) do
     fn a, b -> merge(a, b) end
+  end
+
+  @doc """
+  Returns the set of operation names supported by `ExDataSketch.HLL`.
+
+  See `ExDataSketch.Sketch` for the shared capability vocabulary.
+
+  ## Examples
+
+      iex> ExDataSketch.HLL.capabilities() |> MapSet.member?(:estimate)
+      true
+
+      iex> ExDataSketch.HLL.capabilities() |> MapSet.member?(:no_such_operation)
+      false
+
+  """
+  @spec capabilities() :: ExDataSketch.Sketch.capabilities()
+  @dialyzer {:no_opaque, capabilities: 0}
+  def capabilities do
+    MapSet.new([
+      :new,
+      :update,
+      :update_many,
+      :merge,
+      :merge_many,
+      :estimate,
+      :serialize,
+      :deserialize
+    ])
   end
 
   # -- Private --

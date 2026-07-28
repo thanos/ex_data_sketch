@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `ExDataSketch.Sketch` -- the unified behaviour every concrete sketch
+  family now implements (`serialize/1`, `deserialize/1`, `size_bytes/1`,
+  `capabilities/0` required; `new/1`, `update/2`, `update_many/2`, `merge/2`
+  optional where a family does not support the operation). Adds
+  `ExDataSketch.Sketch.implemented?/1` to check compliance.
+- `ExDataSketch.sketches/0` -- the registry mapping each family atom
+  (`:hll`, `:bloom`, and so on) to its module; single source of truth for
+  the capability-matrix test and `ExDataSketch.Sketch.implemented?/1`.
+- Top-level facade dispatch functions on `ExDataSketch`: `new/2`, `update/2`,
+  `merge/2`, `merge_many/1`, `estimate/1`, `serialize/1`, `deserialize/2`,
+  `size_bytes/1`, `capabilities/1`. These are additive -- every per-family
+  module's own API is unchanged and remains the documented primary
+  interface. See `guides/` (forthcoming) and
+  `baoulo/plans/0.10.0_phase1_stub_review.md` for the full design,
+  including the small set of documented family-specific exceptions
+  (`XorFilter` has no incremental `update/2`; `Cuckoo`, `XorFilter`, and
+  `FilterChain` have no `merge/2`; `CMS` and the membership filters have no
+  single-value `estimate/1`).
+- `update/2` and `update_many/2` on `Bloom`, `Cuckoo`, `Quotient`, `CQF`,
+  `IBLT`, and `FilterChain` -- additive aliases for `put/2` / `put_many/2`
+  (the family-idiomatic names, unchanged) so every family satisfies
+  `ExDataSketch.Sketch`'s generic callbacks.
+- `capabilities/0` on `HLL`, `CMS`, `Theta`, `KLL`, `DDSketch`, `REQ`,
+  `FrequentItems`, `MisraGries`, and `ULL`, matching the `MapSet.t(atom())`
+  vocabulary already shipped on the membership filter modules.
+
+### Changed
+
+- `ExDataSketch.update_many/2` now dispatches generically via the `Sketch`
+  behaviour instead of 13 hand-written struct clauses, extending coverage
+  to 15 of 16 families (all but the immutable `XorFilter`, which raises
+  `ExDataSketch.Errors.UnsupportedOperationError`).
+- `ExDataSketch.GenStage.SketchConsumer` ingests raw event batches via
+  `sketch_module.update_many/2` directly instead of a `from_enumerable/2`
+  capability probe followed by a merge; behavior is unchanged, with one
+  fewer intermediate sketch allocation per batch.
+- `ExDataSketch.FilterChain`'s internal capability checks now use
+  `ExDataSketch.Sketch.implemented?/1` instead of raw `function_exported?/3`.
+- Fixed a `:telemetry.attach/4` local-function-capture performance warning
+  in `ExDataSketch.Telemetry.OpenTelemetry.setup/0` (it now attaches a
+  remote function capture).
+- Wired up `doctest` for `DDSketch`, `REQ`, `FrequentItems`, `MisraGries`,
+  and all 7 membership filter modules -- their existing `@doc` examples
+  were never executed by the test suite before this release.
+
+### Fixed
+
+- Removed stray `erl_crash.dump` and `.DS_Store` from the repository;
+  `.DS_Store` is now gitignored.
+
 ## [0.9.0] - 2026-05-19
 
 Release theme: **Streaming Integrations.** Transforms ex_data_sketch from a collection of probabilistic algorithms into a BEAM-native streaming approximate analytics infrastructure layer. Stream/Collectable integration, Broadway/GenStage/Flow pipelines, five persistence backends, production-grade telemetry + OpenTelemetry, ULL accuracy fixes, and comprehensive educational materials.

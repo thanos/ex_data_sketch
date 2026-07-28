@@ -1,10 +1,8 @@
-<!-- livebook:{"app_settings":{"auto_dependency_loading":true}} -->
-
 # Persistence Snapshots
 
 ```elixir
 Mix.install([
-  {:ex_data_sketch, "~> 0.9.0"}
+  {:ex_data_sketch, path: "/Users/thanos/work/ex_data_sketch"}
 ])
 ```
 
@@ -34,7 +32,7 @@ sketch = ExDataSketch.HLL.from_enumerable(1..10_000, p: 14)
 
 # Load it back
 {:ok, loaded} = ExDataSketch.Storage.ETS.load(ExDataSketch.HLL, table, "daily:2024-01-15")
-IO.puts("Loaded cardinality: #{Float.round(ExDataSketch.HLL.estimate(loaded), 0)}")
+IO.puts("Loaded cardinality: #{Float.round(ExDataSketch.HLL.estimate(loaded), 0)} (true: 10000)")
 
 # Atomic merge: merge a partial sketch into the stored value
 partial = ExDataSketch.HLL.from_enumerable(10_001..15_000, p: 14)
@@ -64,7 +62,7 @@ sketch = ExDataSketch.ULL.from_enumerable(1..5000, p: 14)
 
 # Load it back
 {:ok, loaded} = ExDataSketch.Storage.DETS.load(ExDataSketch.ULL, :sketch_dets, "metrics:hourly")
-IO.puts("Loaded ULL cardinality: #{Float.round(ExDataSketch.ULL.estimate(loaded), 0)}")
+IO.puts("Loaded ULL cardinality: #{Float.round(ExDataSketch.ULL.estimate(loaded), 0)} (true: 5000)")
 
 # Merge into stored value
 partial = ExDataSketch.ULL.from_enumerable(5001..8000, p: 14)
@@ -95,7 +93,7 @@ IO.puts("Serialized size: #{byte_size(binary)} bytes")
 
 # Deserialize
 {:ok, restored} = ExDataSketch.CMS.deserialize(binary)
-IO.puts("Count of 'item_1': #{ExDataSketch.CMS.estimate(restored, "item_1")}")
+IO.puts("Count of 'item_1': #{ExDataSketch.CMS.estimate(restored, "item_1")} (true: 100)")
 
 # Performance comparison: serialize overhead
 sketch_h = ExDataSketch.HLL.from_enumerable(1..10_000, p: 14)
@@ -104,7 +102,7 @@ IO.puts("HLL serialize: #{div(ser_time, 1000)}ms for #{byte_size(binary)} bytes"
 
 # Deserialize round-trip
 {:ok, roundtrip} = ExDataSketch.HLL.deserialize(binary)
-IO.puts("Round-trip estimate: #{Float.round(ExDataSketch.HLL.estimate(roundtrip), 0)} (original: #{Float.round(ExDataSketch.HLL.estimate(sketch_h), 0)})")
+IO.puts("Round-trip estimate: #{Float.round(ExDataSketch.HLL.estimate(roundtrip), 0)} (true: 10000, original: #{Float.round(ExDataSketch.HLL.estimate(sketch_h), 0)})")
 ```
 
 ## Section 4: Multi-Backend Strategy
@@ -133,21 +131,25 @@ IO.puts("Archive size: #{byte_size(binary)} bytes")
 ## Section 5: Operational Guidance
 
 **Choose ETS when**:
-- You need sub-millisecond reads
-- Data can be lost on node restart (ephemeral caching)
-- Multiple processes need concurrent read access
+
+* You need sub-millisecond reads
+* Data can be lost on node restart (ephemeral caching)
+* Multiple processes need concurrent read access
 
 **Choose DETS when**:
-- You need durability across process restarts
-- Write throughput is moderate (DETS serializes writes)
-- 2GB file size limit is acceptable
+
+* You need durability across process restarts
+* Write throughput is moderate (DETS serializes writes)
+* 2GB file size limit is acceptable
 
 **Choose external storage (Ecto, Mnesia, CubDB) when**:
-- You need multi-node replication (Mnesia)
-- You need query capabilities (Ecto/SQL)
-- You need atomic multi-key transactions (CubDB)
+
+* You need multi-node replication (Mnesia)
+* You need query capabilities (Ecto/SQL)
+* You need atomic multi-key transactions (CubDB)
 
 **Serialization overhead**:
-- HLL at p=14: 16KB serialized (negligible serialize/deserialize cost)
-- CMS (128x5): ~2KB
-- Theta (k=4096): ~32KB
+
+* HLL at p=14: 16KB serialized (negligible serialize/deserialize cost)
+* CMS (128x5): ~2KB
+* Theta (k=4096): ~32KB

@@ -52,6 +52,8 @@ defmodule ExDataSketch.Bloom do
 
   defstruct [:state, :opts, :backend]
 
+  @behaviour ExDataSketch.Sketch
+
   @default_capacity 10_000
   @default_fpr 0.01
   @default_seed 0
@@ -146,6 +148,38 @@ defmodule ExDataSketch.Bloom do
     new_state = backend.bloom_put_many(state, hashes, opts)
     %{bloom | state: new_state}
   end
+
+  @doc """
+  Alias for `put/2`, added so `ExDataSketch.Bloom` satisfies the
+  `ExDataSketch.Sketch` behaviour's generic `update/2` callback.
+
+  `put/2` remains the family-idiomatic name and the one used throughout this
+  module's own documentation; `update/2` exists purely for cross-family
+  generic code (see `ExDataSketch.update/2`).
+
+  ## Examples
+
+      iex> bloom = ExDataSketch.Bloom.new() |> ExDataSketch.Bloom.update("hello")
+      iex> ExDataSketch.Bloom.member?(bloom, "hello")
+      true
+
+  """
+  @spec update(t(), term()) :: t()
+  def update(%__MODULE__{} = bloom, item), do: put(bloom, item)
+
+  @doc """
+  Alias for `put_many/2`, added so `ExDataSketch.Bloom` satisfies the
+  `ExDataSketch.Sketch` behaviour's generic `update_many/2` callback.
+
+  ## Examples
+
+      iex> bloom = ExDataSketch.Bloom.new() |> ExDataSketch.Bloom.update_many(["a", "b", "c"])
+      iex> ExDataSketch.Bloom.member?(bloom, "a")
+      true
+
+  """
+  @spec update_many(t(), Enumerable.t()) :: t()
+  def update_many(%__MODULE__{} = bloom, items), do: put_many(bloom, items)
 
   @doc """
   Tests whether an item may be a member of the set.

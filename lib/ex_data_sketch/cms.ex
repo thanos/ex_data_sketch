@@ -71,6 +71,8 @@ defmodule ExDataSketch.CMS do
 
   defstruct [:state, :opts, :backend]
 
+  @behaviour ExDataSketch.Sketch
+
   @default_width 2048
   @default_depth 5
   @default_counter_width 32
@@ -479,6 +481,35 @@ defmodule ExDataSketch.CMS do
   @spec merger(keyword()) :: (t(), t() -> t())
   def merger(_opts \\ []) do
     fn a, b -> merge(a, b) end
+  end
+
+  @doc """
+  Returns the set of operation names supported by `ExDataSketch.CMS`.
+
+  See `ExDataSketch.Sketch` for the shared capability vocabulary.
+
+  ## Examples
+
+      iex> ExDataSketch.CMS.capabilities() |> MapSet.member?(:estimate)
+      true
+
+      iex> ExDataSketch.CMS.capabilities() |> MapSet.member?(:no_such_operation)
+      false
+
+  """
+  @spec capabilities() :: ExDataSketch.Sketch.capabilities()
+  @dialyzer {:no_opaque, capabilities: 0}
+  def capabilities do
+    MapSet.new([
+      :new,
+      :update,
+      :update_many,
+      :merge,
+      :merge_many,
+      :estimate,
+      :serialize,
+      :deserialize
+    ])
   end
 
   # -- Private --

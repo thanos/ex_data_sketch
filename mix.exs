@@ -1,7 +1,7 @@
 defmodule ExDataSketch.MixProject do
   use Mix.Project
 
-  @version "0.9.0"
+  @version "0.10.0-dev"
   @source_url "https://github.com/thanos/ex_data_sketch"
 
   def project do
@@ -80,6 +80,7 @@ defmodule ExDataSketch.MixProject do
       {:opentelemetry_api, "~> 1.0", optional: true},
       {:broadway, "~> 1.0", optional: true},
       {:flow, "~> 1.2", optional: true},
+      {:gen_stage, "~> 1.0", optional: true},
       {:cubdb, "~> 2.0", optional: true},
       {:ecto_sql, "~> 3.0", optional: true}
     ]
