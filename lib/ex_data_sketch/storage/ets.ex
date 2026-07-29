@@ -35,6 +35,8 @@ defmodule ExDataSketch.Storage.ETS do
       :ok = ExDataSketch.Storage.ETS.delete(:sketches, "cardinality:2024-01")
   """
 
+  @behaviour ExDataSketch.Storage
+
   @table_type_error "ETS table must be :set or :ordered_set type"
 
   alias ExDataSketch.Telemetry

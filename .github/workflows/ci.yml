@@ -180,9 +180,17 @@ jobs:
       - run: mix deps.get
       - run: mkdir -p priv/plts
 
-      - name: Remove stale PLT on cache miss
-        if: steps.plt-cache.outputs.cache-hit != 'true'
-        run: rm -f priv/plts/dialyzer.plt
+      - name: Remove stale or corrupt PLT
+        # dialyxir tracks freshness via dialyzer.plt.hash, matched against
+        # mix.lock. If the cache restored the hash file but not the (much
+        # larger) .plt file itself -- a partial cache hit, or an interrupted
+        # save from a previous run -- dialyxir trusts the hash match and
+        # tries to open the missing .plt directly, crashing with
+        # "Could not read PLT file: no_such_file" instead of rebuilding.
+        # Clearing the hash whenever the .plt itself is absent forces a
+        # clean rebuild in that case, regardless of the cache-hit status.
+        if: steps.plt-cache.outputs.cache-hit != 'true' || hashFiles('priv/plts/dialyzer.plt') == ''
+        run: rm -f priv/plts/dialyzer.plt priv/plts/dialyzer.plt.hash
 
       - run: mix dialyzer
 

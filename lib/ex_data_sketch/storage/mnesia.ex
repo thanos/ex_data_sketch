@@ -1,6 +1,8 @@
 defmodule ExDataSketch.Storage.Mnesia do
   @compile {:no_warn_undefined, :mnesia}
 
+  @behaviour ExDataSketch.Storage
+
   alias ExDataSketch.Telemetry
 
   @moduledoc """

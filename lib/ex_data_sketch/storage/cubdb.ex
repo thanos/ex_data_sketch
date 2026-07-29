@@ -36,6 +36,8 @@ defmodule ExDataSketch.Storage.CubDB do
       :ok = ExDataSketch.Storage.CubDB.merge(partial, db, "cardinality:2024-01")
   """
 
+  @behaviour ExDataSketch.Storage
+
   alias ExDataSketch.{Integration, Telemetry}
 
   @cubdb_available Code.ensure_loaded?(CubDB)

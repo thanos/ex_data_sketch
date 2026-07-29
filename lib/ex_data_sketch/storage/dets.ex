@@ -32,6 +32,8 @@ defmodule ExDataSketch.Storage.DETS do
   :ok = :dets.close(:sketches)
   """
 
+  @behaviour ExDataSketch.Storage
+
   alias ExDataSketch.Telemetry
 
   @doc """

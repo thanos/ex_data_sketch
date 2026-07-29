@@ -48,6 +48,8 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
         :ok = ExDataSketch.Storage.Ecto.delete(MyApp.Repo, "cardinality:2024-01")
     """
 
+    @behaviour ExDataSketch.Storage
+
     alias ExDataSketch.{Integration, Storage.Ecto.Schema, Telemetry}
 
     @ecto_available Code.ensure_loaded?(Ecto.Adapters.SQL)
