@@ -1,5 +1,10 @@
 # ExDataSketch
 
+
+
+<img width="500"  alt="ex_data_sketch" src="https://github.com/user-attachments/assets/07a406c5-e0e5-46b3-bc3a-5ea40e21220f" />
+
+
 Production-grade streaming data sketching algorithms for Elixir.
 
 ExDataSketch provides probabilistic data structures for approximate counting,
