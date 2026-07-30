@@ -4,132 +4,129 @@
 
 ```elixir
 Mix.install([
-  {:ex_data_sketch, "~> 0.9.0"}
+  {:ex_data_sketch, "~> 0.10.0"}
 ])
 ```
 
 ## Introduction
 
 Rolling telemetry windows track metrics over time intervals using
-probabilistic sketches. Instead of storing every event, maintain a
-sketch per time window and merge windows as they age out.
+probabilistic sketches. `ExDataSketch.Window` wraps any mergeable sketch
+family in a fixed-size ring of tumbling slots and merges the live ones on
+read -- no hand-rolled timer, no `GenServer` managing a list of retired
+sketches. See `guides/windowing.md` for the full write-up of what "the last
+N minutes" means for a tumbling window (not an exact sliding window) and
+which sketch families can be windowed.
 
 ## Section 1: Basic Time-Windowed Sketch
 
 ```elixir
-defmodule RollingWindow do
-  use GenServer
-
-  @window_ms 100  # 100ms windows for demo purposes
-
-  def start_link(opts) do
-    name = Keyword.get(opts, :name, __MODULE__)
-    GenServer.start_link(__MODULE__, opts, name: name)
-  end
-
-  def track(item, name \\ __MODULE__), do: GenServer.cast(name, {:track, item})
-  def estimate(name \\ __MODULE__), do: GenServer.call(name, :estimate)
-
-  def init(opts) do
-    sketch_mod = Keyword.get(opts, :sketch_module, ExDataSketch.HLL)
-    sketch_opts = Keyword.get(opts, :sketch_opts, [p: 14])
-    window_count = Keyword.get(opts, :windows, 5)
-
-    schedule_flush()
-
-    {:ok, %{
-      sketch_mod: sketch_mod,
-      sketch_opts: sketch_opts,
-      current: sketch_mod.new(sketch_opts),
-      windows: [],
-      window_count: window_count
-    }}
-  end
-
-  def handle_cast({:track, item}, state) do
-    updated = state.sketch_mod.update(state.current, item)
-    {:noreply, %{state | current: updated}}
-  end
-
-  def handle_call(:estimate, _from, state) do
-    merged_windows = case state.windows do
-      [] -> state.current
-      windows -> state.sketch_mod.merge_many([state.current | windows])
-    end
-    estimate = state.sketch_mod.estimate(merged_windows)
-    {:reply, estimate, state}
-  end
-
-  def handle_info(:flush, state) do
-    new_windows = [state.current | state.windows]
-                   |> Enum.take(state.window_count)
-    schedule_flush()
-    {:noreply, %{state | current: state.sketch_mod.new(state.sketch_opts), windows: new_windows}}
-  end
-
-  defp schedule_flush, do: Process.send_after(self(), :flush, @window_ms)
-end
-
-# Start a rolling window (5 x 100ms windows)
-{:ok, _pid} = RollingWindow.start_link(windows: 5)
+# 100ms slots, 2 of them retained -> a short window, for demo purposes.
+# In production this would be something like every: :timer.minutes(1), keep: 5.
+# Each batch below uses a disjoint user-ID range so the printed estimate is
+# unambiguous; sleeping 300ms (three slot durations) between batches, with
+# keep: 2, reliably ages the previous batch's slot out before the next one.
+window = ExDataSketch.Window.new(:hll, [p: 14], every: 100, keep: 2)
 
 # Batch 1: 200 distinct users
-for i <- 1..1000, do: RollingWindow.track("user_#{rem(i, 200)}")
-IO.puts("After batch 1: #{Float.round(RollingWindow.estimate(), 0)} (true: 200)")
+window = Enum.reduce(1..200, window, fn i, w -> ExDataSketch.Window.update(w, "batch1_user_#{i}") end)
+IO.puts("After batch 1: #{Float.round(ExDataSketch.Window.estimate(window), 0)} (true: 200)")
 
-# Wait for flush to rotate the window
-Process.sleep(150)
+# Wait long enough (three slot durations) for batch 1's slot to age out
+Process.sleep(300)
 
-# Batch 2: 500 distinct users (new window)
-for i <- 1..1000, do: RollingWindow.track("user_#{rem(i, 500)}")
-IO.puts("After batch 2: #{Float.round(RollingWindow.estimate(), 0)} (true: ~700, 500 new + 200 retained)")
+# Batch 2: 500 distinct (disjoint) users, in a new slot
+window = Enum.reduce(1..500, window, fn i, w -> ExDataSketch.Window.update(w, "batch2_user_#{i}") end)
+IO.puts("After batch 2: #{Float.round(ExDataSketch.Window.estimate(window), 0)} (true: ~500 -- batch 1 has aged out)")
 
-# Wait for another flush
-Process.sleep(150)
+# Wait again for batch 2's slot to age out
+Process.sleep(300)
 
-# Batch 3: only 50 distinct users (demonstrates window aging)
-for i <- 1..100, do: RollingWindow.track("user_#{rem(i, 50)}")
-IO.puts("After batch 3: #{Float.round(RollingWindow.estimate(), 0)} (true: ~750)")
+# Batch 3: only 50 distinct (disjoint) users -- demonstrates window aging
+window = Enum.reduce(1..50, window, fn i, w -> ExDataSketch.Window.update(w, "batch3_user_#{i}") end)
+IO.puts("After batch 3: #{Float.round(ExDataSketch.Window.estimate(window), 0)} (true: ~50 -- batch 2 has aged out)")
+
+IO.inspect(ExDataSketch.Window.slots(window) |> Enum.map(fn {key, _sketch} -> key end), label: "live slot keys")
 ```
 
-## Section 2: Persistence for Long-Term Storage
+## Section 2: Deterministic Testing (No Sleeping)
 
-Persist window snapshots to ETS for recovery after crashes:
+The demo above uses the real clock, appropriate for exploring the module
+interactively. Application tests should not sleep -- `update/3` and `tick/2`
+accept an explicit `now` in milliseconds, and `new/3` accepts a `:time_fn`
+for a fully controlled clock:
 
 ```elixir
-# Save the current window to ETS
+window = ExDataSketch.Window.new(:hll, [p: 14], every: 1000, keep: 3, time_fn: fn -> 3000 end)
+
+window = window |> ExDataSketch.Window.update("a", 0) |> ExDataSketch.Window.update("b", 3000)
+
+# slot 0 has already aged out of the 3-slot window as of "now" = 3000
+IO.inspect(ExDataSketch.Window.slots(window) |> Enum.map(fn {key, _sketch} -> key end), label: "live slot keys")
+```
+
+## Section 3: Persistence for Long-Term Storage
+
+`Window.serialize/1` and `deserialize/1` persist a window's configuration
+and live slot contents (each slot through its own sketch module's own
+`serialize/1`, so sketch state stays in the standard EXSK v2 format). Persist
+the resulting binary to any `ExDataSketch.Storage` backend the same way you
+would a plain sketch:
+
+```elixir
 table = :ets.new(:sketch_windows, [:set, :public, :named_table])
 
-window_sketch = ExDataSketch.HLL.from_enumerable(1..500, p: 14)
-ExDataSketch.Storage.ETS.save(window_sketch, table, "window:2024-01-15:00")
+window = ExDataSketch.Window.new(:hll, [p: 14], every: 100, keep: 5)
+window = Enum.reduce(1..500, window, fn i, w -> ExDataSketch.Window.update(w, "user_#{i}") end)
 
-# Load it back
-{:ok, loaded} = ExDataSketch.Storage.ETS.load(ExDataSketch.HLL, table, "window:2024-01-15:00")
-IO.puts("Loaded estimate: #{Float.round(ExDataSketch.HLL.estimate(loaded), 0)} (true: 500)")
+binary = ExDataSketch.Window.serialize(window)
+:ets.insert(table, {"window:2024-01-15:00", binary})
+
+[{_key, loaded_binary}] = :ets.lookup(table, "window:2024-01-15:00")
+{:ok, restored} = ExDataSketch.Window.deserialize(loaded_binary)
+IO.puts("Restored window has #{map_size(restored.slots)} live slot(s) (module: #{inspect(restored.module)})")
 
 :ets.delete(table)
 ```
 
-## Section 3: Telemetry Integration
+## Section 4: Telemetry Integration
 
-Attach handlers to observe sketch operations:
+`Window` emits `[:ex_data_sketch, :window, :roll]` whenever a slot ages out
+of an `update/2,3`, `update_many/2`, or `tick/2` call (not from `estimate/1`,
+`merged/1`, or `slots/1`, which read transiently without mutating state):
 
 ```elixir
-:telemetry.attach("demo-handler", [:ex_data_sketch, :sketch, :ingest], fn _name, measurements, metadata, _config ->
-  IO.puts("Ingested #{metadata.sketch_type}: #{measurements.duration}ns")
+:telemetry.attach("demo-window-handler", [:ex_data_sketch, :window, :roll], fn _name, measurements, metadata, _config ->
+  IO.puts("Rolled #{metadata.sketch_type} window: #{measurements.dropped_count} slot(s) dropped, #{measurements.slot_count} still live")
 end, nil)
 
-# This will emit a telemetry event
-sketch = ExDataSketch.HLL.from_enumerable(1..1000, p: 14)
+window = ExDataSketch.Window.new(:hll, [p: 14], every: 100, keep: 1)
+window = ExDataSketch.Window.update(window, "a", 0)
+ExDataSketch.Window.update(window, "b", 500)
 
-:telemetry.detach("demo-handler")
+:telemetry.detach("demo-window-handler")
 ```
 
-## Section 4: Operational Guidance
+## Section 5: Operational Guidance
 
-**Window sizing**:
-- 1-minute windows, 5 deep = 5 minutes of history (good for dashboards)
-- 5-minute windows, 12 deep = 1 hour (good for alerting)
-- 1-hour windows, 24 deep = 1 day (good for reporting)
+**Window sizing** (`every:` slot duration, `keep:` slot count):
 
-**Memory**: At p=14, each window = 16KB. 24 windows = 384KB total.
+- `every: :timer.minutes(1), keep: 5` -- 5 minutes of history (good for dashboards)
+- `every: :timer.minutes(5), keep: 12` -- 1 hour (good for alerting)
+- `every: :timer.hours(1), keep: 24` -- 1 day (good for reporting)
+
+**Memory**: each live slot is a full sketch. At `p: 14`, each HLL slot is
+about 16KB; a 5-slot window is about 80KB (plus one extra slot's worth while
+the oldest is still live alongside a freshly started current slot).
+
+**Accuracy**: tumbling windows retain between `keep - 1` and `keep` full
+slots of history, not exactly `keep` -- see `guides/windowing.md` for why.
+Narrower slots (`every: :timer.seconds(1), keep: 300` instead of
+`every: :timer.minutes(1), keep: 5`) trade more live sketches for tighter
+boundary accuracy.
+
+**Which families can be windowed**: any family with `merge/2`. `Cuckoo`,
+`XorFilter`, and `FilterChain` are rejected at `Window.new/3` with a clear
+error. `estimate/1` additionally requires the family to support
+`ExDataSketch.estimate/1` (cardinality, quantile, and heavy-hitter families);
+`CMS` and the mergeable membership filters use `merged/1` instead.

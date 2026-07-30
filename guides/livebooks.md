@@ -75,7 +75,7 @@ dependencies. The Broadway Livebook additionally installs `:broadway`.
 | `streaming_cardinality.livemd` | Stream/Collectable API, precision, ULL vs HLL | 126 |
 | `persistence_snapshots.livemd` | ETS, DETS, serialization, multi-backend | 152 |
 | `distributed_merges.livemd` | Associativity, tree aggregation, ETS sharding | 121 |
-| `rolling_telemetry.livemd` | Time windows, GenServer, telemetry events | 119 |
+| `rolling_telemetry.livemd` | ExDataSketch.Window, deterministic testing, telemetry events | 129 |
 | `broadway_integration.livemd` | Batch accumulation, PeriodicAggregator | 130 |
 | `genstage_aggregation.livemd` | SketchConsumer, SketchProducer, flushing | 172 |
 | `livedashboard_integration.livemd` | Telemetry wiring, custom pages, events | 190 |

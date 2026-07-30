@@ -21,7 +21,8 @@ defmodule ExDataSketch.Telemetry do
         sketch: true,
         persistence: true,
         stream: true,
-        pipeline: true
+        pipeline: true,
+        window: true
       ]
 
   When telemetry is disabled, `:telemetry.execute/3` is never called,
@@ -79,6 +80,18 @@ defmodule ExDataSketch.Telemetry do
   > represents the time elapsed since the previous flush (or since process
   > start), not the time taken to perform the flush itself.
 
+  ### Window Events
+
+  | Event | Measurements | Metadata |
+  |-------|-------------|----------|
+  | `[:ex_data_sketch, :window, :roll]` | `slot_count`, `dropped_count` | `sketch_type`, `oldest_age_ms` |
+
+  > **Note on `:roll`:** Emitted by `ExDataSketch.Window.update/2,3`,
+  > `update_many/2`, and `tick/2` whenever at least one slot ages out of the
+  > `keep` window. Not emitted by `estimate/1` or `merged/1`, which filter
+  > expired slots transiently for the read without mutating or persisting
+  > the window's stored state.
+
   ## Usage
 
   Users attach handlers via `:telemetry.attach/4`:
@@ -95,7 +108,7 @@ defmodule ExDataSketch.Telemetry do
   @type measurements :: %{atom() => number()}
   @type metadata :: %{atom() => term()}
 
-  @categories [:sketch, :persistence, :stream, :pipeline]
+  @categories [:sketch, :persistence, :stream, :pipeline, :window]
 
   @doc """
   Emits a telemetry event if telemetry is enabled for the given category.
@@ -110,7 +123,7 @@ defmodule ExDataSketch.Telemetry do
   - `measurements` -- a map of numeric measurements.
   - `metadata` -- a map of event metadata.
   - `category` -- the event category (`:sketch`, `:persistence`,
-    `:stream`, or `:pipeline`).
+    `:stream`, `:pipeline`, or `:window`).
 
   ## Examples
 
@@ -310,7 +323,7 @@ defmodule ExDataSketch.Telemetry do
   ## Examples
 
       iex> ExDataSketch.Telemetry.categories()
-      [:sketch, :persistence, :stream, :pipeline]
+      [:sketch, :persistence, :stream, :pipeline, :window]
 
   """
   @spec categories() :: [atom()]
@@ -366,6 +379,11 @@ defmodule ExDataSketch.Telemetry do
         event_name(:pipeline, action)
       end
 
-    sketch_events ++ persistence_events ++ stream_events ++ pipeline_events
+    window_events =
+      for action <- [:roll] do
+        event_name(:window, action)
+      end
+
+    sketch_events ++ persistence_events ++ stream_events ++ pipeline_events ++ window_events
   end
 end

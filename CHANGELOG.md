@@ -47,6 +47,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Each backend module's own API is unchanged. See
   `baoulo/plans/0.10.0_phase2_stub_review.md` for the full design.
+- `ExDataSketch.Window` -- a ring of tumbling sub-sketches for "in the last
+  N" questions without a hand-rolled timer:
+
+      window = ExDataSketch.Window.new(:hll, [p: 14], every: :timer.minutes(1), keep: 5)
+      window = ExDataSketch.Window.update(window, user_id)
+      ExDataSketch.Window.estimate(window)
+
+  `new/3` accepts a registry atom (`:hll`) or a sketch module directly;
+  windowing requires a mergeable family (`Cuckoo`, `XorFilter`, and
+  `FilterChain` are rejected with a clear error). The clock defaults to
+  `System.monotonic_time/1` and is fully injectable (`:time_fn` at
+  construction, an explicit `now` on `update/3` and `tick/2`), so tests
+  never sleep. Adds the `:window` telemetry category and the
+  `[:ex_data_sketch, :window, :roll]` event. See `guides/windowing.md` and
+  `baoulo/plans/0.10.0_phase3_stub_review.md` for the full design,
+  including what "the last N minutes" actually means for a tumbling
+  (not exact sliding) window.
 
 ### Changed
 

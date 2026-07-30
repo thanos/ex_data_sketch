@@ -124,6 +124,7 @@ defmodule ExDataSketch.MixProject do
         "guides/genstage_integration.md",
         "guides/flow_integration.md",
         "guides/persistence.md",
+        "guides/windowing.md",
         "guides/telemetry.md",
         "guides/observability.md",
         "guides/aggregation_wall.md",
@@ -184,7 +185,11 @@ defmodule ExDataSketch.MixProject do
           ExDataSketch.Storage.Ecto.Schema,
           ExDataSketch.Storage.Ecto.Migration
         ],
+        Windowing: [
+          ExDataSketch.Window
+        ],
         Infrastructure: [
+          ExDataSketch.Sketch,
           ExDataSketch.Hash,
           ExDataSketch.Codec,
           ExDataSketch.Backend,
