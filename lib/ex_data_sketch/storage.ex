@@ -32,6 +32,23 @@ defmodule ExDataSketch.Storage do
   optional `:cubdb` dependency is missing, but the module itself always
   exists).
 
+  ## Backend Ref Resolution
+
+  `save/3`, `load/3`, `merge/3`, and `delete/2` accept a `t:backend_ref/0`,
+  which is either:
+
+    - an explicit `{backend_module, ref}` pair, for example
+      `{ExDataSketch.Storage.ETS, :my_table}`; or
+    - a bare `ref` (for example, a plain table name), resolved against the
+      module configured under `config :ex_data_sketch, :storage, backend: ...`
+      below. Raises `ExDataSketch.Errors.InvalidOptionError` if no default
+      backend is configured.
+
+  A value is treated as an explicit pair only when it is a 2-tuple whose
+  first element is an atom; none of the five shipped backends' own `ref`
+  types (`atom()`, `pid() | atom()`, `module()`) are themselves 2-tuples, so
+  this is unambiguous today.
+
   ## Configuration
 
   Backends can be enabled or disabled via application config:
@@ -172,114 +189,123 @@ defmodule ExDataSketch.Storage do
   Persists a sketch under `key` via `backend_ref`, dispatching to the
   resolved backend module's `save/3`.
 
-  `backend_ref` is either an explicit `{backend_module, ref}` pair (for
-  example `{ExDataSketch.Storage.ETS, :my_table}`) or a bare `ref`, in which
-  case the backend module is read from
-  `config :ex_data_sketch, :storage, backend: SomeModule`. Raises
-  `ExDataSketch.Errors.InvalidOptionError` if a bare `ref` is given and no
-  default backend is configured.
-
-  This is a Phase 2 facade stub: the dispatch body is intentionally not yet
-  implemented pending maintainer review of the API surface (see
-  `baoulo/plans/plan-0.10.0.md`, Phase 2). It currently raises
-  `ExDataSketch.Errors.NotImplementedError`.
+  See the "Backend Ref Resolution" section above for how `backend_ref` is
+  resolved.
 
   ## Examples
 
-      iex> try do
-      ...>   sketch = ExDataSketch.HLL.new(p: 10)
-      ...>   ExDataSketch.Storage.save(sketch, {ExDataSketch.Storage.ETS, :some_table}, "key")
-      ...> rescue
-      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
-      ...> end
-      "ExDataSketch.Storage.save is not yet implemented"
+      iex> :ets.new(:storage_facade_doctest_save, [:set, :public, :named_table])
+      iex> sketch = ExDataSketch.HLL.new(p: 10) |> ExDataSketch.HLL.update("a")
+      iex> ExDataSketch.Storage.save(sketch, {ExDataSketch.Storage.ETS, :storage_facade_doctest_save}, "key")
+      :ok
+      iex> :ets.delete(:storage_facade_doctest_save)
+      true
 
   """
   @spec save(struct(), backend_ref(), key()) :: :ok | {:error, term()}
-  @dialyzer {:nowarn_function, save: 3}
-  def save(%_{} = _sketch, _backend_ref, _key) do
-    Errors.not_implemented!(__MODULE__, "save")
+  def save(%_{} = sketch, backend_ref, key) do
+    {module, ref} = resolve_backend(backend_ref)
+    apply(module, :save, [sketch, ref, key])
   end
 
   @doc """
   Retrieves and deserializes a sketch by `key` via `backend_ref`, dispatching
   to the resolved backend module's `load/3`.
 
-  See `save/3` for how `backend_ref` is resolved.
-
-  This is a Phase 2 facade stub: the dispatch body is intentionally not yet
-  implemented pending maintainer review of the API surface (see
-  `baoulo/plans/plan-0.10.0.md`, Phase 2). It currently raises
-  `ExDataSketch.Errors.NotImplementedError`.
+  See the "Backend Ref Resolution" section above for how `backend_ref` is
+  resolved.
 
   ## Examples
 
-      iex> try do
-      ...>   ExDataSketch.Storage.load(ExDataSketch.HLL, {ExDataSketch.Storage.ETS, :some_table}, "key")
-      ...> rescue
-      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
-      ...> end
-      "ExDataSketch.Storage.load is not yet implemented"
+      iex> :ets.new(:storage_facade_doctest_load, [:set, :public, :named_table])
+      iex> sketch = ExDataSketch.HLL.new(p: 10) |> ExDataSketch.HLL.update("a")
+      iex> ExDataSketch.Storage.save(sketch, {ExDataSketch.Storage.ETS, :storage_facade_doctest_load}, "key")
+      iex> {:ok, loaded} = ExDataSketch.Storage.load(ExDataSketch.HLL, {ExDataSketch.Storage.ETS, :storage_facade_doctest_load}, "key")
+      iex> ExDataSketch.HLL.estimate(loaded) > 0.0
+      true
+      iex> ExDataSketch.Storage.load(ExDataSketch.HLL, {ExDataSketch.Storage.ETS, :storage_facade_doctest_load}, "nonexistent")
+      {:error, :not_found}
+      iex> :ets.delete(:storage_facade_doctest_load)
+      true
 
   """
   @spec load(module(), backend_ref(), key()) :: {:ok, struct()} | {:error, :not_found | term()}
-  @dialyzer {:nowarn_function, load: 3}
-  def load(sketch_module, _backend_ref, _key) when is_atom(sketch_module) do
-    Errors.not_implemented!(__MODULE__, "load")
+  def load(sketch_module, backend_ref, key) when is_atom(sketch_module) do
+    {module, ref} = resolve_backend(backend_ref)
+    apply(module, :load, [sketch_module, ref, key])
   end
 
   @doc """
   Merges a sketch into the value persisted at `key` via `backend_ref`,
   dispatching to the resolved backend module's `merge/3`.
 
-  See `save/3` for how `backend_ref` is resolved.
-
-  This is a Phase 2 facade stub: the dispatch body is intentionally not yet
-  implemented pending maintainer review of the API surface (see
-  `baoulo/plans/plan-0.10.0.md`, Phase 2). It currently raises
-  `ExDataSketch.Errors.NotImplementedError`.
+  See the "Backend Ref Resolution" section above for how `backend_ref` is
+  resolved.
 
   ## Examples
 
-      iex> try do
-      ...>   sketch = ExDataSketch.HLL.new(p: 10)
-      ...>   ExDataSketch.Storage.merge(sketch, {ExDataSketch.Storage.ETS, :some_table}, "key")
-      ...> rescue
-      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
-      ...> end
-      "ExDataSketch.Storage.merge is not yet implemented"
+      iex> :ets.new(:storage_facade_doctest_merge, [:set, :public, :named_table])
+      iex> a = ExDataSketch.HLL.new(p: 10) |> ExDataSketch.HLL.update("a")
+      iex> ExDataSketch.Storage.save(a, {ExDataSketch.Storage.ETS, :storage_facade_doctest_merge}, "key")
+      iex> b = ExDataSketch.HLL.new(p: 10) |> ExDataSketch.HLL.update("b")
+      iex> ExDataSketch.Storage.merge(b, {ExDataSketch.Storage.ETS, :storage_facade_doctest_merge}, "key")
+      :ok
+      iex> {:ok, merged} = ExDataSketch.Storage.load(ExDataSketch.HLL, {ExDataSketch.Storage.ETS, :storage_facade_doctest_merge}, "key")
+      iex> ExDataSketch.HLL.estimate(merged) >= 1.9
+      true
+      iex> :ets.delete(:storage_facade_doctest_merge)
+      true
 
   """
   @spec merge(struct(), backend_ref(), key()) :: :ok | {:error, term()}
-  @dialyzer {:nowarn_function, merge: 3}
-  def merge(%_{} = _sketch, _backend_ref, _key) do
-    Errors.not_implemented!(__MODULE__, "merge")
+  def merge(%_{} = sketch, backend_ref, key) do
+    {module, ref} = resolve_backend(backend_ref)
+    apply(module, :merge, [sketch, ref, key])
   end
 
   @doc """
   Removes the value stored at `key` via `backend_ref`, dispatching to the
   resolved backend module's `delete/2`.
 
-  See `save/3` for how `backend_ref` is resolved.
-
-  This is a Phase 2 facade stub: the dispatch body is intentionally not yet
-  implemented pending maintainer review of the API surface (see
-  `baoulo/plans/plan-0.10.0.md`, Phase 2). It currently raises
-  `ExDataSketch.Errors.NotImplementedError`.
+  See the "Backend Ref Resolution" section above for how `backend_ref` is
+  resolved.
 
   ## Examples
 
-      iex> try do
-      ...>   ExDataSketch.Storage.delete({ExDataSketch.Storage.ETS, :some_table}, "key")
-      ...> rescue
-      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
-      ...> end
-      "ExDataSketch.Storage.delete is not yet implemented"
+      iex> :ets.new(:storage_facade_doctest_delete, [:set, :public, :named_table])
+      iex> sketch = ExDataSketch.HLL.new(p: 10)
+      iex> ExDataSketch.Storage.save(sketch, {ExDataSketch.Storage.ETS, :storage_facade_doctest_delete}, "key")
+      iex> ExDataSketch.Storage.delete({ExDataSketch.Storage.ETS, :storage_facade_doctest_delete}, "key")
+      :ok
+      iex> ExDataSketch.Storage.load(ExDataSketch.HLL, {ExDataSketch.Storage.ETS, :storage_facade_doctest_delete}, "key")
+      {:error, :not_found}
+      iex> :ets.delete(:storage_facade_doctest_delete)
+      true
 
   """
   @spec delete(backend_ref(), key()) :: :ok | {:error, term()}
-  @dialyzer {:nowarn_function, delete: 2}
-  def delete(_backend_ref, _key) do
-    Errors.not_implemented!(__MODULE__, "delete")
+  def delete(backend_ref, key) do
+    {module, ref} = resolve_backend(backend_ref)
+    apply(module, :delete, [ref, key])
+  end
+
+  @spec resolve_backend(backend_ref()) :: {module(), ref()}
+  defp resolve_backend({module, ref}) when is_atom(module) do
+    {module, ref}
+  end
+
+  defp resolve_backend(ref) do
+    case Application.get_env(:ex_data_sketch, :storage, [])[:backend] do
+      module when is_atom(module) and not is_nil(module) ->
+        {module, ref}
+
+      _none ->
+        raise Errors.InvalidOptionError,
+          option: :backend,
+          value: nil,
+          message:
+            "no backend module given and no default configured; " <>
+              "pass {backend_module, ref} or set config :ex_data_sketch, :storage, backend: SomeModule"
+    end
   end
 end

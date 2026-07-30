@@ -34,6 +34,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `capabilities/0` on `HLL`, `CMS`, `Theta`, `KLL`, `DDSketch`, `REQ`,
   `FrequentItems`, `MisraGries`, and `ULL`, matching the `MapSet.t(atom())`
   vocabulary already shipped on the membership filter modules.
+- `ExDataSketch.Storage` promoted to a real behaviour (`@callback save/3`,
+  `load/3`, `merge/3`, `delete/2`, optional `child_spec/1`), implemented by
+  all five persistence backends (`ETS`, `DETS`, `CubDB`, `Mnesia`, `Ecto`).
+  Adds `ExDataSketch.Storage.backends/0` (the atom-to-module registry) and a
+  dispatching facade -- `save/3`, `load/3`, `merge/3`, `delete/2` on
+  `ExDataSketch.Storage` itself -- that accepts either an explicit
+  `{backend_module, ref}` pair or a bare `ref` resolved against a newly
+  configurable default backend:
+
+      config :ex_data_sketch, :storage, backend: ExDataSketch.Storage.ETS
+
+  Each backend module's own API is unchanged. See
+  `baoulo/plans/0.10.0_phase2_stub_review.md` for the full design.
 
 ### Changed
 
@@ -47,6 +60,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fewer intermediate sketch allocation per batch.
 - `ExDataSketch.FilterChain`'s internal capability checks now use
   `ExDataSketch.Sketch.implemented?/1` instead of raw `function_exported?/3`.
+- Removed the unused `save_opts`, `load_opts`, `merge_opts`, and
+  `delete_opts` types from `ExDataSketch.Storage` -- they described a
+  `[table: atom()]` keyword-list shape no backend ever used (every backend
+  takes its table/db/repo as a positional argument) and were referenced
+  nowhere in `lib/` or `test/`.
 - Fixed a `:telemetry.attach/4` local-function-capture performance warning
   in `ExDataSketch.Telemetry.OpenTelemetry.setup/0` (it now attaches a
   remote function capture).
