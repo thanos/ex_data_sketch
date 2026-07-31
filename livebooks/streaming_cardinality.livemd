@@ -1,0 +1,127 @@
+<!-- livebook:{"app_settings":{"auto_dependency_loading":true}} -->
+
+# Streaming Cardinality Estimation
+
+```elixir
+Mix.install([
+  {:ex_data_sketch, "~> 0.9.0"}
+])
+```
+
+## Introduction
+
+When processing high-volume event streams, counting distinct items exactly
+requires memory proportional to cardinality. A stream of 10 million unique
+user IDs needs ~160 MB with `MapSet` but only ~16 KB with an HLL sketch.
+
+This Livebook demonstrates how `ex_data_sketch` makes cardinality estimation
+feel native inside Elixir streams.
+
+## Section 1: Basic Stream Ingestion
+
+The simplest way to estimate cardinality is `from_enumerable/2`:
+
+```elixir
+items = for i <- 1..100_000, do: "user_#{i}"
+
+# Exact counting (slow, memory-intensive)
+{exact_time, exact_count} = :timer.tc(fn -> MapSet.new(items) |> MapSet.size() end)
+IO.puts("Exact count: #{exact_count} in #{div(exact_time, 1000)}ms")
+
+# HLL estimation (fast, memory-efficient)
+{hll_time, hll} = :timer.tc(fn -> ExDataSketch.HLL.from_enumerable(items, p: 14) end)
+estimate = ExDataSketch.HLL.estimate(hll)
+IO.puts("HLL estimate: #{Float.round(estimate, 0)} in #{div(hll_time, 1000)}ms")
+IO.puts("Memory: #{ExDataSketch.HLL.size_bytes(hll)} bytes")
+IO.puts("Error: #{Float.round(abs(estimate - 100_000) / 1000, 2)}%")
+```
+
+## Section 2: Stream API
+
+`ExDataSketch.Stream` provides lazy stream operations:
+
+```elixir
+# Stream.hll/2 processes items lazily
+stream = Stream.map(1..50_000, fn i -> "item_#{i}" end)
+
+sketch = ExDataSketch.Stream.hll(stream, p: 12)
+IO.puts("Stream.hll estimate: #{Float.round(ExDataSketch.HLL.estimate(sketch), 0)}")
+
+# Stream.reduce_into/3 using Collectable
+sketch2 = ExDataSketch.Stream.reduce_into(1..50_000, ExDataSketch.HLL, p: 12)
+IO.puts("reduce_into estimate: #{Float.round(ExDataSketch.HLL.estimate(sketch2), 0)}")
+
+# Stream.reduce_partitioned/3 for parallel reduction
+sketch3 = ExDataSketch.Stream.reduce_partitioned(1..50_000, ExDataSketch.HLL, partitions: 4, p: 12)
+IO.puts("partitioned estimate: #{Float.round(ExDataSketch.HLL.estimate(sketch3), 0)}")
+```
+
+## Section 3: Collectable Integration
+
+All mergeable sketches implement the `Collectable` protocol:
+
+```elixir
+# Collectable.into works with any enumerable
+sketch = Enum.into(1..10_000, ExDataSketch.HLL.new(p: 14), fn i -> "user_#{i}" end)
+IO.puts("Collectable estimate: #{Float.round(ExDataSketch.HLL.estimate(sketch), 0)}")
+
+# Works with ULL too
+ull_sketch = Enum.into(1..10_000, ExDataSketch.ULL.new(p: 14), fn i -> "user_#{i}" end)
+IO.puts("ULL estimate: #{Float.round(ExDataSketch.ULL.estimate(ull_sketch), 0)}")
+
+# Works with CMS for frequency estimation
+cms_sketch = Enum.into(["a", "b", "a", "c", "b", "a"], ExDataSketch.CMS.new(width: 128, depth: 5))
+IO.puts("CMS count of 'a': #{ExDataSketch.CMS.estimate(cms_sketch, "a")}")
+```
+
+## Section 4: Choosing Precision
+
+The `p` parameter controls the memory/accuracy tradeoff:
+
+```elixir
+items = for i <- 1..100_000, do: "item_#{i}"
+
+for p <- [8, 10, 12, 14, 16] do
+  sketch = ExDataSketch.HLL.from_enumerable(items, p: p)
+  estimate = ExDataSketch.HLL.estimate(sketch)
+  error_pct = Float.round(abs(estimate - 100_000) / 1000, 2)
+  mem_kb = Float.round(ExDataSketch.HLL.size_bytes(sketch) / 1024, 1)
+  IO.puts("p=#{p}: estimate=#{Float.round(estimate, 0)}, error=#{error_pct}%, memory=#{mem_kb}KB")
+end
+```
+
+**Guidance**: Use `p=14` (16KB, ~0.8% error) for production. Use `p=10` (1KB, ~3.25%) for high-volume dashboards where memory is tight.
+
+## Section 5: ULL vs HLL
+
+ULL (UltraLogLog) provides ~20% better accuracy than HLL at the same memory:
+
+```elixir
+items = for i <- 1..100_000, do: "item_#{i}"
+
+hll = ExDataSketch.HLL.from_enumerable(items, p: 14)
+ull = ExDataSketch.ULL.from_enumerable(items, p: 14)
+
+hll_err = Float.round(abs(ExDataSketch.HLL.estimate(hll) - 100_000) / 1000, 2)
+ull_err = Float.round(abs(ExDataSketch.ULL.estimate(ull) - 100_000) / 1000, 2)
+
+IO.puts("HLL p=14: #{Float.round(ExDataSketch.HLL.estimate(hll), 0)} (error: #{hll_err}%)")
+IO.puts("ULL p=14: #{Float.round(ExDataSketch.ULL.estimate(ull), 0)} (error: #{ull_err}%)")
+IO.puts("Both use #{ExDataSketch.HLL.size_bytes(hll)} bytes")
+```
+
+## Section 6: Operational Guidance
+
+**Memory budgeting**: At `p=14`, each HLL uses 16KB. 1000 concurrent sketches = 16MB.
+At `p=10`, 1000 sketches = 1MB.
+
+**Recommended precision**:
+- `p=10`: High-volume dashboards, approximate counts
+- `p=12`: General analytics
+- `p=14`: Production monitoring (recommended default)
+- `p=16`: Financial/compliance use cases
+
+**When NOT to use sketches**:
+- Exact answers required (audit, compliance)
+- Very low cardinality (<100 distinct values)
+- You need to enumerate the distinct values (use `MapSet`)
