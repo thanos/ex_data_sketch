@@ -82,7 +82,6 @@ defmodule ExDataSketch.V1CompatTest do
 
   describe "v1 → v2 upgrade path" do
     test "a v1-decoded sketch re-serializes as v2 and decodes again" do
-      # Read a v1 HLL binary, deserialize, re-serialize, decode again.
       json =
         @v1_vectors_dir
         |> Path.join("hll/empty.json")
@@ -97,6 +96,41 @@ defmodule ExDataSketch.V1CompatTest do
 
       assert {:ok, sketch2} = HLL.deserialize(v2_bin)
       assert sketch2.state == sketch.state
+    end
+  end
+
+  describe "v1 serialize escape hatch" do
+    test "HLL serialize(format: :v1) produces a v1 binary" do
+      sketch = HLL.new(p: 14, hash_strategy: :phash2)
+      sketch = HLL.update(sketch, "hello")
+      v1_bin = HLL.serialize(sketch, format: :v1)
+
+      assert <<"EXSK", 1, 1, _rest::binary>> = v1_bin
+      assert {:ok, decoded} = HLL.deserialize(v1_bin)
+      assert HLL.estimate(decoded) > 0
+    end
+
+    test "HLL serialize(format: :v1) raises for non-phash2 hash strategy" do
+      sketch = HLL.new(p: 14, hash_strategy: :xxhash3)
+
+      assert_raise ArgumentError, ~r/v1 serialization requires :phash2/, fn ->
+        HLL.serialize(sketch, format: :v1)
+      end
+    end
+
+    test "v2 is the default format" do
+      sketch = HLL.new(p: 14)
+      sketch = HLL.update(sketch, "hello")
+      v2_bin = HLL.serialize(sketch)
+      assert <<"EXSK", 2, _rest::binary>> = v2_bin
+    end
+
+    test "v1 serialized sketch round-trips through deserialize" do
+      sketch = HLL.from_enumerable(["a", "b", "c", "d", "e"], p: 14, hash_strategy: :phash2)
+
+      v1_bin = HLL.serialize(sketch, format: :v1)
+      assert {:ok, decoded} = HLL.deserialize(v1_bin)
+      assert_in_delta HLL.estimate(decoded), HLL.estimate(sketch), 1.0
     end
   end
 end

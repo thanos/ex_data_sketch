@@ -44,7 +44,7 @@ defmodule ExDataSketch.HLL do
   same result, making HLL safe for parallel and distributed aggregation.
   """
 
-  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash}
+  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash, Telemetry}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -130,14 +130,16 @@ defmodule ExDataSketch.HLL do
       true
 
   """
-  @update_many_chunk_size 10_000
+  @default_update_many_chunk_size 10_000
 
   @spec update_many(t(), Enumerable.t()) :: t()
   def update_many(%__MODULE__{opts: opts, backend: backend} = sketch, items)
       when backend == Backend.Pure do
+    chunk_size = Keyword.get(opts, :update_many_chunk_size, @default_update_many_chunk_size)
+
     new_state =
       items
-      |> Stream.chunk_every(@update_many_chunk_size)
+      |> Stream.chunk_every(chunk_size)
       |> Enum.reduce(sketch.state, fn chunk, state_acc ->
         hashes = Enum.map(chunk, &hash_item(&1, opts))
         backend.hll_update_many(state_acc, hashes, opts)
@@ -147,13 +149,15 @@ defmodule ExDataSketch.HLL do
   end
 
   def update_many(%__MODULE__{opts: opts, backend: backend} = sketch, items) do
+    chunk_size = Keyword.get(opts, :update_many_chunk_size, @default_update_many_chunk_size)
+
     use_raw =
       backend == Backend.Rust and Keyword.get(opts, :hash_fn) == nil and
         Keyword.get(opts, :hash_strategy) != :phash2
 
     new_state =
       items
-      |> Stream.chunk_every(@update_many_chunk_size)
+      |> Stream.chunk_every(chunk_size)
       |> Enum.reduce(sketch.state, fn chunk, state_acc ->
         if use_raw do
           Backend.Rust.hll_update_many_raw(state_acc, chunk, opts)
@@ -244,6 +248,12 @@ defmodule ExDataSketch.HLL do
   See `ExDataSketch.Binary` for the high-level frame contract and
   `ExDataSketch.Binary.Header` for the byte-level layout.
 
+  Accepts an optional keyword list with the following keys:
+
+  - `:format` - serialization format: `:v2` (default, EXSK v2 with CRC32C)
+    or `:v1` (legacy EXSK v1, compatible with v0.7.x readers). The v1
+    format is only valid for sketches using `:phash2` hash strategy.
+
   ## Examples
 
       iex> sketch = ExDataSketch.HLL.new(p: 10)
@@ -252,14 +262,46 @@ defmodule ExDataSketch.HLL do
       iex> byte_size(binary) > 0
       true
 
+      iex> sketch = ExDataSketch.HLL.new(p: 10, hash_strategy: :phash2)
+      iex> binary = ExDataSketch.HLL.serialize(sketch, format: :v1)
+      iex> <<"EXSK", 1, 1, _rest::binary>> = binary
+
   """
-  @spec serialize(t()) :: binary()
-  def serialize(%__MODULE__{state: state, opts: opts}) do
-    p = Keyword.fetch!(opts, :p)
-    hs = hash_strategy_byte(opts)
-    params_bin = <<p::unsigned-8, hs::unsigned-8>>
-    metadata = Binary.metadata_from_opts(Codec.sketch_id_hll(), 1, opts)
-    Binary.encode(metadata, Binary.build_payload(params_bin, state))
+  @spec serialize(t(), keyword()) :: binary()
+  def serialize(%__MODULE__{state: state, opts: opts}, serialize_opts \\ []) do
+    format = Keyword.get(serialize_opts, :format, :v2)
+    start_time = System.monotonic_time()
+
+    binary =
+      case format do
+        :v2 ->
+          p = Keyword.fetch!(opts, :p)
+          hs = hash_strategy_byte(opts)
+          params_bin = <<p::unsigned-8, hs::unsigned-8>>
+          metadata = Binary.metadata_from_opts(Codec.sketch_id_hll(), 1, opts)
+          Binary.encode(metadata, Binary.build_payload(params_bin, state))
+
+        :v1 ->
+          unless Keyword.get(opts, :hash_strategy, :phash2) == :phash2 do
+            raise ArgumentError,
+                  "v1 serialization requires :phash2 hash strategy, " <>
+                    "got: #{inspect(Keyword.get(opts, :hash_strategy))}"
+          end
+
+          p = Keyword.fetch!(opts, :p)
+          params_bin = <<p::unsigned-8>>
+          Codec.encode(Codec.sketch_id_hll(), 1, params_bin, state)
+      end
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:sketch, :serialize),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: :hll},
+        :sketch
+      )
+
+    binary
   end
 
   @doc """
@@ -280,18 +322,31 @@ defmodule ExDataSketch.HLL do
   """
   @spec deserialize(binary()) :: {:ok, t()} | {:error, Exception.t()}
   def deserialize(binary) when is_binary(binary) do
-    with {:ok, decoded} <- Binary.decode(binary),
-         :ok <- validate_sketch_id(decoded.sketch_id),
-         {:ok, opts} <- decode_params(decoded.params) do
-      backend = Backend.default()
+    start_time = System.monotonic_time()
 
-      {:ok,
-       %__MODULE__{
-         state: decoded.state,
-         opts: opts,
-         backend: backend
-       }}
-    end
+    result =
+      with {:ok, decoded} <- Binary.decode(binary),
+           :ok <- validate_sketch_id(decoded.sketch_id),
+           {:ok, opts} <- decode_params(decoded.params) do
+        backend = Backend.default()
+
+        {:ok,
+         %__MODULE__{
+           state: decoded.state,
+           opts: opts,
+           backend: backend
+         }}
+      end
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:sketch, :deserialize),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: :hll},
+        :sketch
+      )
+
+    result
   end
 
   @doc """
@@ -358,7 +413,14 @@ defmodule ExDataSketch.HLL do
   """
   @spec from_enumerable(Enumerable.t(), keyword()) :: t()
   def from_enumerable(enumerable, opts \\ []) do
-    new(opts) |> update_many(enumerable)
+    Telemetry.span_with_result(
+      Telemetry.event_name(:sketch, :ingest),
+      %{},
+      %{sketch_type: :hll},
+      :sketch,
+      fn -> new(opts) |> update_many(enumerable) end,
+      fn sketch -> %{count: size_bytes(sketch)} end
+    )
   end
 
   @doc """
@@ -377,7 +439,13 @@ defmodule ExDataSketch.HLL do
   """
   @spec merge_many(Enumerable.t()) :: t()
   def merge_many(sketches) do
-    Enum.reduce(sketches, fn sketch, acc -> merge(acc, sketch) end)
+    Telemetry.span(
+      Telemetry.event_name(:sketch, :merge),
+      %{merge_count: Enum.count(sketches)},
+      %{sketch_type: :hll},
+      :sketch,
+      fn -> Enum.reduce(sketches, fn sketch, acc -> merge(acc, sketch) end) end
+    )
   end
 
   @doc """

@@ -4822,19 +4822,30 @@ defmodule ExDataSketch.Backend.Pure do
     c0 = :counters.get(counts, 0 + 1) * 1.0
     c_q = :counters.get(counts, q_max + 1) * 1.0
 
-    # Start with tau term (handles the boundary at q_max)
     z = m_f * ull_tau(1.0 - c_q / m_f)
 
-    # Horner scheme: for k from q_max-1 down to 1
     z = ull_horner_loop(z, counts, q_max - 1)
 
-    # Add sigma term (handles the C_0 / empty registers)
     z = z + m_f * ull_sigma(c0 / m_f)
 
-    if z == 0.0 do
-      0.0
-    else
-      alpha_inf * m_f * m_f / z
+    raw_estimate =
+      if z == 0.0 do
+        0.0
+      else
+        alpha_inf * m_f * m_f / z
+      end
+
+    zeros = :counters.get(counts, 0 + 1) * 1.0
+
+    cond do
+      zeros > 0 ->
+        m_f * :math.log(m_f / zeros)
+
+      raw_estimate > 0x100000000000000 / 30.0 ->
+        -0x10000000000000000 * :math.log(1.0 - raw_estimate / 0x10000000000000000)
+
+      true ->
+        raw_estimate
     end
   end
 

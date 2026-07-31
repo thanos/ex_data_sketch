@@ -51,7 +51,7 @@ defmodule ExDataSketch.Quotient do
 
   import Bitwise
 
-  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash}
+  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash, Telemetry}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -232,7 +232,13 @@ defmodule ExDataSketch.Quotient do
   """
   @spec merge_many(Enumerable.t()) :: t()
   def merge_many(filters) do
-    Enum.reduce(filters, fn qf, acc -> merge(acc, qf) end)
+    Telemetry.span(
+      Telemetry.event_name(:sketch, :merge),
+      %{merge_count: Enum.count(filters)},
+      %{sketch_type: :quotient},
+      :sketch,
+      fn -> Enum.reduce(filters, fn qf, acc -> merge(acc, qf) end) end
+    )
   end
 
   @doc """
@@ -263,16 +269,28 @@ defmodule ExDataSketch.Quotient do
   """
   @spec serialize(t()) :: binary()
   def serialize(%__MODULE__{state: state, opts: opts}) do
+    start_time = System.monotonic_time()
     q = Keyword.fetch!(opts, :q)
     r = Keyword.fetch!(opts, :r)
     seed = Keyword.get(opts, :seed, @default_seed)
 
     params_bin = <<q::unsigned-8, r::unsigned-8, seed::unsigned-little-32, 0::unsigned-8>>
 
-    Binary.encode(
-      Binary.metadata_from_opts(Codec.sketch_id_quotient(), 1, opts),
-      Binary.build_payload(params_bin, state)
-    )
+    binary =
+      Binary.encode(
+        Binary.metadata_from_opts(Codec.sketch_id_quotient(), 1, opts),
+        Binary.build_payload(params_bin, state)
+      )
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:sketch, :serialize),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: :quotient},
+        :sketch
+      )
+
+    binary
   end
 
   @doc """
@@ -290,19 +308,32 @@ defmodule ExDataSketch.Quotient do
   """
   @spec deserialize(binary()) :: {:ok, t()} | {:error, Exception.t()}
   def deserialize(binary) when is_binary(binary) do
-    with {:ok, decoded} <- Binary.decode(binary),
-         :ok <- validate_sketch_id(decoded.sketch_id),
-         {:ok, opts} <- decode_params(decoded.params),
-         :ok <- validate_state_header(decoded.state) do
-      backend = Backend.default()
+    start_time = System.monotonic_time()
 
-      {:ok,
-       %__MODULE__{
-         state: decoded.state,
-         opts: opts,
-         backend: backend
-       }}
-    end
+    result =
+      with {:ok, decoded} <- Binary.decode(binary),
+           :ok <- validate_sketch_id(decoded.sketch_id),
+           {:ok, opts} <- decode_params(decoded.params),
+           :ok <- validate_state_header(decoded.state) do
+        backend = Backend.default()
+
+        {:ok,
+         %__MODULE__{
+           state: decoded.state,
+           opts: opts,
+           backend: backend
+         }}
+      end
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:sketch, :deserialize),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: :quotient},
+        :sketch
+      )
+
+    result
   end
 
   @doc """
@@ -367,7 +398,14 @@ defmodule ExDataSketch.Quotient do
   """
   @spec from_enumerable(Enumerable.t(), keyword()) :: t()
   def from_enumerable(enumerable, opts \\ []) do
-    new(opts) |> put_many(enumerable)
+    Telemetry.span_with_result(
+      Telemetry.event_name(:sketch, :ingest),
+      %{},
+      %{sketch_type: :quotient},
+      :sketch,
+      fn -> new(opts) |> put_many(enumerable) end,
+      fn _sketch -> %{} end
+    )
   end
 
   @doc """
