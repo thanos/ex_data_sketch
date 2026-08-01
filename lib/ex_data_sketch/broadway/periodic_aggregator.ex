@@ -37,7 +37,22 @@ defmodule ExDataSketch.Broadway.PeriodicAggregator do
   without side effects.
 
   Calling `flush/1` manually returns the current aggregate sketch and
-  resets it to a new empty sketch.
+  resets it to a new empty sketch, without invoking `:flush_callback` --
+  only the automatic, timer-driven flush does that.
+
+  ## Implementation
+
+  This module is a thin wrapper around `ExDataSketch.Server`, translating
+  its own options into the equivalent `Server` options and delegating every
+  call. It exists to keep this module's pipeline-oriented API stable for
+  existing callers; new code that does not need that exact API should use
+  `ExDataSketch.Server` directly.
+
+  `[:ex_data_sketch, :pipeline, :periodic_flush]` is emitted on the
+  automatic, timer-driven flush only (mirroring `:flush_callback`, which is
+  also automatic-only). Both the automatic and the manual `flush/1` path
+  emit `[:ex_data_sketch, :server, :flush]`, since that event comes from
+  the underlying `ExDataSketch.Server` and always fires on every flush.
 
   ## Dependency
 
@@ -46,20 +61,9 @@ defmodule ExDataSketch.Broadway.PeriodicAggregator do
   might not be present.
   """
 
-  use GenServer
-
-  alias ExDataSketch.{Integration, Telemetry}
+  alias ExDataSketch.{Integration, Server, Telemetry}
 
   @default_flush_interval 5_000
-
-  @type state :: %{
-          sketch_module: module(),
-          sketch_opts: keyword(),
-          current: struct(),
-          flush_callback: (struct() -> term()) | nil,
-          flush_interval: non_neg_integer(),
-          last_flush_time: integer()
-        }
 
   @doc """
   Starts a periodic aggregator process.
@@ -70,8 +74,8 @@ defmodule ExDataSketch.Broadway.PeriodicAggregator do
   - `:sketch_opts` -- options forwarded to `sketch_module.new/1` (default: `[]`).
   - `:flush_interval` -- milliseconds between automatic flushes (default: 5000).
     Set to `:infinity` to disable automatic flush.
-  - `:flush_callback` -- function `(sketch -> term)` called on each flush
-    (default: `nil`, no side effect).
+  - `:flush_callback` -- function `(sketch -> term)` called on each automatic
+    flush (default: `nil`, no side effect).
   - `:name` -- GenServer name registration (default: `nil`).
 
   ## Examples
@@ -89,9 +93,20 @@ defmodule ExDataSketch.Broadway.PeriodicAggregator do
   def start_link(opts) do
     Integration.require_broadway!()
 
-    name = Keyword.get(opts, :name)
-    gen_opts = if name, do: [name: name], else: []
-    GenServer.start_link(__MODULE__, opts, gen_opts)
+    sketch_module = Keyword.fetch!(opts, :sketch_module)
+    sketch_opts = Keyword.get(opts, :sketch_opts, [])
+    flush_interval = Keyword.get(opts, :flush_interval, @default_flush_interval)
+    flush_callback = Keyword.get(opts, :flush_callback)
+
+    server_opts =
+      [
+        sketch: sketch_module,
+        sketch_opts: sketch_opts,
+        flush: [interval: flush_interval, callback: wrap_callback(flush_callback)]
+      ]
+      |> maybe_put_name(Keyword.get(opts, :name))
+
+    Server.start_link(server_opts)
   end
 
   @doc """
@@ -112,9 +127,7 @@ defmodule ExDataSketch.Broadway.PeriodicAggregator do
 
   """
   @spec merge(GenServer.server(), struct()) :: :ok
-  def merge(server, partial_sketch) do
-    GenServer.call(server, {:merge, partial_sketch})
-  end
+  def merge(server, partial_sketch), do: Server.merge(server, partial_sketch)
 
   @doc """
   Flushes the aggregator, returning the current sketch and resetting to a new one.
@@ -132,9 +145,7 @@ defmodule ExDataSketch.Broadway.PeriodicAggregator do
 
   """
   @spec flush(GenServer.server()) :: struct()
-  def flush(server) do
-    GenServer.call(server, :flush)
-  end
+  def flush(server), do: Server.flush(server)
 
   @doc """
   Returns the current aggregate sketch without resetting it.
@@ -150,9 +161,7 @@ defmodule ExDataSketch.Broadway.PeriodicAggregator do
 
   """
   @spec get(GenServer.server()) :: struct()
-  def get(server) do
-    GenServer.call(server, :get)
-  end
+  def get(server), do: Server.sketch(server)
 
   @doc """
   Returns the current estimate from the aggregate sketch.
@@ -170,89 +179,30 @@ defmodule ExDataSketch.Broadway.PeriodicAggregator do
 
   """
   @spec estimate(GenServer.server()) :: float()
-  def estimate(server) do
-    GenServer.call(server, :estimate)
-  end
+  def estimate(server), do: Server.estimate(server)
 
-  @impl true
-  def init(opts) do
-    sketch_module = Keyword.fetch!(opts, :sketch_module)
-    sketch_opts = Keyword.get(opts, :sketch_opts, [])
-    flush_interval = Keyword.get(opts, :flush_interval, @default_flush_interval)
-    flush_callback = Keyword.get(opts, :flush_callback)
+  defp maybe_put_name(opts, nil), do: opts
+  defp maybe_put_name(opts, name), do: Keyword.put(opts, :name, name)
 
-    current = sketch_module.new(sketch_opts)
+  # `Server`'s `:flush` callback runs inside the `Server` GenServer process,
+  # only on the automatic, timer-driven path -- the same path the legacy
+  # `:periodic_flush` event fired on. The process dictionary here belongs to
+  # that same long-running `Server` process (not the caller), so it is safe
+  # to use for tracking time since the last automatic flush.
+  defp wrap_callback(flush_callback) do
+    fn sketch ->
+      now = System.monotonic_time()
+      duration = now - Process.get(:periodic_aggregator_last_flush, now)
+      Process.put(:periodic_aggregator_last_flush, now)
 
-    if flush_interval != :infinity do
-      Process.send_after(self(), :flush_tick, flush_interval)
-    end
-
-    {:ok,
-     %{
-       sketch_module: sketch_module,
-       sketch_opts: sketch_opts,
-       current: current,
-       flush_callback: flush_callback,
-       flush_interval: flush_interval,
-       last_flush_time: System.monotonic_time()
-     }}
-  end
-
-  @impl true
-  def handle_call({:merge, partial_sketch}, _from, state) do
-    merged = state.sketch_module.merge(state.current, partial_sketch)
-    {:reply, :ok, %{state | current: merged}}
-  end
-
-  def handle_call(:flush, _from, state) do
-    flushed = state.current
-    new_sketch = state.sketch_module.new(state.sketch_opts)
-    now = System.monotonic_time()
-    duration = now - state.last_flush_time
-
-    :ok =
       Telemetry.execute(
         Telemetry.event_name(:pipeline, :periodic_flush),
         %{duration: duration},
-        %{sketch_type: Telemetry.sketch_type(flushed)},
+        %{sketch_type: Telemetry.sketch_type(sketch)},
         :pipeline
       )
 
-    {:reply, flushed, %{state | current: new_sketch, last_flush_time: now}}
-  end
-
-  def handle_call(:get, _from, state) do
-    {:reply, state.current, state}
-  end
-
-  def handle_call(:estimate, _from, state) do
-    estimate = state.sketch_module.estimate(state.current)
-    {:reply, estimate, state}
-  end
-
-  @impl true
-  def handle_info(:flush_tick, state) do
-    flushed = state.current
-    new_sketch = state.sketch_module.new(state.sketch_opts)
-    now = System.monotonic_time()
-    duration = now - state.last_flush_time
-
-    if state.flush_callback do
-      state.flush_callback.(flushed)
+      if flush_callback, do: flush_callback.(sketch)
     end
-
-    :ok =
-      Telemetry.execute(
-        Telemetry.event_name(:pipeline, :periodic_flush),
-        %{duration: duration},
-        %{sketch_type: Telemetry.sketch_type(flushed)},
-        :pipeline
-      )
-
-    if state.flush_interval != :infinity do
-      Process.send_after(self(), :flush_tick, state.flush_interval)
-    end
-
-    {:noreply, %{state | current: new_sketch, last_flush_time: now}}
   end
 end

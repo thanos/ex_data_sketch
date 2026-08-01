@@ -218,6 +218,35 @@ defmodule ExDataSketch.WindowTest do
     end
   end
 
+  describe "size_bytes/1" do
+    test "returns 0 for a fresh window" do
+      window = Window.new(HLL, [p: 10], every: 1000, keep: 3)
+      assert Window.size_bytes(window) == 0
+    end
+
+    test "sums size_bytes across every live slot" do
+      window = Window.new(HLL, [p: 10], every: 1000, keep: 5, time_fn: fn -> 1500 end)
+      window = window |> Window.update("a", 0) |> Window.update("b", 1500)
+
+      expected =
+        window
+        |> Window.slots()
+        |> Enum.map(fn {_key, sketch} -> HLL.size_bytes(sketch) end)
+        |> Enum.sum()
+
+      assert Window.size_bytes(window) == expected
+      assert expected > 0
+    end
+
+    test "excludes expired slots" do
+      window = Window.new(HLL, [p: 10], every: 1000, keep: 1, time_fn: fn -> 5000 end)
+      window = Window.update(window, "a", 0)
+      window = Window.update(window, "b", 5000)
+
+      assert Window.size_bytes(window) == HLL.size_bytes(window.slots[5])
+    end
+  end
+
   describe "serialize/1 and deserialize/1" do
     test "round-trips module, sketch_opts, every, keep, and slot contents" do
       window = Window.new(HLL, [p: 10], every: 1000, keep: 3, time_fn: fn -> 1500 end)

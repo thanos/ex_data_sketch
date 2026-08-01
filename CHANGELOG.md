@@ -64,8 +64,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `baoulo/plans/0.10.0_phase3_stub_review.md` for the full design,
   including what "the last N minutes" actually means for a tumbling
   (not exact sliding) window.
+- `ExDataSketch.Server` -- a supervised, named, concurrently-updatable
+  sketch process wrapping a single sketch or `ExDataSketch.Window`:
+
+      {:ok, _pid} = ExDataSketch.Server.start_link(
+        name: :uniques, sketch: :hll, sketch_opts: [p: 14]
+      )
+      ExDataSketch.Server.update(:uniques, user_id)
+      ExDataSketch.Server.estimate(:uniques)
+
+  `update/2` and `update_many/2` are casts, droppable under an optional
+  `:max_queue` for bounded-memory backpressure (emitting
+  `[:ex_data_sketch, :server, :drop]`); `update_sync/2` is a call, never
+  dropped. Optional `:window` holds a `ExDataSketch.Window` instead of a
+  bare sketch, with `track_all_time: true` maintaining a second
+  un-windowed accumulator readable via `estimate(server, window: :all)`;
+  `merge/2` is not supported on a windowed server this release (tracked in
+  `baoulo/plans/plan-0.10.0.md` section 9). Optional `:snapshot` persists
+  state to any `ExDataSketch.Storage` backend periodically and on graceful
+  shutdown, and restores on start (crash recovery); an untrappable
+  `Process.exit(pid, :kill)` bypasses the graceful-shutdown snapshot, so
+  worst-case loss in that specific case is bounded by the snapshot
+  interval, not zero. Optional `:flush` provides a return-and-reset-on-a-
+  timer pattern. See `guides/supervised_sketches.md` and
+  `baoulo/plans/0.10.0_phase4_design_review.md` for the full design.
+- `ExDataSketch.Sketches` -- a supervisor for starting many
+  `ExDataSketch.Server` processes at runtime, addressed by an arbitrary
+  term instead of a compile-time name:
+
+      children = [{ExDataSketch.Sketches, name: MyApp.Sketches}]
+      {:ok, _pid} = ExDataSketch.Sketches.start_child(MyApp.Sketches, tenant_id, sketch: :hll, sketch_opts: [p: 14])
+      ExDataSketch.Server.update(ExDataSketch.Sketches.via(MyApp.Sketches, tenant_id), user_id)
+
+  Backed by a `Registry` and `DynamicSupervisor` per instance. Adds the
+  `:server` telemetry category and the `[:ex_data_sketch, :server, :snapshot]`,
+  `[:ex_data_sketch, :server, :restore]`, `[:ex_data_sketch, :server, :flush]`,
+  and `[:ex_data_sketch, :server, :drop]` events. See
+  `guides/supervised_sketches.md`.
 
 ### Changed
+
+- `ExDataSketch.Broadway.PeriodicAggregator` is now a thin wrapper around a
+  `:flush`-configured `ExDataSketch.Server`, delegating every call. Its
+  public API (`start_link/1`, `merge/2`, `flush/1`, `get/1`, `estimate/1`)
+  and the `[:ex_data_sketch, :pipeline, :periodic_flush]` telemetry event
+  (fired on the automatic, timer-driven flush) are unchanged.
 
 - `ExDataSketch.update_many/2` now dispatches generically via the `Sketch`
   behaviour instead of 13 hand-written struct clauses, extending coverage

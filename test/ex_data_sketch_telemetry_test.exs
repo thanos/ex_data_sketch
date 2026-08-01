@@ -16,19 +16,30 @@ defmodule ExDataSketch.TelemetryTest do
 
   describe "categories/0" do
     test "returns all supported categories" do
-      assert Telemetry.categories() == [:sketch, :persistence, :stream, :pipeline, :window]
+      assert Telemetry.categories() == [
+               :sketch,
+               :persistence,
+               :stream,
+               :pipeline,
+               :window,
+               :server
+             ]
     end
   end
 
   describe "all_event_names/0" do
     test "returns all canonical event names" do
       events = Telemetry.all_event_names()
-      assert length(events) == 13
+      assert length(events) == 17
       assert [:ex_data_sketch, :sketch, :ingest] in events
       assert [:ex_data_sketch, :persistence, :save] in events
       assert [:ex_data_sketch, :stream, :reduce] in events
       assert [:ex_data_sketch, :pipeline, :accumulate] in events
       assert [:ex_data_sketch, :window, :roll] in events
+      assert [:ex_data_sketch, :server, :snapshot] in events
+      assert [:ex_data_sketch, :server, :restore] in events
+      assert [:ex_data_sketch, :server, :flush] in events
+      assert [:ex_data_sketch, :server, :drop] in events
     end
   end
 
@@ -57,6 +68,7 @@ defmodule ExDataSketch.TelemetryTest do
       assert Telemetry.enabled?(:stream) == true
       assert Telemetry.enabled?(:pipeline) == true
       assert Telemetry.enabled?(:window) == true
+      assert Telemetry.enabled?(:server) == true
     end
 
     test "returns false when globally disabled" do

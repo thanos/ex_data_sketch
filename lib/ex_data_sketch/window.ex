@@ -316,6 +316,33 @@ defmodule ExDataSketch.Window do
   end
 
   @doc """
+  Returns the total size, in bytes, of the window's live slots serialized.
+
+  Equivalent to `byte_size(serialize(window))` (with a small, constant
+  envelope overhead not included), but does not build the binary. Present
+  so a `Window` can be measured the same way any other sketch struct can
+  (`module.size_bytes(sketch)`), for example by
+  `ExDataSketch.Server`'s snapshot telemetry.
+
+  ## Examples
+
+      iex> window = ExDataSketch.Window.new(:hll, [p: 10], every: 60_000, keep: 5, time_fn: fn -> 0 end)
+      iex> ExDataSketch.Window.size_bytes(window)
+      0
+      iex> window = ExDataSketch.Window.update(window, "a")
+      iex> ExDataSketch.Window.size_bytes(window) > 0
+      true
+
+  """
+  @spec size_bytes(t()) :: non_neg_integer()
+  def size_bytes(%__MODULE__{module: module} = window) do
+    window
+    |> live_slots_now()
+    |> Map.values()
+    |> Enum.reduce(0, fn sketch, acc -> acc + module.size_bytes(sketch) end)
+  end
+
+  @doc """
   Serializes a window's configuration and live slot contents to a binary.
 
   Each slot is serialized via the wrapped module's own `serialize/1`, so

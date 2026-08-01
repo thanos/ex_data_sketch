@@ -125,6 +125,7 @@ defmodule ExDataSketch.MixProject do
         "guides/flow_integration.md",
         "guides/persistence.md",
         "guides/windowing.md",
+        "guides/supervised_sketches.md",
         "guides/telemetry.md",
         "guides/observability.md",
         "guides/aggregation_wall.md",
@@ -187,6 +188,10 @@ defmodule ExDataSketch.MixProject do
         ],
         Windowing: [
           ExDataSketch.Window
+        ],
+        Supervision: [
+          ExDataSketch.Server,
+          ExDataSketch.Sketches
         ],
         Infrastructure: [
           ExDataSketch.Sketch,

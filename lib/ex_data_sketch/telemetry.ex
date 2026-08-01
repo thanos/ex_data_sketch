@@ -22,7 +22,8 @@ defmodule ExDataSketch.Telemetry do
         persistence: true,
         stream: true,
         pipeline: true,
-        window: true
+        window: true,
+        server: true
       ]
 
   When telemetry is disabled, `:telemetry.execute/3` is never called,
@@ -92,6 +93,26 @@ defmodule ExDataSketch.Telemetry do
   > expired slots transiently for the read without mutating or persisting
   > the window's stored state.
 
+  ### Server Events
+
+  | Event | Measurements | Metadata |
+  |-------|-------------|----------|
+  | `[:ex_data_sketch, :server, :snapshot]` | `duration`, `size_bytes` | `sketch_type`, `backend`, `key` |
+  | `[:ex_data_sketch, :server, :restore]` | `duration` | `sketch_type`, `backend`, `key`, `found` |
+  | `[:ex_data_sketch, :server, :flush]` | `duration` | `sketch_type` |
+  | `[:ex_data_sketch, :server, :drop]` | `queue_len` | `sketch_type` |
+
+  > **Note on `:restore`:** Emitted once, when `ExDataSketch.Server` starts,
+  > whenever `:snapshot` is configured. `found` is `false` both when no
+  > snapshot exists yet and when loading one failed for any other reason;
+  > either way the server starts from a fresh sketch.
+  >
+  > **Note on `:drop`:** Emitted when `:max_queue` is configured and an
+  > `update/2` or `update_many/2` cast arrives while the server's mailbox is
+  > at or above that threshold. The update is discarded, not queued.
+  > `update_sync/2` is never subject to `:max_queue` and never emits this
+  > event.
+
   ## Usage
 
   Users attach handlers via `:telemetry.attach/4`:
@@ -108,7 +129,7 @@ defmodule ExDataSketch.Telemetry do
   @type measurements :: %{atom() => number()}
   @type metadata :: %{atom() => term()}
 
-  @categories [:sketch, :persistence, :stream, :pipeline, :window]
+  @categories [:sketch, :persistence, :stream, :pipeline, :window, :server]
 
   @doc """
   Emits a telemetry event if telemetry is enabled for the given category.
@@ -323,7 +344,7 @@ defmodule ExDataSketch.Telemetry do
   ## Examples
 
       iex> ExDataSketch.Telemetry.categories()
-      [:sketch, :persistence, :stream, :pipeline, :window]
+      [:sketch, :persistence, :stream, :pipeline, :window, :server]
 
   """
   @spec categories() :: [atom()]
@@ -384,6 +405,12 @@ defmodule ExDataSketch.Telemetry do
         event_name(:window, action)
       end
 
-    sketch_events ++ persistence_events ++ stream_events ++ pipeline_events ++ window_events
+    server_events =
+      for action <- [:snapshot, :restore, :flush, :drop] do
+        event_name(:server, action)
+      end
+
+    sketch_events ++
+      persistence_events ++ stream_events ++ pipeline_events ++ window_events ++ server_events
   end
 end
