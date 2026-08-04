@@ -28,7 +28,15 @@ defmodule ExDataSketch.MixProject do
       # Dialyzer
       dialyzer: [
         plt_file: {:no_warn, "priv/plts/dialyzer.plt"},
-        plt_add_apps: [:mix, :ex_unit, :mnesia, :cubdb, :ecto_sql]
+        plt_add_apps: [
+          :mix,
+          :ex_unit,
+          :mnesia,
+          :cubdb,
+          :ecto_sql,
+          :telemetry_metrics,
+          :phoenix_live_dashboard
+        ]
       ]
     ]
   end
@@ -77,7 +85,9 @@ defmodule ExDataSketch.MixProject do
       {:mox, "~> 1.0", only: :test},
       {:ex_slop, "~> 0.1", only: [:dev, :test], runtime: false},
       {:telemetry, "~> 1.0"},
+      {:telemetry_metrics, "~> 1.0"},
       {:opentelemetry_api, "~> 1.0", optional: true},
+      {:phoenix_live_dashboard, "~> 0.8", optional: true},
       {:broadway, "~> 1.0", optional: true},
       {:flow, "~> 1.2", optional: true},
       {:gen_stage, "~> 1.0", optional: true},
@@ -201,7 +211,11 @@ defmodule ExDataSketch.MixProject do
           ExDataSketch.Backend.Pure,
           ExDataSketch.Backend.Rust,
           ExDataSketch.Telemetry,
+          ExDataSketch.Telemetry.Metrics,
           ExDataSketch.Telemetry.OpenTelemetry
+        ],
+        Dashboard: [
+          ExDataSketch.LiveDashboard.Page
         ],
         Errors: [
           ExDataSketch.Errors

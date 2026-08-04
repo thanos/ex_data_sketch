@@ -101,6 +101,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `[:ex_data_sketch, :server, :restore]`, `[:ex_data_sketch, :server, :flush]`,
   and `[:ex_data_sketch, :server, :drop]` events. See
   `guides/supervised_sketches.md`.
+- `ExDataSketch.Telemetry.Metrics.all/1` -- a ready-made `Telemetry.Metrics`
+  definition for every one of the 17 events
+  `ExDataSketch.Telemetry.all_event_names/0` returns, for wiring straight
+  into a `Telemetry.Metrics` reporter or Phoenix LiveDashboard instead of
+  hand-writing one metric per event:
+
+      def metrics do
+        ExDataSketch.Telemetry.Metrics.all() ++ [
+          # ... your application's own metrics
+        ]
+      end
+
+  Accepts `prefix:` to namespace metric names differently; the underlying
+  `:telemetry` event listened to is unaffected. Adds `{:telemetry_metrics,
+  "~> 1.0"}` as a normal (non-optional) dependency -- it defines only
+  struct types, with no runtime process or side effect.
+- `ExDataSketch.LiveDashboard.Page` -- an optional `Phoenix.LiveDashboard.PageBuilder`
+  page listing every ExDataSketch telemetry event and the metric names
+  `ExDataSketch.Telemetry.Metrics.all/1` derives from them:
+
+      live_dashboard "/dashboard", additional_pages: [sketches: ExDataSketch.LiveDashboard.Page]
+
+  A static reference page, not a live view of any particular running
+  sketch (it cannot know which `ExDataSketch.Server` instances a host
+  application started). Only exists when the new optional
+  `{:phoenix_live_dashboard, "~> 0.8", optional: true}` dependency is
+  loaded. See `baoulo/plans/0.10.0_phase5_stub_review.md` for the full
+  design.
 
 ### Changed
 

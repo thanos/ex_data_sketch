@@ -4,7 +4,7 @@
 
 ```elixir
 Mix.install([
-  {:ex_data_sketch, "~> 0.9.0"}
+  {:ex_data_sketch, "~> 0.10.0"}
 ])
 ```
 
@@ -118,28 +118,37 @@ IO.puts("Estimated NEW users: #{Float.round(max(new_users_estimate, 0), 0)} (tru
 
 ## Section 4: Telemetry Wiring in Phoenix
 
-Wire ExDataSketch telemetry into Phoenix's telemetry pipeline:
+`ExDataSketch.Telemetry.Metrics.all/0` returns a ready-made
+`Telemetry.Metrics` definition for every ExDataSketch event -- in a real
+Phoenix application, this is what feeds `Telemetry.Metrics` reporters and
+LiveDashboard, replacing hand-written per-event wiring:
 
 ```elixir
-# Pattern for Phoenix application telemetry.ex
-# This attaches ExDataSketch events to your metrics pipeline
+# def metrics do
+#   ExDataSketch.Telemetry.Metrics.all() ++ [
+#     # ... your application's own metrics
+#   ]
+# end
 
-# Simulate what a Phoenix app's telemetry setup would look like
+metrics = ExDataSketch.Telemetry.Metrics.all()
+IO.puts("#{length(metrics)} metrics ready to attach to a Telemetry.Metrics reporter")
+```
+
+To see the raw events these metrics are built from, attach a handler
+directly and trigger a real sketch operation:
+
+```elixir
 handlers = ExDataSketch.Telemetry.all_event_names()
   |> Enum.map(fn event_name ->
     handler_id = {"phoenix_metrics", event_name}
     :telemetry.attach(handler_id, event_name, fn name, measurements, metadata, _config ->
-      # In a real Phoenix app, this would go to Telemetry.Metrics -> LiveDashboard
-      # Here we just log it
-      IO.puts("[METRIC] #{inspect(name)} #{inspect(measurements)} #{inspect(metadata)}")
+      IO.puts("[EVENT] #{inspect(name)} #{inspect(measurements)} #{inspect(metadata)}")
     end, nil)
     handler_id
   end)
 
-# Trigger some telemetry events by doing sketch operations
 sketch = ExDataSketch.HLL.from_enumerable(1..1000, p: 10)
 
-# Cleanup
 for handler_id <- handlers do
   :telemetry.detach(handler_id)
 end
