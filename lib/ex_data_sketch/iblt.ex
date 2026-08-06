@@ -144,8 +144,18 @@ defmodule ExDataSketch.IBLT do
   """
   @spec put_many(t(), Enumerable.t()) :: t()
   def put_many(%__MODULE__{state: state, opts: opts, backend: backend} = iblt, items) do
-    pairs = Enum.map(items, fn item -> {hash_item(item, opts), 0} end)
-    new_state = backend.iblt_put_many(state, pairs, opts)
+    use_raw =
+      backend == Backend.Rust and Keyword.get(opts, :hash_fn) == nil and
+        Keyword.get(opts, :hash_strategy) != :phash2
+
+    new_state =
+      if use_raw do
+        Backend.Rust.iblt_put_many_raw(state, Enum.to_list(items), opts)
+      else
+        pairs = Enum.map(items, fn item -> {hash_item(item, opts), 0} end)
+        backend.iblt_put_many(state, pairs, opts)
+      end
+
     %{iblt | state: new_state}
   end
 

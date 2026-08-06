@@ -145,8 +145,18 @@ defmodule ExDataSketch.Quotient do
   """
   @spec put_many(t(), Enumerable.t()) :: t()
   def put_many(%__MODULE__{state: state, opts: opts, backend: backend} = qf, items) do
-    hashes = Enum.map(items, &hash_item(&1, opts))
-    new_state = backend.quotient_put_many(state, hashes, opts)
+    use_raw =
+      backend == Backend.Rust and Keyword.get(opts, :hash_fn) == nil and
+        Keyword.get(opts, :hash_strategy) != :phash2
+
+    new_state =
+      if use_raw do
+        Backend.Rust.quotient_put_many_raw(state, Enum.to_list(items), opts)
+      else
+        hashes = Enum.map(items, &hash_item(&1, opts))
+        backend.quotient_put_many(state, hashes, opts)
+      end
+
     %{qf | state: new_state}
   end
 

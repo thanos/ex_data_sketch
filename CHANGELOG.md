@@ -132,6 +132,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `Bloom.put_many/2`, `Cuckoo.put_many/2`, `Quotient.put_many/2`,
+  `CQF.put_many/2`, `IBLT.put_many/2`, and `XorFilter.build/2` now hash
+  items inside the Rust NIF itself when using `Backend.Rust` with the
+  default hash strategy (`:xxhash3`/`:murmur3`), instead of hashing on
+  the BEAM and passing pre-hashed integers across the NIF boundary --
+  extending the raw-hashing architecture HLL/CMS/Theta/ULL already had
+  (`guides/hll_performance.md`) to the six membership filters (G6 from
+  the v0.9.0 code review, deferred twice, now closed). Measured 2.2x-
+  12.8x faster than the pre-hashed Rust path and up to ~2,700x faster
+  than Pure Elixir, depending on family -- see `guides/filter_performance.md`
+  for the full measured table. A custom `:hash_fn` or `:hash_strategy:
+  :phash2` still falls back to the pre-hashed path exactly as before;
+  behavior and serialized output are unchanged, only where the hash is
+  computed. `test/parity_test.exs` already asserted byte-identical
+  Pure/Rust output for every affected family under default options, so
+  it now exercises the raw path automatically; new tests were added only
+  for the `:hash_fn` fallback case (one per family) and were not
+  previously covered for any raw-hashing family.
 - `ExDataSketch.Broadway.PeriodicAggregator` is now a thin wrapper around a
   `:flush`-configured `ExDataSketch.Server`, delegating every call. Its
   public API (`start_link/1`, `merge/2`, `flush/1`, `get/1`, `estimate/1`)

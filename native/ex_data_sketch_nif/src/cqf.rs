@@ -1,8 +1,15 @@
-use rustler::{Binary, Env, Term};
+use rustler::{Binary, Env, ListIterator, Term};
+use xxhash_rust::xxh3;
 
 use crate::error;
+use crate::hash::murmur3_x64_128;
 use crate::quotient_core as qc;
 use crate::quotient_core::{Slot, QOT_CON, QOT_OCC, QOT_SHI};
+
+// Hash algorithm wire bytes for the v2 raw NIF dispatch.
+// MUST match `ExDataSketch.Hash.Metadata.algorithm_to_byte/1`.
+const ALGO_XXH3: u8 = 1;
+const ALGO_MURMUR3: u8 = 2;
 
 const CQF_HEADER_SIZE: usize = 40;
 
@@ -314,6 +321,66 @@ fn cqf_put_many_impl<'a>(
     error::ok_binary(env, &result)
 }
 
+fn cqf_put_many_raw_impl<'a>(
+    env: Env<'a>,
+    state_bin: Binary,
+    items: ListIterator<'a>,
+    q: u8,
+    r: u8,
+    seed: u64,
+    algorithm: u8,
+) -> Term<'a> {
+    if state_bin.len() < CQF_HEADER_SIZE {
+        return error::error_string(env, "CQF state too short for header");
+    }
+
+    let slot_bytes = ((3 + r as usize) + 7) / 8;
+    let state = state_bin.as_slice();
+
+    let slot_count = u32::from_le_bytes(state[8..12].try_into().unwrap());
+    let expected_len = CQF_HEADER_SIZE + (slot_count as usize) * slot_bytes;
+
+    if state_bin.len() != expected_len {
+        return error::error_string(env, "invalid CQF state length");
+    }
+
+    let mut occupied_count = u32::from_le_bytes(state[12..16].try_into().unwrap());
+    let mut total_count = u64::from_le_bytes(state[16..24].try_into().unwrap());
+
+    let body = &state[CQF_HEADER_SIZE..];
+    let mut slots = qc::decode_slots(body, slot_bytes, slot_count);
+    let m3_seed = seed as u32;
+
+    for item_term in items {
+        let bin: Binary = match item_term.decode() {
+            Ok(b) => b,
+            Err(_) => return error::error_string(env, "all items must be binaries"),
+        };
+        let hash64 = match algorithm {
+            ALGO_XXH3 => xxh3::xxh3_64_with_seed(bin.as_slice(), seed),
+            ALGO_MURMUR3 => murmur3_x64_128(bin.as_slice(), m3_seed).0,
+            _ => {
+                return error::error_string(
+                    env,
+                    "unsupported hash algorithm byte (expected 1=xxhash3, 2=murmur3)",
+                )
+            }
+        };
+        let (fq, fr) = qc::qot_split_hash(hash64, q, r);
+        cqf_do_insert(&mut slots, fq, fr, slot_count, &mut occupied_count, &mut total_count);
+    }
+
+    let new_body = qc::encode_slots(&slots, slot_bytes, slot_count);
+
+    let mut result = Vec::with_capacity(expected_len);
+    result.extend_from_slice(&state[..CQF_HEADER_SIZE]);
+    result[12..16].copy_from_slice(&occupied_count.to_le_bytes());
+    result[16..24].copy_from_slice(&total_count.to_le_bytes());
+    result.extend_from_slice(&new_body);
+
+    error::ok_binary(env, &result)
+}
+
 fn cqf_merge_impl<'a>(
     env: Env<'a>,
     a_bin: Binary,
@@ -393,6 +460,56 @@ fn cqf_put_many_dirty_nif<'a>(
     r: u8,
 ) -> Term<'a> {
     cqf_put_many_impl(env, state_bin, hashes_bin, q, r)
+}
+
+#[rustler::nif]
+fn cqf_put_many_raw_nif<'a>(
+    env: Env<'a>,
+    state_bin: Binary,
+    items: ListIterator<'a>,
+    q: u8,
+    r: u8,
+    seed: u64,
+) -> Term<'a> {
+    cqf_put_many_raw_impl(env, state_bin, items, q, r, seed, ALGO_XXH3)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn cqf_put_many_raw_dirty_nif<'a>(
+    env: Env<'a>,
+    state_bin: Binary,
+    items: ListIterator<'a>,
+    q: u8,
+    r: u8,
+    seed: u64,
+) -> Term<'a> {
+    cqf_put_many_raw_impl(env, state_bin, items, q, r, seed, ALGO_XXH3)
+}
+
+#[rustler::nif]
+fn cqf_put_many_raw_h_nif<'a>(
+    env: Env<'a>,
+    state_bin: Binary,
+    items: ListIterator<'a>,
+    q: u8,
+    r: u8,
+    seed: u64,
+    algorithm: u8,
+) -> Term<'a> {
+    cqf_put_many_raw_impl(env, state_bin, items, q, r, seed, algorithm)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn cqf_put_many_raw_h_dirty_nif<'a>(
+    env: Env<'a>,
+    state_bin: Binary,
+    items: ListIterator<'a>,
+    q: u8,
+    r: u8,
+    seed: u64,
+    algorithm: u8,
+) -> Term<'a> {
+    cqf_put_many_raw_impl(env, state_bin, items, q, r, seed, algorithm)
 }
 
 #[rustler::nif]

@@ -576,6 +576,32 @@ defmodule ExDataSketch.Backend.Rust do
     unwrap_ok!(result)
   end
 
+  def bloom_put_many_raw(state_bin, items, opts) do
+    hash_count = Keyword.fetch!(opts, :hash_count)
+    bit_count = Keyword.fetch!(opts, :bit_count)
+    seed = Keyword.get(opts, :seed, 0) &&& @mask64
+    bins = ensure_binaries(items)
+    threshold = dirty_threshold(:bloom_put_many, opts)
+    algo = raw_algorithm_byte!(opts)
+
+    result =
+      cond do
+        algo == @algo_xxh3 and length(bins) > threshold ->
+          Nif.bloom_put_many_raw_dirty_nif(state_bin, bins, hash_count, bit_count, seed)
+
+        algo == @algo_xxh3 ->
+          Nif.bloom_put_many_raw_nif(state_bin, bins, hash_count, bit_count, seed)
+
+        length(bins) > threshold ->
+          Nif.bloom_put_many_raw_h_dirty_nif(state_bin, bins, hash_count, bit_count, seed, algo)
+
+        true ->
+          Nif.bloom_put_many_raw_h_nif(state_bin, bins, hash_count, bit_count, seed, algo)
+      end
+
+    unwrap_ok!(result)
+  end
+
   @impl true
   def bloom_member?(state_bin, hash64, opts), do: Pure.bloom_member?(state_bin, hash64, opts)
 
@@ -638,6 +664,72 @@ defmodule ExDataSketch.Backend.Rust do
           max_kicks,
           seed
         )
+      end
+
+    case result do
+      {:ok, bin} -> {:ok, bin}
+      {:error, "full", bin} -> {:error, :full, bin}
+      {:error, reason} -> raise "Rust NIF error: #{reason}"
+    end
+  end
+
+  def cuckoo_put_many_raw(state_bin, items, opts) do
+    fp_bits = Keyword.fetch!(opts, :fingerprint_size)
+    bucket_size = Keyword.fetch!(opts, :bucket_size)
+    bucket_count = Keyword.fetch!(opts, :bucket_count)
+    max_kicks = Keyword.get(opts, :max_kicks, 500)
+    seed = Keyword.get(opts, :seed, 0) &&& @mask64
+    bins = ensure_binaries(items)
+    threshold = dirty_threshold(:cuckoo_put_many, opts)
+    algo = raw_algorithm_byte!(opts)
+
+    result =
+      cond do
+        algo == @algo_xxh3 and length(bins) > threshold ->
+          Nif.cuckoo_put_many_raw_dirty_nif(
+            state_bin,
+            bins,
+            fp_bits,
+            bucket_size,
+            bucket_count,
+            max_kicks,
+            seed
+          )
+
+        algo == @algo_xxh3 ->
+          Nif.cuckoo_put_many_raw_nif(
+            state_bin,
+            bins,
+            fp_bits,
+            bucket_size,
+            bucket_count,
+            max_kicks,
+            seed
+          )
+
+        length(bins) > threshold ->
+          Nif.cuckoo_put_many_raw_h_dirty_nif(
+            state_bin,
+            bins,
+            fp_bits,
+            bucket_size,
+            bucket_count,
+            max_kicks,
+            seed,
+            algo
+          )
+
+        true ->
+          Nif.cuckoo_put_many_raw_h_nif(
+            state_bin,
+            bins,
+            fp_bits,
+            bucket_size,
+            bucket_count,
+            max_kicks,
+            seed,
+            algo
+          )
       end
 
     case result do
@@ -758,6 +850,32 @@ defmodule ExDataSketch.Backend.Rust do
     unwrap_ok!(result)
   end
 
+  def quotient_put_many_raw(state_bin, items, opts) do
+    q = Keyword.fetch!(opts, :q)
+    r = Keyword.fetch!(opts, :r)
+    seed = Keyword.get(opts, :seed, 0) &&& @mask64
+    bins = ensure_binaries(items)
+    threshold = dirty_threshold(:quotient_put_many, opts)
+    algo = raw_algorithm_byte!(opts)
+
+    result =
+      cond do
+        algo == @algo_xxh3 and length(bins) > threshold ->
+          Nif.quotient_put_many_raw_dirty_nif(state_bin, bins, q, r, seed)
+
+        algo == @algo_xxh3 ->
+          Nif.quotient_put_many_raw_nif(state_bin, bins, q, r, seed)
+
+        length(bins) > threshold ->
+          Nif.quotient_put_many_raw_h_dirty_nif(state_bin, bins, q, r, seed, algo)
+
+        true ->
+          Nif.quotient_put_many_raw_h_nif(state_bin, bins, q, r, seed, algo)
+      end
+
+    unwrap_ok!(result)
+  end
+
   @impl true
   def quotient_member?(state_bin, hash64, opts),
     do: Pure.quotient_member?(state_bin, hash64, opts)
@@ -807,6 +925,32 @@ defmodule ExDataSketch.Backend.Rust do
         Nif.cqf_put_many_dirty_nif(state_bin, hashes_bin, q, r)
       else
         Nif.cqf_put_many_nif(state_bin, hashes_bin, q, r)
+      end
+
+    unwrap_ok!(result)
+  end
+
+  def cqf_put_many_raw(state_bin, items, opts) do
+    q = Keyword.fetch!(opts, :q)
+    r = Keyword.fetch!(opts, :r)
+    seed = Keyword.get(opts, :seed, 0) &&& @mask64
+    bins = ensure_binaries(items)
+    threshold = dirty_threshold(:cqf_put_many, opts)
+    algo = raw_algorithm_byte!(opts)
+
+    result =
+      cond do
+        algo == @algo_xxh3 and length(bins) > threshold ->
+          Nif.cqf_put_many_raw_dirty_nif(state_bin, bins, q, r, seed)
+
+        algo == @algo_xxh3 ->
+          Nif.cqf_put_many_raw_nif(state_bin, bins, q, r, seed)
+
+        length(bins) > threshold ->
+          Nif.cqf_put_many_raw_h_dirty_nif(state_bin, bins, q, r, seed, algo)
+
+        true ->
+          Nif.cqf_put_many_raw_h_nif(state_bin, bins, q, r, seed, algo)
       end
 
     unwrap_ok!(result)
@@ -867,6 +1011,37 @@ defmodule ExDataSketch.Backend.Rust do
     end
   end
 
+  def xor_build_raw([], opts), do: Pure.xor_build([], opts)
+
+  def xor_build_raw(items, opts) do
+    fp_bits = Keyword.get(opts, :fingerprint_bits, 8)
+    seed = Keyword.get(opts, :seed, 0)
+    bins = ensure_binaries(items)
+    threshold = dirty_threshold(:xor_build, opts)
+    algo = raw_algorithm_byte!(opts)
+
+    result =
+      cond do
+        algo == @algo_xxh3 and length(bins) > threshold ->
+          Nif.xor_build_raw_dirty_nif(bins, fp_bits, seed)
+
+        algo == @algo_xxh3 ->
+          Nif.xor_build_raw_nif(bins, fp_bits, seed)
+
+        length(bins) > threshold ->
+          Nif.xor_build_raw_h_dirty_nif(bins, fp_bits, seed, algo)
+
+        true ->
+          Nif.xor_build_raw_h_nif(bins, fp_bits, seed, algo)
+      end
+
+    case result do
+      {:ok, bin} -> {:ok, bin}
+      {:error, "build_failed"} -> {:error, :build_failed}
+      {:error, reason} -> raise "Rust NIF error: #{reason}"
+    end
+  end
+
   @impl true
   def xor_member?(state_bin, hash64, opts), do: Pure.xor_member?(state_bin, hash64, opts)
 
@@ -903,6 +1078,32 @@ defmodule ExDataSketch.Backend.Rust do
         )
       else
         Nif.iblt_put_many_nif(state_bin, pairs_bin, hash_count, cell_count, seed)
+      end
+
+    unwrap_ok!(result)
+  end
+
+  def iblt_put_many_raw(state_bin, items, opts) do
+    hash_count = Keyword.fetch!(opts, :hash_count)
+    cell_count = Keyword.fetch!(opts, :cell_count)
+    seed = Keyword.fetch!(opts, :seed)
+    bins = ensure_binaries(items)
+    threshold = dirty_threshold(:iblt_put_many, opts)
+    algo = raw_algorithm_byte!(opts)
+
+    result =
+      cond do
+        algo == @algo_xxh3 and length(bins) > threshold ->
+          Nif.iblt_put_many_raw_dirty_nif(state_bin, bins, hash_count, cell_count, seed)
+
+        algo == @algo_xxh3 ->
+          Nif.iblt_put_many_raw_nif(state_bin, bins, hash_count, cell_count, seed)
+
+        length(bins) > threshold ->
+          Nif.iblt_put_many_raw_h_dirty_nif(state_bin, bins, hash_count, cell_count, seed, algo)
+
+        true ->
+          Nif.iblt_put_many_raw_h_nif(state_bin, bins, hash_count, cell_count, seed, algo)
       end
 
     unwrap_ok!(result)

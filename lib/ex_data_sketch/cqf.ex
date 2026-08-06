@@ -136,8 +136,18 @@ defmodule ExDataSketch.CQF do
   """
   @spec put_many(t(), Enumerable.t()) :: t()
   def put_many(%__MODULE__{state: state, opts: opts, backend: backend} = cqf, items) do
-    hashes = Enum.map(items, &hash_item(&1, opts))
-    new_state = backend.cqf_put_many(state, hashes, opts)
+    use_raw =
+      backend == Backend.Rust and Keyword.get(opts, :hash_fn) == nil and
+        Keyword.get(opts, :hash_strategy) != :phash2
+
+    new_state =
+      if use_raw do
+        Backend.Rust.cqf_put_many_raw(state, Enum.to_list(items), opts)
+      else
+        hashes = Enum.map(items, &hash_item(&1, opts))
+        backend.cqf_put_many(state, hashes, opts)
+      end
+
     %{cqf | state: new_state}
   end
 

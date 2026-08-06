@@ -2,7 +2,7 @@
 #
 # Run with: EX_DATA_SKETCH_BUILD=true mix run bench/bloom_bench.exs
 
-alias ExDataSketch.{Backend, Bloom}
+alias ExDataSketch.{Backend, Bloom, Hash}
 
 IO.puts("ExDataSketch Bloom Benchmark")
 IO.puts("============================")
@@ -48,6 +48,22 @@ File.mkdir_p!("bench/output")
 
 bench_opts = [warmup: 1, time: 3, formatters: [Benchee.Formatters.Console]]
 
+# Phase 6 moved item hashing for put_many from Elixir into the Rust NIF
+# itself (see guides/filter_performance.md). This reproduces the old
+# pre-hash-in-Elixir-then-NIF path directly against the backend, bypassing
+# Bloom.put_many's now-automatic raw dispatch, as the "before" baseline.
+legacy_put_many = fn items ->
+  if Backend.Rust.available?() do
+    sketch = Bloom.new(capacity: 100_000, backend: Backend.Rust)
+    seed = Keyword.get(sketch.opts, :seed, 0)
+
+    fn ->
+      hashes = Enum.map(items, &Hash.hash64(&1, seed: seed))
+      Backend.Rust.bloom_put_many(sketch.state, hashes, sketch.opts)
+    end
+  end
+end
+
 groups = [
   {"bloom_put_many 1k", fn s -> fn -> Bloom.put_many(s.sketch, items_1k) end end},
   {"bloom_put_many 100k", fn s -> fn -> Bloom.put_many(s.sketch, items_100k) end end},
@@ -62,12 +78,23 @@ groups = [
    end}
 ]
 
+legacy_by_label = %{
+  "bloom_put_many 1k" => legacy_put_many.(items_1k),
+  "bloom_put_many 100k" => legacy_put_many.(items_100k)
+}
+
 for {label, bench_fn} <- groups do
   IO.puts("--- #{label} ---")
 
   benches =
     for {name, s} <- scenarios, into: %{} do
       {"#{label} [#{name}]", bench_fn.(s)}
+    end
+
+  benches =
+    case Map.get(legacy_by_label, label) do
+      nil -> benches
+      legacy_fn -> Map.put(benches, "#{label} [Rust (pre-hashed, legacy)]", legacy_fn)
     end
 
   Benchee.run(benches, bench_opts)

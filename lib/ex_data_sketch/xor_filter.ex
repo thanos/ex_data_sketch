@@ -104,12 +104,19 @@ defmodule ExDataSketch.XorFilter do
         seed: seed
       ] ++ if(hash_fn, do: [hash_fn: hash_fn], else: [])
 
-    hashes =
-      items
-      |> Enum.map(&hash_item(&1, clean_opts))
-      |> Enum.uniq()
+    use_raw =
+      backend == Backend.Rust and hash_fn == nil and
+        Keyword.get(opts, :hash_strategy) != :phash2
 
-    case backend.xor_build(hashes, clean_opts) do
+    result =
+      if use_raw do
+        Backend.Rust.xor_build_raw(Enum.to_list(items), clean_opts)
+      else
+        hashes = items |> Enum.map(&hash_item(&1, clean_opts)) |> Enum.uniq()
+        backend.xor_build(hashes, clean_opts)
+      end
+
+    case result do
       {:ok, state} ->
         {:ok, %__MODULE__{state: state, opts: clean_opts, backend: backend}}
 

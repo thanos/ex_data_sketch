@@ -1,6 +1,13 @@
-use rustler::{Binary, Env, Term};
+use rustler::{Binary, Env, ListIterator, Term};
+use xxhash_rust::xxh3;
 
 use crate::error;
+use crate::hash::murmur3_x64_128;
+
+// Hash algorithm wire bytes for the v2 raw NIF dispatch.
+// MUST match `ExDataSketch.Hash.Metadata.algorithm_to_byte/1`.
+const ALGO_XXH3: u8 = 1;
+const ALGO_MURMUR3: u8 = 2;
 
 const IBLT_HEADER_SIZE: usize = 24;
 const IBLT_CELL_SIZE: usize = 24;
@@ -62,6 +69,38 @@ fn resolve_collision(
     }
 }
 
+/// XORs a single `(key_hash, value_hash)` pair into its `hash_count` cells.
+/// Shared by the pre-hashed and raw (hash-in-Rust) paths so both insert
+/// identically.
+fn iblt_insert_one(
+    result: &mut [u8],
+    key_hash: u64,
+    value_hash: u64,
+    seed: u32,
+    hash_count: u8,
+    cell_count: u32,
+) {
+    let check = iblt_check_hash(key_hash);
+    let positions = iblt_positions(key_hash, seed, hash_count, cell_count);
+
+    for &pos in &positions {
+        let cell_off = IBLT_HEADER_SIZE + (pos as usize) * IBLT_CELL_SIZE;
+
+        let count = i32::from_le_bytes(result[cell_off..cell_off + 4].try_into().unwrap());
+        let key_sum = u64::from_le_bytes(result[cell_off + 4..cell_off + 12].try_into().unwrap());
+        let value_sum =
+            u64::from_le_bytes(result[cell_off + 12..cell_off + 20].try_into().unwrap());
+        let check_sum =
+            u32::from_le_bytes(result[cell_off + 20..cell_off + 24].try_into().unwrap());
+
+        result[cell_off..cell_off + 4].copy_from_slice(&(count + 1).to_le_bytes());
+        result[cell_off + 4..cell_off + 12].copy_from_slice(&(key_sum ^ key_hash).to_le_bytes());
+        result[cell_off + 12..cell_off + 20]
+            .copy_from_slice(&(value_sum ^ value_hash).to_le_bytes());
+        result[cell_off + 20..cell_off + 24].copy_from_slice(&(check_sum ^ check).to_le_bytes());
+    }
+}
+
 fn iblt_put_many_impl<'a>(
     env: Env<'a>,
     state_bin: Binary,
@@ -83,8 +122,7 @@ fn iblt_put_many_impl<'a>(
     let mut result = state.to_vec();
 
     // Read current item_count from header (offset 12, u32-LE)
-    let mut item_count =
-        u32::from_le_bytes(result[12..16].try_into().unwrap());
+    let mut item_count = u32::from_le_bytes(result[12..16].try_into().unwrap());
 
     let pairs = pairs_bin.as_slice();
     let pair_count = pairs.len() / 16;
@@ -93,41 +131,64 @@ fn iblt_put_many_impl<'a>(
         let off = p * 16;
         let key_hash = u64::from_le_bytes(pairs[off..off + 8].try_into().unwrap());
         let value_hash = u64::from_le_bytes(pairs[off + 8..off + 16].try_into().unwrap());
-        let check = iblt_check_hash(key_hash);
-        let positions = iblt_positions(key_hash, seed, hash_count, cell_count);
-
-        for &pos in &positions {
-            let cell_off = IBLT_HEADER_SIZE + (pos as usize) * IBLT_CELL_SIZE;
-
-            // Read cell fields
-            let count = i32::from_le_bytes(
-                result[cell_off..cell_off + 4].try_into().unwrap(),
-            );
-            let key_sum = u64::from_le_bytes(
-                result[cell_off + 4..cell_off + 12].try_into().unwrap(),
-            );
-            let value_sum = u64::from_le_bytes(
-                result[cell_off + 12..cell_off + 20].try_into().unwrap(),
-            );
-            let check_sum = u32::from_le_bytes(
-                result[cell_off + 20..cell_off + 24].try_into().unwrap(),
-            );
-
-            // Update cell
-            result[cell_off..cell_off + 4]
-                .copy_from_slice(&(count + 1).to_le_bytes());
-            result[cell_off + 4..cell_off + 12]
-                .copy_from_slice(&(key_sum ^ key_hash).to_le_bytes());
-            result[cell_off + 12..cell_off + 20]
-                .copy_from_slice(&(value_sum ^ value_hash).to_le_bytes());
-            result[cell_off + 20..cell_off + 24]
-                .copy_from_slice(&(check_sum ^ check).to_le_bytes());
-        }
-
+        iblt_insert_one(&mut result, key_hash, value_hash, seed, hash_count, cell_count);
         item_count += 1;
     }
 
     // Write updated item_count back to header
+    result[12..16].copy_from_slice(&item_count.to_le_bytes());
+
+    error::ok_binary(env, &result)
+}
+
+fn iblt_put_many_raw_impl<'a>(
+    env: Env<'a>,
+    state_bin: Binary,
+    items: ListIterator<'a>,
+    hash_count: u8,
+    cell_count: u32,
+    seed: u32,
+    algorithm: u8,
+) -> Term<'a> {
+    let expected_len = IBLT_HEADER_SIZE + (cell_count as usize) * IBLT_CELL_SIZE;
+
+    if state_bin.len() != expected_len {
+        return error::error_string(env, "invalid IBLT state length");
+    }
+
+    let state = state_bin.as_slice();
+    let mut result = state.to_vec();
+    let mut item_count = u32::from_le_bytes(result[12..16].try_into().unwrap());
+
+    // IBLT dual-purposes a single `:seed` option: it seeds both cell
+    // position derivation (`iblt_positions`, `u32`) and, here, the raw
+    // item hash itself -- matching `ExDataSketch.IBLT`'s `hash_item/2`,
+    // which passes the same `opts[:seed]` to both `Hash.hash64/2` and
+    // the position derivation via `opts`.
+    let hash_seed = seed as u64;
+
+    for item_term in items {
+        let bin: Binary = match item_term.decode() {
+            Ok(b) => b,
+            Err(_) => return error::error_string(env, "all items must be binaries"),
+        };
+        let key_hash = match algorithm {
+            ALGO_XXH3 => xxh3::xxh3_64_with_seed(bin.as_slice(), hash_seed),
+            ALGO_MURMUR3 => murmur3_x64_128(bin.as_slice(), seed).0,
+            _ => {
+                return error::error_string(
+                    env,
+                    "unsupported hash algorithm byte (expected 1=xxhash3, 2=murmur3)",
+                )
+            }
+        };
+
+        // Raw dispatch is set-mode only (value_hash = 0), matching
+        // `ExDataSketch.IBLT.update_many/2` -- see iblt.ex.
+        iblt_insert_one(&mut result, key_hash, 0, seed, hash_count, cell_count);
+        item_count += 1;
+    }
+
     result[12..16].copy_from_slice(&item_count.to_le_bytes());
 
     error::ok_binary(env, &result)
@@ -205,6 +266,56 @@ fn iblt_put_many_dirty_nif<'a>(
     seed: u32,
 ) -> Term<'a> {
     iblt_put_many_impl(env, state_bin, pairs_bin, hash_count, cell_count, seed)
+}
+
+#[rustler::nif]
+fn iblt_put_many_raw_nif<'a>(
+    env: Env<'a>,
+    state_bin: Binary,
+    items: ListIterator<'a>,
+    hash_count: u8,
+    cell_count: u32,
+    seed: u32,
+) -> Term<'a> {
+    iblt_put_many_raw_impl(env, state_bin, items, hash_count, cell_count, seed, ALGO_XXH3)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn iblt_put_many_raw_dirty_nif<'a>(
+    env: Env<'a>,
+    state_bin: Binary,
+    items: ListIterator<'a>,
+    hash_count: u8,
+    cell_count: u32,
+    seed: u32,
+) -> Term<'a> {
+    iblt_put_many_raw_impl(env, state_bin, items, hash_count, cell_count, seed, ALGO_XXH3)
+}
+
+#[rustler::nif]
+fn iblt_put_many_raw_h_nif<'a>(
+    env: Env<'a>,
+    state_bin: Binary,
+    items: ListIterator<'a>,
+    hash_count: u8,
+    cell_count: u32,
+    seed: u32,
+    algorithm: u8,
+) -> Term<'a> {
+    iblt_put_many_raw_impl(env, state_bin, items, hash_count, cell_count, seed, algorithm)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn iblt_put_many_raw_h_dirty_nif<'a>(
+    env: Env<'a>,
+    state_bin: Binary,
+    items: ListIterator<'a>,
+    hash_count: u8,
+    cell_count: u32,
+    seed: u32,
+    algorithm: u8,
+) -> Term<'a> {
+    iblt_put_many_raw_impl(env, state_bin, items, hash_count, cell_count, seed, algorithm)
 }
 
 #[rustler::nif]

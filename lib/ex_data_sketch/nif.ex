@@ -118,6 +118,25 @@ defmodule ExDataSketch.Nif do
   def bloom_put_many_dirty_nif(_state_bin, _hashes_bin, _hash_count, _bit_count),
     do: :erlang.nif_error(:not_loaded)
 
+  def bloom_put_many_raw_nif(_state_bin, _items, _hash_count, _bit_count, _seed),
+    do: :erlang.nif_error(:not_loaded)
+
+  def bloom_put_many_raw_dirty_nif(_state_bin, _items, _hash_count, _bit_count, _seed),
+    do: :erlang.nif_error(:not_loaded)
+
+  def bloom_put_many_raw_h_nif(_state_bin, _items, _hash_count, _bit_count, _seed, _algorithm),
+    do: :erlang.nif_error(:not_loaded)
+
+  def bloom_put_many_raw_h_dirty_nif(
+        _state_bin,
+        _items,
+        _hash_count,
+        _bit_count,
+        _seed,
+        _algorithm
+      ),
+      do: :erlang.nif_error(:not_loaded)
+
   def bloom_merge_nif(_a_bin, _b_bin), do: :erlang.nif_error(:not_loaded)
   def bloom_merge_dirty_nif(_a_bin, _b_bin), do: :erlang.nif_error(:not_loaded)
 
@@ -144,11 +163,69 @@ defmodule ExDataSketch.Nif do
       ),
       do: :erlang.nif_error(:not_loaded)
 
+  def cuckoo_put_many_raw_nif(
+        _state_bin,
+        _items,
+        _fp_bits,
+        _bucket_size,
+        _bucket_count,
+        _max_kicks,
+        _seed
+      ),
+      do: :erlang.nif_error(:not_loaded)
+
+  def cuckoo_put_many_raw_dirty_nif(
+        _state_bin,
+        _items,
+        _fp_bits,
+        _bucket_size,
+        _bucket_count,
+        _max_kicks,
+        _seed
+      ),
+      do: :erlang.nif_error(:not_loaded)
+
+  def cuckoo_put_many_raw_h_nif(
+        _state_bin,
+        _items,
+        _fp_bits,
+        _bucket_size,
+        _bucket_count,
+        _max_kicks,
+        _seed,
+        _algorithm
+      ),
+      do: :erlang.nif_error(:not_loaded)
+
+  def cuckoo_put_many_raw_h_dirty_nif(
+        _state_bin,
+        _items,
+        _fp_bits,
+        _bucket_size,
+        _bucket_count,
+        _max_kicks,
+        _seed,
+        _algorithm
+      ),
+      do: :erlang.nif_error(:not_loaded)
+
   # Quotient
   def quotient_put_many_nif(_state_bin, _hashes_bin, _q, _r),
     do: :erlang.nif_error(:not_loaded)
 
   def quotient_put_many_dirty_nif(_state_bin, _hashes_bin, _q, _r),
+    do: :erlang.nif_error(:not_loaded)
+
+  def quotient_put_many_raw_nif(_state_bin, _items, _q, _r, _seed),
+    do: :erlang.nif_error(:not_loaded)
+
+  def quotient_put_many_raw_dirty_nif(_state_bin, _items, _q, _r, _seed),
+    do: :erlang.nif_error(:not_loaded)
+
+  def quotient_put_many_raw_h_nif(_state_bin, _items, _q, _r, _seed, _algorithm),
+    do: :erlang.nif_error(:not_loaded)
+
+  def quotient_put_many_raw_h_dirty_nif(_state_bin, _items, _q, _r, _seed, _algorithm),
     do: :erlang.nif_error(:not_loaded)
 
   def quotient_merge_nif(_a_bin, _b_bin, _q, _r), do: :erlang.nif_error(:not_loaded)
@@ -161,6 +238,18 @@ defmodule ExDataSketch.Nif do
   def cqf_put_many_dirty_nif(_state_bin, _hashes_bin, _q, _r),
     do: :erlang.nif_error(:not_loaded)
 
+  def cqf_put_many_raw_nif(_state_bin, _items, _q, _r, _seed),
+    do: :erlang.nif_error(:not_loaded)
+
+  def cqf_put_many_raw_dirty_nif(_state_bin, _items, _q, _r, _seed),
+    do: :erlang.nif_error(:not_loaded)
+
+  def cqf_put_many_raw_h_nif(_state_bin, _items, _q, _r, _seed, _algorithm),
+    do: :erlang.nif_error(:not_loaded)
+
+  def cqf_put_many_raw_h_dirty_nif(_state_bin, _items, _q, _r, _seed, _algorithm),
+    do: :erlang.nif_error(:not_loaded)
+
   def cqf_merge_nif(_a_bin, _b_bin, _q, _r), do: :erlang.nif_error(:not_loaded)
   def cqf_merge_dirty_nif(_a_bin, _b_bin, _q, _r), do: :erlang.nif_error(:not_loaded)
 
@@ -168,12 +257,40 @@ defmodule ExDataSketch.Nif do
   def xor_build_nif(_hashes_bin, _fp_bits, _seed), do: :erlang.nif_error(:not_loaded)
   def xor_build_dirty_nif(_hashes_bin, _fp_bits, _seed), do: :erlang.nif_error(:not_loaded)
 
+  def xor_build_raw_nif(_items, _fp_bits, _seed), do: :erlang.nif_error(:not_loaded)
+  def xor_build_raw_dirty_nif(_items, _fp_bits, _seed), do: :erlang.nif_error(:not_loaded)
+
+  def xor_build_raw_h_nif(_items, _fp_bits, _seed, _algorithm),
+    do: :erlang.nif_error(:not_loaded)
+
+  def xor_build_raw_h_dirty_nif(_items, _fp_bits, _seed, _algorithm),
+    do: :erlang.nif_error(:not_loaded)
+
   # IBLT
   def iblt_put_many_nif(_state_bin, _pairs_bin, _hash_count, _cell_count, _seed),
     do: :erlang.nif_error(:not_loaded)
 
   def iblt_put_many_dirty_nif(_state_bin, _pairs_bin, _hash_count, _cell_count, _seed),
     do: :erlang.nif_error(:not_loaded)
+
+  def iblt_put_many_raw_nif(_state_bin, _items, _hash_count, _cell_count, _seed),
+    do: :erlang.nif_error(:not_loaded)
+
+  def iblt_put_many_raw_dirty_nif(_state_bin, _items, _hash_count, _cell_count, _seed),
+    do: :erlang.nif_error(:not_loaded)
+
+  def iblt_put_many_raw_h_nif(_state_bin, _items, _hash_count, _cell_count, _seed, _algorithm),
+    do: :erlang.nif_error(:not_loaded)
+
+  def iblt_put_many_raw_h_dirty_nif(
+        _state_bin,
+        _items,
+        _hash_count,
+        _cell_count,
+        _seed,
+        _algorithm
+      ),
+      do: :erlang.nif_error(:not_loaded)
 
   def iblt_merge_nif(_a_bin, _b_bin), do: :erlang.nif_error(:not_loaded)
   def iblt_merge_dirty_nif(_a_bin, _b_bin), do: :erlang.nif_error(:not_loaded)

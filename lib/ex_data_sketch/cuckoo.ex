@@ -196,9 +196,19 @@ defmodule ExDataSketch.Cuckoo do
   """
   @spec put_many(t(), Enumerable.t()) :: {:ok, t()} | {:error, :full, t()}
   def put_many(%__MODULE__{state: state, opts: opts, backend: backend} = cuckoo, items) do
-    hashes = Enum.map(items, &hash_item(&1, opts))
+    use_raw =
+      backend == Backend.Rust and Keyword.get(opts, :hash_fn) == nil and
+        Keyword.get(opts, :hash_strategy) != :phash2
 
-    case backend.cuckoo_put_many(state, hashes, opts) do
+    result =
+      if use_raw do
+        Backend.Rust.cuckoo_put_many_raw(state, Enum.to_list(items), opts)
+      else
+        hashes = Enum.map(items, &hash_item(&1, opts))
+        backend.cuckoo_put_many(state, hashes, opts)
+      end
+
+    case result do
       {:ok, new_state} -> {:ok, %{cuckoo | state: new_state}}
       {:error, :full, partial_state} -> {:error, :full, %{cuckoo | state: partial_state}}
     end

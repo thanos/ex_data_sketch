@@ -143,6 +143,7 @@ defmodule ExDataSketch.MixProject do
         "guides/livebooks.md",
         "guides/hash_strategies.md",
         "guides/hll_performance.md",
+        "guides/filter_performance.md",
         "guides/precompiled_nifs.md",
         "guides/serialization_compatibility.md",
         "guides/v0.8.0_migration_notes.md",
