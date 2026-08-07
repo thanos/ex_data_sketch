@@ -364,9 +364,12 @@ defmodule ExDataSketch.HLL do
   @doc """
   Serializes the sketch to Apache DataSketches HLL format.
 
-  Not implemented. Apache DataSketches HLL interop is not planned for the
-  current release series. Only Theta sketches support DataSketches interop
-  via `ExDataSketch.Theta.serialize_datasketches/1`. For HLL serialization,
+  Not implemented. Apache DataSketches HLL interop is planned for v0.11.0
+  (blocked on hash-function equality between `ExDataSketch.Hash.hash64/1`
+  and DataSketches' HLL union of LIST/SET/HLL_4/6/8 encodings). Only Theta
+  and KLL sketches support DataSketches interop today, via
+  `ExDataSketch.Theta.serialize_datasketches/1` and
+  `ExDataSketch.KLL.serialize_datasketches/2`. For HLL serialization,
   use `serialize/1` (ExDataSketch-native EXSK format).
 
   ## Examples

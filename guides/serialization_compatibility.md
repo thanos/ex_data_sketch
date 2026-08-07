@@ -41,11 +41,12 @@ For the v0.x series, `ex_data_sketch` does NOT promise:
 1. **Write compatibility from N back to M.** A v0.N writer is free
    to produce binaries that v0.M (where `M < N`) cannot read. v0.8.0
    exercised this: it writes EXSK v2 frames that v0.7.x cannot decode.
-2. **Cross-language interoperability.** Only `ExDataSketch.Theta` has
-   a documented Apache DataSketches interop path
-   (`Theta.serialize_datasketches/1`,
-   `Theta.deserialize_datasketches/2`). Other sketch families are
-   ex_data_sketch-native only until v0.10.0's interop track.
+2. **Cross-language interoperability.** Only `ExDataSketch.Theta` and
+   `ExDataSketch.KLL` have a documented Apache DataSketches interop path
+   (`Theta.serialize_datasketches/2`, `Theta.deserialize_datasketches/2`,
+   `KLL.serialize_datasketches/2`, `KLL.deserialize_datasketches/2`).
+   Other sketch families are ex_data_sketch-native only -- see
+   `apache_interop.md` for the full inventory and the HLL/CMS status.
 3. **Stability of internal sketch state binaries.** A sketch's
    `state` field is internal. Only the framed EXSK output of
    `serialize/1` is stable.
@@ -57,13 +58,14 @@ For the v0.x series, `ex_data_sketch` does NOT promise:
    strings are intended for human consumption. They may evolve in
    any release.
 
-## Format-by-format inventory (current state at v0.8.0)
+## Format-by-format inventory (current state at v0.10.0)
 
 | Format | Version byte | Used by | Status |
 |--------|--------------|---------|--------|
 | EXSK v1 | `1` | v0.1 through v0.7.x writers, v0.8.0 reader | Read-only in v0.8.0+ |
 | EXSK v2 | `2` | v0.8.0+ writers and readers | Current default |
-| Theta CompactSketch | (Apache DataSketches binary layout) | `Theta.serialize_datasketches/1` | Cross-language stable |
+| Theta CompactSketch | (Apache DataSketches binary layout) | `Theta.serialize_datasketches/2` | Cross-language stable |
+| KLL Compact (float/double) | (Apache DataSketches binary layout) | `KLL.serialize_datasketches/2` | Cross-language stable |
 
 There is no EXSK v3 today. v3 is reserved for a future frame layout
 change that cannot be expressed as either a `block_version` bump or a
@@ -121,11 +123,16 @@ persist sketches across an OTP major-version boundary MUST either:
 
 ## Cross-language stability
 
-Cross-language interop is OUT OF SCOPE for v0.8.0 except for the
-preserved `ExDataSketch.Theta` Apache DataSketches CompactSketch
-path.
+As of v0.10.0, cross-language interop is supported for `ExDataSketch.Theta`
+(Apache DataSketches CompactSketch) and `ExDataSketch.KLL` (Apache
+DataSketches compact `KllFloatsSketch`/`KllDoublesSketch`). See
+`apache_interop.md` for the full inventory, the hash-equality caveat that
+applies to Theta but not KLL, and why HLL (v0.11.0) and CMS (not planned)
+are out of scope. Every other sketch family remains ex_data_sketch-native
+only.
 
-What IS preserved as the foundation for future cross-language work:
+What is preserved as the foundation for future cross-language work
+(HLL, in particular):
 
 - `Hash.Murmur3` produces output byte-identical to Apache
   DataSketches' MurmurHash3_x64_128 high-64-bit convention.
@@ -133,9 +140,6 @@ What IS preserved as the foundation for future cross-language work:
   any external implementation can adopt.
 - `Binary.CRC.crc32c` is the standard iSCSI/Btrfs/SCTP/Snappy CRC32C.
   Any external CRC32C implementation produces the same output.
-
-v0.10.0 will build on these to add full KLL and HLL Apache
-interoperability.
 
 ## Forward-compatibility recipes
 

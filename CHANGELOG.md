@@ -129,6 +129,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `{:phoenix_live_dashboard, "~> 0.8", optional: true}` dependency is
   loaded. See `baoulo/plans/0.10.0_phase5_stub_review.md` for the full
   design.
+- `ExDataSketch.KLL.serialize_datasketches/2` and
+  `deserialize_datasketches/2` -- Apache DataSketches KLL interop
+  (compact `KllFloatsSketch`/`KllDoublesSketch`), replacing the
+  `not_implemented!` stubs (v0.10.0 Phase 7, closing G7 from the v0.9.0
+  code review). Unlike Theta, KLL does not hash its inputs, so this is a
+  full item-level round trip with no hash-equality caveat -- decoding a
+  Java/C++/Python-produced sketch and querying `quantile/2`/`rank/2`
+  answers using the exact retained values the other implementation
+  selected. Takes a `:variant` option (`:float` or `:double`, default
+  `:double`); Apache's wire format doesn't self-describe item width, so
+  the caller must know it in advance, same as choosing between
+  `KllFloatsSketch`/`KllDoublesSketch` in Java. Backed by a new
+  `ExDataSketch.DataSketches.KLLSketch` codec module (mirroring
+  `CompactSketch`'s shape) and a `Backend.kll_from_components/5`
+  callback (mirroring `theta_from_components/3`). Verified against the
+  real `datasketches` Python package (not just against our own decoder)
+  in both directions -- decoding its output and having it decode ours --
+  across a sweep of item counts and `k` values from 0 to 500,000; see
+  `guides/apache_interop.md`. `test/fixtures/interop/kll/` carries the
+  first golden cross-language fixture corpus actually generated and
+  committed for any family (the process `test/vectors/CROSS_LANGUAGE.md`
+  documented for Theta was never executed until now), pinned to
+  `datasketches` 5.2.0.
+- `guides/apache_interop.md` -- consolidated reference for what
+  interoperates with Apache DataSketches (Theta, KLL) and what doesn't
+  (HLL -- now targeted at v0.11.0; CMS -- not planned, no standard format
+  exists), superseding the scattered mentions previously spread across
+  sketch moduledocs.
 
 ### Changed
 

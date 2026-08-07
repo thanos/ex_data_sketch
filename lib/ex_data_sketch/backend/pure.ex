@@ -722,6 +722,22 @@ defmodule ExDataSketch.Backend.Pure do
     end
   end
 
+  @impl true
+  @spec kll_from_components(
+          pos_integer(),
+          non_neg_integer(),
+          float() | :nan,
+          float() | :nan,
+          [[float()]]
+        ) :: binary()
+  def kll_from_components(k, n, min_val, max_val, levels) do
+    num_levels = length(levels)
+    level_sizes = Enum.map(levels, &length/1)
+    parity_bytes = div(num_levels + 7, 8)
+    compaction_bits = :binary.copy(<<0>>, parity_bytes)
+    kll_encode_state(k, n, min_val, max_val, num_levels, compaction_bits, level_sizes, levels)
+  end
+
   # -- KLL Private Helpers --
 
   defp kll_level_capacity(k, level, num_levels) do

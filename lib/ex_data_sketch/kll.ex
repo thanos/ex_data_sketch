@@ -34,6 +34,17 @@ defmodule ExDataSketch.KLL do
       30+P    num_levels * 4          level_sizes (u32 little-endian each)
       30+P+L  sum(level_sizes) * 8    items (f64 little-endian, level 0 first)
 
+  ## Apache DataSketches Interop
+
+  `serialize_datasketches/2` and `deserialize_datasketches/2` implement
+  the Apache DataSketches KLL compact binary format (`KllFloatsSketch`/
+  `KllDoublesSketch`), enabling cross-language compatibility with Java,
+  C++, and Python DataSketches libraries. See
+  `ExDataSketch.DataSketches.KLLSketch` for the binary layout and
+  `guides/apache_interop.md` for the full interop story. Unlike Theta,
+  KLL does not hash its inputs, so this is a full item-level round trip
+  with no hash-equality caveat.
+
   ## Options
 
   - `:k` - accuracy parameter, integer 8..65535 (default: 200).
@@ -48,6 +59,7 @@ defmodule ExDataSketch.KLL do
   """
 
   alias ExDataSketch.{Backend, Binary, Codec, Errors, Telemetry}
+  alias ExDataSketch.DataSketches.KLLSketch
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -442,48 +454,70 @@ defmodule ExDataSketch.KLL do
   end
 
   @doc """
-  Serializes the sketch to Apache DataSketches KLL format.
+  Serializes the sketch to the Apache DataSketches KLL compact binary format.
 
-  Not implemented. Apache DataSketches KLL interop is planned for a future
-  release. For KLL serialization, use `serialize/1` (ExDataSketch-native
-  EXSK format).
+  Enables cross-language interoperability with Java, C++, and Python
+  DataSketches libraries. See `ExDataSketch.DataSketches.KLLSketch` for
+  the binary layout.
+
+  ## Options
+
+  - `:variant` - `:float` or `:double` (default: `:double`). Apache's
+    wire format doesn't self-describe item width, so the variant must be
+    chosen explicitly -- see `ExDataSketch.DataSketches.KLLSketch`.
 
   ## Examples
 
-      iex> try do
-      ...>   sketch = %ExDataSketch.KLL{state: <<>>, opts: [k: 200], backend: nil}
-      ...>   ExDataSketch.KLL.serialize_datasketches(sketch)
-      ...> rescue
-      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
-      ...> end
-      "ExDataSketch.KLL.serialize_datasketches is not yet implemented"
+      iex> sketch = ExDataSketch.KLL.new(k: 200) |> ExDataSketch.KLL.update_many(1..100)
+      iex> binary = ExDataSketch.KLL.serialize_datasketches(sketch)
+      iex> {:ok, restored} = ExDataSketch.KLL.deserialize_datasketches(binary)
+      iex> ExDataSketch.KLL.quantile(restored, 0.5) == ExDataSketch.KLL.quantile(sketch, 0.5)
+      true
 
   """
-  @spec serialize_datasketches(t()) :: binary()
-  @dialyzer {:nowarn_function, serialize_datasketches: 1}
-  def serialize_datasketches(%__MODULE__{}) do
-    Errors.not_implemented!(__MODULE__, "serialize_datasketches")
+  @spec serialize_datasketches(t(), keyword()) :: binary()
+  def serialize_datasketches(%__MODULE__{} = sketch, opts \\ []) do
+    KLLSketch.encode(sketch, opts)
   end
 
   @doc """
-  Deserializes an Apache DataSketches KLL binary.
+  Deserializes an Apache DataSketches KLL compact binary into a KLL sketch.
 
-  Not implemented. See `serialize_datasketches/1` for details.
+  ## Options
+
+  - `:variant` - `:float` or `:double` (default: `:double`). Must match
+    the variant the binary was produced as -- see
+    `ExDataSketch.DataSketches.KLLSketch`.
 
   ## Examples
 
-      iex> try do
-      ...>   ExDataSketch.KLL.deserialize_datasketches(<<>>)
-      ...> rescue
-      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
-      ...> end
-      "ExDataSketch.KLL.deserialize_datasketches is not yet implemented"
+      iex> sketch = ExDataSketch.KLL.new(k: 200) |> ExDataSketch.KLL.update_many(1..100)
+      iex> binary = ExDataSketch.KLL.serialize_datasketches(sketch)
+      iex> {:ok, restored} = ExDataSketch.KLL.deserialize_datasketches(binary)
+      iex> ExDataSketch.KLL.count(restored)
+      100
 
   """
-  @spec deserialize_datasketches(binary()) :: {:ok, t()} | {:error, Exception.t()}
-  @dialyzer {:nowarn_function, deserialize_datasketches: 1}
-  def deserialize_datasketches(_binary) do
-    Errors.not_implemented!(__MODULE__, "deserialize_datasketches")
+  @spec deserialize_datasketches(binary(), keyword()) :: {:ok, t()} | {:error, Exception.t()}
+  def deserialize_datasketches(binary, opts \\ []) when is_binary(binary) do
+    case KLLSketch.decode(binary, opts) do
+      {:ok, decoded} ->
+        backend = Backend.default()
+
+        state =
+          backend.kll_from_components(
+            decoded.k,
+            decoded.n,
+            decoded.min_val,
+            decoded.max_val,
+            decoded.levels
+          )
+
+        {:ok, %__MODULE__{state: state, opts: [k: decoded.k], backend: backend}}
+
+      error ->
+        error
+    end
   end
 
   @doc """

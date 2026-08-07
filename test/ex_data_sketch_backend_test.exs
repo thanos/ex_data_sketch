@@ -30,6 +30,7 @@ defmodule ExDataSketch.BackendTest.StubBackend do
   def kll_max(_s, _o), do: nil
   def kll_cdf(_s, _sp, _o), do: nil
   def kll_pmf(_s, _sp, _o), do: nil
+  def kll_from_components(_k, _n, _min, _max, _levels), do: <<>>
   def ddsketch_new(_opts), do: <<>>
   def ddsketch_update(s, _v, _o), do: s
   def ddsketch_update_many(s, _v, _o), do: s

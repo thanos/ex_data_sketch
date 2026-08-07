@@ -326,20 +326,223 @@ defmodule ExDataSketch.KLLTest do
     end
   end
 
-  describe "serialize_datasketches/1" do
-    test "raises NotImplementedError" do
-      sketch = KLL.new()
+  describe "serialize_datasketches/deserialize_datasketches" do
+    test "round-trip preserves quantiles for empty sketch" do
+      sketch = KLL.new(k: 200)
+      binary = KLL.serialize_datasketches(sketch)
+      assert {:ok, restored} = KLL.deserialize_datasketches(binary)
+      assert KLL.count(restored) == 0
+      assert KLL.quantile(restored, 0.5) == nil
+    end
 
-      assert_raise ExDataSketch.Errors.NotImplementedError, fn ->
-        KLL.serialize_datasketches(sketch)
+    test "round-trip preserves quantiles for single item" do
+      sketch = KLL.new(k: 200) |> KLL.update(42.0)
+      binary = KLL.serialize_datasketches(sketch)
+      assert {:ok, restored} = KLL.deserialize_datasketches(binary)
+      assert KLL.count(restored) == 1
+      assert KLL.min_value(restored) == 42.0
+      assert KLL.max_value(restored) == 42.0
+      assert KLL.quantile(restored, 0.5) == 42.0
+    end
+
+    test "round-trip preserves quantiles for many items (multi-level)" do
+      items = for i <- 1..10_000, do: i * 1.0
+      sketch = KLL.new(k: 200) |> KLL.update_many(items)
+      binary = KLL.serialize_datasketches(sketch)
+      assert {:ok, restored} = KLL.deserialize_datasketches(binary)
+      assert KLL.count(restored) == 10_000
+      assert KLL.min_value(restored) == KLL.min_value(sketch)
+      assert KLL.max_value(restored) == KLL.max_value(sketch)
+
+      for r <- [0.1, 0.25, 0.5, 0.75, 0.9] do
+        assert KLL.quantile(restored, r) == KLL.quantile(sketch, r)
       end
+    end
+
+    test "round-trip preserves quantiles for non-default k" do
+      items = for i <- 1..5_000, do: i * 1.0
+      sketch = KLL.new(k: 64) |> KLL.update_many(items)
+      binary = KLL.serialize_datasketches(sketch)
+      assert {:ok, restored} = KLL.deserialize_datasketches(binary)
+      assert restored.opts[:k] == 64
+      assert KLL.quantile(restored, 0.5) == KLL.quantile(sketch, 0.5)
+    end
+
+    test ":float variant round-trips within float32 precision" do
+      items = for i <- 1..1_000, do: i * 1.5
+      sketch = KLL.new(k: 200) |> KLL.update_many(items)
+      binary = KLL.serialize_datasketches(sketch, variant: :float)
+      assert {:ok, restored} = KLL.deserialize_datasketches(binary, variant: :float)
+      assert KLL.count(restored) == 1_000
+      assert_in_delta KLL.min_value(restored), KLL.min_value(sketch), 1.0e-3
+      assert_in_delta KLL.max_value(restored), KLL.max_value(sketch), 1.0e-3
+      assert_in_delta KLL.quantile(restored, 0.5), KLL.quantile(sketch, 0.5), 1.0e-3
+    end
+
+    test "empty sketch produces 8-byte binary" do
+      sketch = KLL.new(k: 200)
+      binary = KLL.serialize_datasketches(sketch)
+      assert byte_size(binary) == 8
+    end
+
+    test "single item (:double) produces 16-byte binary" do
+      sketch = KLL.new(k: 200) |> KLL.update(1.0)
+      binary = KLL.serialize_datasketches(sketch)
+      assert byte_size(binary) == 16
+    end
+
+    test "single item (:float) produces 12-byte binary" do
+      sketch = KLL.new(k: 200) |> KLL.update(1.0)
+      binary = KLL.serialize_datasketches(sketch, variant: :float)
+      assert byte_size(binary) == 12
+    end
+
+    test "preamble has correct family ID and default M" do
+      sketch = KLL.new(k: 200) |> KLL.update_many(1..500 |> Enum.map(&(&1 * 1.0)))
+      binary = KLL.serialize_datasketches(sketch)
+
+      <<_pre_ints::unsigned-8, _ser_ver::unsigned-8, fam_id::unsigned-8, _flags::unsigned-8,
+        k::unsigned-little-16, m::unsigned-8, _unused::unsigned-8, _rest::binary>> = binary
+
+      assert fam_id == 15
+      assert k == 200
+      assert m == 8
+    end
+
+    test "rejects too-short binary" do
+      assert {:error, %DeserializationError{}} = KLL.deserialize_datasketches(<<1, 2>>)
+    end
+
+    test "rejects wrong family ID" do
+      binary =
+        <<2::unsigned-8, 1::unsigned-8, 99::unsigned-8, 1::unsigned-8, 200::unsigned-little-16,
+          8::unsigned-8, 0::unsigned-8>>
+
+      assert {:error, %DeserializationError{message: msg}} =
+               KLL.deserialize_datasketches(binary)
+
+      assert msg =~ "family ID"
+    end
+
+    test "rejects non-default M" do
+      binary =
+        <<2::unsigned-8, 1::unsigned-8, 15::unsigned-8, 1::unsigned-8, 200::unsigned-little-16,
+          4::unsigned-8, 0::unsigned-8>>
+
+      assert {:error, %DeserializationError{message: msg}} =
+               KLL.deserialize_datasketches(binary)
+
+      assert msg =~ "M="
+    end
+
+    test "rejects updatable (non-compact) structure" do
+      binary =
+        <<5::unsigned-8, 3::unsigned-8, 15::unsigned-8, 0::unsigned-8, 200::unsigned-little-16,
+          8::unsigned-8, 0::unsigned-8, 0::unsigned-little-64, 200::unsigned-little-16,
+          2::unsigned-8, 0::unsigned-8>>
+
+      assert {:error, %DeserializationError{message: msg}} =
+               KLL.deserialize_datasketches(binary)
+
+      assert msg =~ "updatable"
+    end
+
+    test "rejects invalid preInts/serVer combination" do
+      binary =
+        <<3::unsigned-8, 1::unsigned-8, 15::unsigned-8, 0::unsigned-8, 200::unsigned-little-16,
+          8::unsigned-8, 0::unsigned-8>>
+
+      assert {:error, %DeserializationError{message: msg}} =
+               KLL.deserialize_datasketches(binary)
+
+      assert msg =~ "invalid or unsupported"
+    end
+
+    test "rejects k out of valid range" do
+      binary =
+        <<2::unsigned-8, 1::unsigned-8, 15::unsigned-8, 1::unsigned-8, 3::unsigned-little-16,
+          8::unsigned-8, 0::unsigned-8>>
+
+      assert {:error, %DeserializationError{message: msg}} =
+               KLL.deserialize_datasketches(binary)
+
+      assert msg =~ "out of valid range"
+    end
+
+    test "rejects mismatched EMPTY flag" do
+      binary =
+        <<2::unsigned-8, 1::unsigned-8, 15::unsigned-8, 0::unsigned-8, 200::unsigned-little-16,
+          8::unsigned-8, 0::unsigned-8>>
+
+      assert {:error, %DeserializationError{message: msg}} =
+               KLL.deserialize_datasketches(binary)
+
+      assert msg =~ "EMPTY"
+    end
+
+    test "rejects trailing bytes after single item" do
+      sketch = KLL.new(k: 200) |> KLL.update(1.0)
+      binary = KLL.serialize_datasketches(sketch)
+
+      assert {:error, %DeserializationError{message: msg}} =
+               KLL.deserialize_datasketches(binary <> <<0>>)
+
+      assert msg =~ "trailing"
+    end
+
+    test "rejects truncated full structure" do
+      sketch = KLL.new(k: 200) |> KLL.update_many(1..500 |> Enum.map(&(&1 * 1.0)))
+      binary = KLL.serialize_datasketches(sketch)
+      truncated = binary_part(binary, 0, 22)
+
+      assert {:error, %DeserializationError{message: msg}} =
+               KLL.deserialize_datasketches(truncated)
+
+      assert msg =~ "truncated"
+    end
+
+    test "wrong :variant on decode is caught by size validation (odd item count)" do
+      # An odd item count guarantees the item-width arithmetic can't line up
+      # under the wrong :variant -- see the moduledoc's "usually (not
+      # always)" caveat for why this isn't true of every item count.
+      items = for i <- 1..501, do: i * 1.0
+      sketch = KLL.new(k: 200) |> KLL.update_many(items)
+      binary = KLL.serialize_datasketches(sketch, variant: :float)
+
+      assert {:error, %DeserializationError{message: msg}} =
+               KLL.deserialize_datasketches(binary, variant: :double)
+
+      assert msg =~ "variant"
     end
   end
 
-  describe "deserialize_datasketches/1" do
-    test "raises NotImplementedError" do
-      assert_raise ExDataSketch.Errors.NotImplementedError, fn ->
-        KLL.deserialize_datasketches(<<>>)
+  describe "DataSketches properties" do
+    property ":double variant round-trip is exact" do
+      check all(
+              items <- list_of(float(min: -1000.0, max: 1000.0), min_length: 1, max_length: 200),
+              max_runs: 30
+            ) do
+        sketch = KLL.new(k: 200) |> KLL.update_many(items)
+        binary = KLL.serialize_datasketches(sketch)
+        assert {:ok, restored} = KLL.deserialize_datasketches(binary)
+        assert KLL.count(restored) == KLL.count(sketch)
+        assert KLL.min_value(restored) == KLL.min_value(sketch)
+        assert KLL.max_value(restored) == KLL.max_value(sketch)
+        assert KLL.quantile(restored, 0.5) == KLL.quantile(sketch, 0.5)
+      end
+    end
+
+    property ":float variant round-trip is within float32 precision" do
+      check all(
+              items <- list_of(float(min: -1000.0, max: 1000.0), min_length: 1, max_length: 200),
+              max_runs: 30
+            ) do
+        sketch = KLL.new(k: 200) |> KLL.update_many(items)
+        binary = KLL.serialize_datasketches(sketch, variant: :float)
+        assert {:ok, restored} = KLL.deserialize_datasketches(binary, variant: :float)
+        assert KLL.count(restored) == KLL.count(sketch)
+        assert_in_delta KLL.min_value(restored), KLL.min_value(sketch), 1.0e-2
+        assert_in_delta KLL.max_value(restored), KLL.max_value(sketch), 1.0e-2
       end
     end
   end

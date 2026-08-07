@@ -430,6 +430,10 @@ defmodule ExDataSketch.Backend.Rust do
   @impl true
   def kll_pmf(state_bin, split_points, opts), do: Pure.kll_pmf(state_bin, split_points, opts)
 
+  @impl true
+  def kll_from_components(k, n, min_val, max_val, levels),
+    do: Pure.kll_from_components(k, n, min_val, max_val, levels)
+
   # -- DDSketch callbacks --
 
   @impl true
