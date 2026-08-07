@@ -138,7 +138,10 @@ defmodule ExDataSketch.V1CompatTest do
 
       if @retains_hash_strategy do
         test "raises for non-phash2 hash strategy" do
-          sketch = SketchFixtures.build(@family, nil, hash_strategy: :xxhash3)
+          # :murmur3, not :xxhash3 -- the latter requires the Rust NIF and
+          # would raise during construction itself on NIF-less CI legs,
+          # before ever reaching the assertion this test is actually for.
+          sketch = SketchFixtures.build(@family, nil, hash_strategy: :murmur3)
 
           assert_raise ArgumentError, ~r/v1 serialization requires :phash2/, fn ->
             @mod.serialize(sketch, format: :v1)
