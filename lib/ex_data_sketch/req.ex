@@ -343,6 +343,12 @@ defmodule ExDataSketch.REQ do
   @doc """
   Serializes the sketch to the ExDataSketch-native EXSK binary format.
 
+  ## Options
+
+  - `:format` - serialization format: `:v2` (default, EXSK v2 with CRC32C)
+    or `:v1` (legacy EXSK v1, compatible with v0.7.x readers). REQ does
+    not hash its inputs, so v1 has no hash-strategy restriction.
+
   ## Examples
 
       iex> sketch = ExDataSketch.REQ.new()
@@ -351,19 +357,30 @@ defmodule ExDataSketch.REQ do
       iex> byte_size(binary) > 0
       true
 
+      iex> sketch = ExDataSketch.REQ.new()
+      iex> binary = ExDataSketch.REQ.serialize(sketch, format: :v1)
+      iex> <<"EXSK", 1, 13, _rest::binary>> = binary
+
   """
-  @spec serialize(t()) :: binary()
-  def serialize(%__MODULE__{state: state, opts: opts}) do
+  @spec serialize(t(), keyword()) :: binary()
+  def serialize(%__MODULE__{state: state, opts: opts}, serialize_opts \\ []) do
+    format = Keyword.get(serialize_opts, :format, :v2)
     start_time = System.monotonic_time()
     k = Keyword.fetch!(opts, :k)
     hra = if Keyword.fetch!(opts, :hra), do: 1, else: 0
     params_bin = <<k::unsigned-little-32, hra::unsigned-8>>
 
     binary =
-      Binary.encode(
-        Binary.metadata_from_opts(Codec.sketch_id_req(), 1, opts),
-        Binary.build_payload(params_bin, state)
-      )
+      case format do
+        :v2 ->
+          Binary.encode(
+            Binary.metadata_from_opts(Codec.sketch_id_req(), 1, opts),
+            Binary.build_payload(params_bin, state)
+          )
+
+        :v1 ->
+          Codec.encode(Codec.sketch_id_req(), 1, params_bin, state)
+      end
 
     :ok =
       Telemetry.execute(

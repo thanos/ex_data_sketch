@@ -163,6 +163,12 @@ defmodule ExDataSketch.XorFilter do
   @doc """
   Serializes the filter to the EXSK binary format.
 
+  ## Options
+
+  - `:format` - serialization format: `:v2` (default, EXSK v2 with CRC32C)
+    or `:v1` (legacy EXSK v1, compatible with v0.7.x readers). The v1
+    format is only valid for filters using `:phash2` hash strategy.
+
   ## Examples
 
       iex> {:ok, filter} = ExDataSketch.XorFilter.build(["a"])
@@ -171,19 +177,36 @@ defmodule ExDataSketch.XorFilter do
       iex> byte_size(binary) > 0
       true
 
+      iex> {:ok, filter} = ExDataSketch.XorFilter.build(["a"], hash_strategy: :phash2)
+      iex> binary = ExDataSketch.XorFilter.serialize(filter, format: :v1)
+      iex> <<"EXSK", 1, 11, _rest::binary>> = binary
+
   """
-  @spec serialize(t()) :: binary()
-  def serialize(%__MODULE__{state: state, opts: opts}) do
+  @spec serialize(t(), keyword()) :: binary()
+  def serialize(%__MODULE__{state: state, opts: opts}, serialize_opts \\ []) do
+    format = Keyword.get(serialize_opts, :format, :v2)
     fp_bits = Keyword.fetch!(opts, :fingerprint_bits)
     seed = Keyword.get(opts, :seed, @default_seed)
     variant = if fp_bits == 16, do: 1, else: 0
 
     params_bin = <<fp_bits::unsigned-8, variant::unsigned-8, seed::unsigned-little-32>>
 
-    Binary.encode(
-      Binary.metadata_from_opts(Codec.sketch_id_xor(), 1, opts),
-      Binary.build_payload(params_bin, state)
-    )
+    case format do
+      :v2 ->
+        Binary.encode(
+          Binary.metadata_from_opts(Codec.sketch_id_xor(), 1, opts),
+          Binary.build_payload(params_bin, state)
+        )
+
+      :v1 ->
+        unless Keyword.get(opts, :hash_strategy, :phash2) == :phash2 do
+          raise ArgumentError,
+                "v1 serialization requires :phash2 hash strategy, " <>
+                  "got: #{inspect(Keyword.get(opts, :hash_strategy))}"
+        end
+
+        Codec.encode(Codec.sketch_id_xor(), 1, params_bin, state)
+    end
   end
 
   @doc """

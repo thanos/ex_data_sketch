@@ -315,6 +315,12 @@ defmodule ExDataSketch.CQF do
   @doc """
   Serializes the filter to the EXSK binary format.
 
+  ## Options
+
+  - `:format` - serialization format: `:v2` (default, EXSK v2 with CRC32C)
+    or `:v1` (legacy EXSK v1, compatible with v0.7.x readers). The v1
+    format is only valid for filters using `:phash2` hash strategy.
+
   ## Examples
 
       iex> cqf = ExDataSketch.CQF.new(q: 10, r: 8)
@@ -323,9 +329,14 @@ defmodule ExDataSketch.CQF do
       iex> byte_size(binary) > 0
       true
 
+      iex> cqf = ExDataSketch.CQF.new(q: 10, r: 8, hash_strategy: :phash2)
+      iex> binary = ExDataSketch.CQF.serialize(cqf, format: :v1)
+      iex> <<"EXSK", 1, 10, _rest::binary>> = binary
+
   """
-  @spec serialize(t()) :: binary()
-  def serialize(%__MODULE__{state: state, opts: opts}) do
+  @spec serialize(t(), keyword()) :: binary()
+  def serialize(%__MODULE__{state: state, opts: opts}, serialize_opts \\ []) do
+    format = Keyword.get(serialize_opts, :format, :v2)
     start_time = System.monotonic_time()
     q = Keyword.fetch!(opts, :q)
     r = Keyword.fetch!(opts, :r)
@@ -334,10 +345,22 @@ defmodule ExDataSketch.CQF do
     params_bin = <<q::unsigned-8, r::unsigned-8, seed::unsigned-little-32>>
 
     binary =
-      Binary.encode(
-        Binary.metadata_from_opts(Codec.sketch_id_cqf(), 1, opts),
-        Binary.build_payload(params_bin, state)
-      )
+      case format do
+        :v2 ->
+          Binary.encode(
+            Binary.metadata_from_opts(Codec.sketch_id_cqf(), 1, opts),
+            Binary.build_payload(params_bin, state)
+          )
+
+        :v1 ->
+          unless Keyword.get(opts, :hash_strategy, :phash2) == :phash2 do
+            raise ArgumentError,
+                  "v1 serialization requires :phash2 hash strategy, " <>
+                    "got: #{inspect(Keyword.get(opts, :hash_strategy))}"
+          end
+
+          Codec.encode(Codec.sketch_id_cqf(), 1, params_bin, state)
+      end
 
     :ok =
       Telemetry.execute(

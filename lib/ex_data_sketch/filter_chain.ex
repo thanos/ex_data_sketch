@@ -35,8 +35,15 @@ defmodule ExDataSketch.FilterChain do
 
   ## Binary Format (FCN1)
 
-  FilterChain serializes each stage independently using its own `serialize/1`,
-  wrapped in a chain manifest with magic bytes "FCN1".
+  FilterChain serializes each stage independently using its own `serialize/1`
+  (always the default `:v2` format -- FilterChain does not currently thread
+  a `:format` option through to its stages), wrapped in a chain manifest
+  with magic bytes "FCN1". This is a bespoke container format, not an
+  `ExDataSketch.Codec`/EXSK frame -- it has no `Codec.sketch_id` of its
+  own. The `format: :v1` escape hatch available on every other sketch
+  family (opt-in legacy EXSK v1 output for v0.7.x readers, see e.g.
+  `ExDataSketch.Bloom.serialize/2`) therefore does not apply to
+  `FilterChain.serialize/1` itself.
   """
 
   alias ExDataSketch.{Bloom, CQF, Cuckoo, Errors, IBLT, Quotient, Sketch, XorFilter}

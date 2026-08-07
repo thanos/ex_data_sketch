@@ -372,6 +372,12 @@ defmodule ExDataSketch.IBLT do
   @doc """
   Serializes the IBLT to the EXSK binary format.
 
+  ## Options
+
+  - `:format` - serialization format: `:v2` (default, EXSK v2 with CRC32C)
+    or `:v1` (legacy EXSK v1, compatible with v0.7.x readers). The v1
+    format is only valid for sketches using `:phash2` hash strategy.
+
   ## Examples
 
       iex> iblt = ExDataSketch.IBLT.new()
@@ -380,9 +386,14 @@ defmodule ExDataSketch.IBLT do
       iex> byte_size(binary) > 0
       true
 
+      iex> iblt = ExDataSketch.IBLT.new(hash_strategy: :phash2)
+      iex> binary = ExDataSketch.IBLT.serialize(iblt, format: :v1)
+      iex> <<"EXSK", 1, 12, _rest::binary>> = binary
+
   """
-  @spec serialize(t()) :: binary()
-  def serialize(%__MODULE__{state: state, opts: opts}) do
+  @spec serialize(t(), keyword()) :: binary()
+  def serialize(%__MODULE__{state: state, opts: opts}, serialize_opts \\ []) do
+    format = Keyword.get(serialize_opts, :format, :v2)
     start_time = System.monotonic_time()
     hash_count = Keyword.fetch!(opts, :hash_count)
     seed = Keyword.get(opts, :seed, @default_seed)
@@ -393,10 +404,22 @@ defmodule ExDataSketch.IBLT do
         cell_count::unsigned-little-32>>
 
     binary =
-      Binary.encode(
-        Binary.metadata_from_opts(Codec.sketch_id_iblt(), 1, opts),
-        Binary.build_payload(params_bin, state)
-      )
+      case format do
+        :v2 ->
+          Binary.encode(
+            Binary.metadata_from_opts(Codec.sketch_id_iblt(), 1, opts),
+            Binary.build_payload(params_bin, state)
+          )
+
+        :v1 ->
+          unless Keyword.get(opts, :hash_strategy, :phash2) == :phash2 do
+            raise ArgumentError,
+                  "v1 serialization requires :phash2 hash strategy, " <>
+                    "got: #{inspect(Keyword.get(opts, :hash_strategy))}"
+          end
+
+          Codec.encode(Codec.sketch_id_iblt(), 1, params_bin, state)
+      end
 
     :ok =
       Telemetry.execute(

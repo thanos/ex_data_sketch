@@ -270,6 +270,12 @@ defmodule ExDataSketch.Bloom do
   @doc """
   Serializes the filter to the ExDataSketch-native EXSK binary format.
 
+  ## Options
+
+  - `:format` - serialization format: `:v2` (default, EXSK v2 with CRC32C)
+    or `:v1` (legacy EXSK v1, compatible with v0.7.x readers). The v1
+    format is only valid for filters using `:phash2` hash strategy.
+
   ## Examples
 
       iex> bloom = ExDataSketch.Bloom.new(capacity: 100)
@@ -278,9 +284,14 @@ defmodule ExDataSketch.Bloom do
       iex> byte_size(binary) > 0
       true
 
+      iex> bloom = ExDataSketch.Bloom.new(capacity: 100, hash_strategy: :phash2)
+      iex> binary = ExDataSketch.Bloom.serialize(bloom, format: :v1)
+      iex> <<"EXSK", 1, 7, _rest::binary>> = binary
+
   """
-  @spec serialize(t()) :: binary()
-  def serialize(%__MODULE__{state: state, opts: opts}) do
+  @spec serialize(t(), keyword()) :: binary()
+  def serialize(%__MODULE__{state: state, opts: opts}, serialize_opts \\ []) do
+    format = Keyword.get(serialize_opts, :format, :v2)
     start_time = System.monotonic_time()
     bit_count = Keyword.fetch!(opts, :bit_count)
     hash_count = Keyword.fetch!(opts, :hash_count)
@@ -290,10 +301,22 @@ defmodule ExDataSketch.Bloom do
       <<bit_count::unsigned-little-32, hash_count::unsigned-little-16, seed::unsigned-little-32>>
 
     binary =
-      Binary.encode(
-        Binary.metadata_from_opts(Codec.sketch_id_bloom(), 1, opts),
-        Binary.build_payload(params_bin, state)
-      )
+      case format do
+        :v2 ->
+          Binary.encode(
+            Binary.metadata_from_opts(Codec.sketch_id_bloom(), 1, opts),
+            Binary.build_payload(params_bin, state)
+          )
+
+        :v1 ->
+          unless Keyword.get(opts, :hash_strategy, :phash2) == :phash2 do
+            raise ArgumentError,
+                  "v1 serialization requires :phash2 hash strategy, " <>
+                    "got: #{inspect(Keyword.get(opts, :hash_strategy))}"
+          end
+
+          Codec.encode(Codec.sketch_id_bloom(), 1, params_bin, state)
+      end
 
     :ok =
       Telemetry.execute(

@@ -40,6 +40,7 @@ defmodule ExDataSketch.PropertyGuaranteesTest do
   alias ExDataSketch.HLL
   alias ExDataSketch.KLL
   alias ExDataSketch.REQ
+  alias ExDataSketch.SketchFixtures
   alias ExDataSketch.ULL
   alias ExDataSketch.XorFilter
 
@@ -470,7 +471,11 @@ defmodule ExDataSketch.PropertyGuaranteesTest do
     Generalized corruption propagation: every sketch type's v2 frame
     must either reject corrupted bytes or accept them as structurally
     valid. No sketch may silently produce corrupted state from a
-    bit-flipped binary.
+    bit-flipped binary. Covers every family with a `Codec.sketch_id`
+    (all of `SketchFixtures.families/0`, 15 families) -- `FilterChain`
+    is excluded since it has its own bespoke FCN1 container format
+    wrapping sub-sketch frames, which are each already covered here
+    independently.
     """
     property "bit-flips in v2 frames of all sketch types are detected" do
       check all(
@@ -478,18 +483,10 @@ defmodule ExDataSketch.PropertyGuaranteesTest do
               bit <- StreamData.integer(0..7),
               max_runs: 15
             ) do
-        for {_label, sketch_mod, sketch_args} <- [
-              {"HLL", HLL, [p: 10]},
-              {"ULL", ULL, [p: 10]},
-              {"CMS", CMS, [width: 100, depth: 5]}
-            ] do
-          sketch =
-            sketch_mod.from_enumerable(
-              unique_items(20),
-              sketch_args
-            )
+        for {family, %{module: mod}} <- SketchFixtures.families() do
+          sketch = SketchFixtures.build(family)
 
-          bin = sketch_mod.serialize(sketch)
+          bin = mod.serialize(sketch)
           pos = rem(flip_byte, byte_size(bin))
           mask = Bitwise.bsl(1, bit)
 
@@ -498,7 +495,7 @@ defmodule ExDataSketch.PropertyGuaranteesTest do
 
           case Binary.decode(corrupted) do
             {:ok, _decoded} ->
-              case sketch_mod.deserialize(corrupted) do
+              case mod.deserialize(corrupted) do
                 {:ok, _restored} ->
                   :ok
 

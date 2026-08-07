@@ -1,7 +1,7 @@
 defmodule ExDataSketch.MixProject do
   use Mix.Project
 
-  @version "0.10.0-dev"
+  @version "0.10.0"
   @source_url "https://github.com/thanos/ex_data_sketch"
 
   def project do

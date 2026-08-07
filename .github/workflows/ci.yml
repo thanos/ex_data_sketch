@@ -136,6 +136,10 @@ jobs:
         if: ${{ matrix.coverage }}
         run: mix run ci/compare_coverage.exs
 
+      - name: Check roadmap consistency
+        if: ${{ matrix.coverage }}
+        run: mix run ci/check_roadmap.exs
+
       - name: Upload coverage artifact
         if: ${{ matrix.coverage }}
         uses: actions/upload-artifact@v4

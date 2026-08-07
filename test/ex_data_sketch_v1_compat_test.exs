@@ -18,7 +18,7 @@ defmodule ExDataSketch.V1CompatTest do
 
   use ExUnit.Case, async: true
 
-  alias ExDataSketch.{Binary, CMS, DDSketch, FrequentItems, HLL, KLL, Theta, ULL}
+  alias ExDataSketch.{Binary, CMS, DDSketch, FrequentItems, HLL, KLL, SketchFixtures, Theta, ULL}
 
   @v1_vectors_dir Path.join([__DIR__, "vectors_v1"])
 
@@ -99,38 +99,52 @@ defmodule ExDataSketch.V1CompatTest do
     end
   end
 
-  describe "v1 serialize escape hatch" do
-    test "HLL serialize(format: :v1) produces a v1 binary" do
-      sketch = HLL.new(p: 14, hash_strategy: :phash2)
-      sketch = HLL.update(sketch, "hello")
-      v1_bin = HLL.serialize(sketch, format: :v1)
+  # Generalized across every Codec-backed family (all 15 -- everything
+  # except FilterChain, which has its own bespoke FCN1 container format
+  # with no per-family format option, see ExDataSketch.FilterChain's
+  # moduledoc "Binary Format (FCN1)" section).
+  for {family, %{module: mod, sketch_id: sketch_id, hashed?: hashed?} = spec} <-
+        SketchFixtures.families() do
+    describe "#{family} v1 serialize escape hatch" do
+      @family family
+      @mod mod
+      @sketch_id sketch_id
+      @hashed hashed?
+      @retains_hash_strategy Map.get(spec, :retains_hash_strategy?, false)
 
-      assert <<"EXSK", 1, 1, _rest::binary>> = v1_bin
-      assert {:ok, decoded} = HLL.deserialize(v1_bin)
-      assert HLL.estimate(decoded) > 0
-    end
+      test "produces a v1 binary with the correct magic/version/sketch-id bytes" do
+        extra_args = if @hashed, do: [hash_strategy: :phash2], else: []
+        sketch = SketchFixtures.build(@family, nil, extra_args)
+        v1_bin = @mod.serialize(sketch, format: :v1)
 
-    test "HLL serialize(format: :v1) raises for non-phash2 hash strategy" do
-      sketch = HLL.new(p: 14, hash_strategy: :xxhash3)
-
-      assert_raise ArgumentError, ~r/v1 serialization requires :phash2/, fn ->
-        HLL.serialize(sketch, format: :v1)
+        assert <<"EXSK", 1, sketch_id_byte, _rest::binary>> = v1_bin
+        assert sketch_id_byte == @sketch_id
       end
-    end
 
-    test "v2 is the default format" do
-      sketch = HLL.new(p: 14)
-      sketch = HLL.update(sketch, "hello")
-      v2_bin = HLL.serialize(sketch)
-      assert <<"EXSK", 2, _rest::binary>> = v2_bin
-    end
+      test "v2 remains the default format" do
+        sketch = SketchFixtures.build(@family)
+        v2_bin = @mod.serialize(sketch)
+        assert <<"EXSK", 2, _rest::binary>> = v2_bin
+      end
 
-    test "v1 serialized sketch round-trips through deserialize" do
-      sketch = HLL.from_enumerable(["a", "b", "c", "d", "e"], p: 14, hash_strategy: :phash2)
+      test "v1 serialized sketch round-trips through deserialize with identical state" do
+        extra_args = if @hashed, do: [hash_strategy: :phash2], else: []
+        sketch = SketchFixtures.build(@family, nil, extra_args)
+        v1_bin = @mod.serialize(sketch, format: :v1)
 
-      v1_bin = HLL.serialize(sketch, format: :v1)
-      assert {:ok, decoded} = HLL.deserialize(v1_bin)
-      assert_in_delta HLL.estimate(decoded), HLL.estimate(sketch), 1.0
+        assert {:ok, decoded} = @mod.deserialize(v1_bin)
+        assert decoded.state == sketch.state
+      end
+
+      if @retains_hash_strategy do
+        test "raises for non-phash2 hash strategy" do
+          sketch = SketchFixtures.build(@family, nil, hash_strategy: :xxhash3)
+
+          assert_raise ArgumentError, ~r/v1 serialization requires :phash2/, fn ->
+            @mod.serialize(sketch, format: :v1)
+          end
+        end
+      end
     end
   end
 end

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-08-07
+
+Release theme: **Production Ergonomics.** Closes the gap between "here is a
+sketch struct" and "here is a production counter that answers questions
+about the last five minutes": a unified sketch contract and facade
+dispatch, a storage behaviour, windowing, supervised sketch processes
+(`Server`/`Sketches`), ready-made `Telemetry.Metrics` + LiveDashboard
+integration, raw-hashing NIF parity for the membership filters, Apache
+KLL interop, and a `format: :v1` rolling-upgrade escape hatch on every
+sketch family.
+
 ### Added
 
 - `ExDataSketch.Sketch` -- the unified behaviour every concrete sketch
@@ -157,6 +168,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (HLL -- now targeted at v0.11.0; CMS -- not planned, no standard format
   exists), superseding the scattered mentions previously spread across
   sketch moduledocs.
+- `serialize(sketch, format: :v1)` -- the opt-in legacy EXSK v1 escape
+  hatch, previously HLL-only, is now available on every sketch family
+  except `FilterChain` (which has its own bespoke FCN1 container format
+  with no `Codec.sketch_id` of its own -- see its moduledoc). v1 output
+  is compatible with v0.7.x readers, for use during rolling upgrades.
+  Families with a `:hash_strategy` option require `:phash2` for v1, same
+  as HLL; families with no hash-strategy concept (KLL, DDSketch, REQ,
+  FrequentItems, MisraGries) have no such restriction. `Codec.encode/4`
+  (already generic across every `sketch_id_*`) needed no changes --
+  every family's *state* binary is unchanged between v1 and v2 eras, the
+  difference is purely the frame wrapper (v2 adds a hash-algorithm
+  metadata block + CRC32C trailer; v1 has neither).
+- `ci/check_roadmap.exs` -- asserts `README.md`'s roadmap table has a
+  row for the version `mix.exs` currently declares, and (once that
+  version has no `-dev` suffix) that the row says "Released", the
+  install snippet matches, and `guides/roadmap.md` has moved on to
+  previewing the next release. Closes a twice-deferred carry-forward
+  item (X-R2).
 
 ### Changed
 
@@ -205,6 +234,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Wired up `doctest` for `DDSketch`, `REQ`, `FrequentItems`, `MisraGries`,
   and all 7 membership filter modules -- their existing `@doc` examples
   were never executed by the test suite before this release.
+- `test/property_guarantees_test.exs`'s bit-flip corruption-propagation
+  property now covers all 15 `Codec`-backed sketch families (previously
+  HLL/ULL/CMS only) instead of a hardcoded 3-family list. Closes a
+  twice-deferred carry-forward item (P5R4). Construction is factored
+  into a new `test/support/sketch_fixtures.ex` (`ExDataSketch.SketchFixtures`)
+  shared with the generalized v1 escape-hatch tests, which handles the
+  three constructor return shapes in play (bare struct; Cuckoo's
+  `{:ok, t()} | {:error, :full, t()}`; XorFilter's `build/2` returning
+  `{:ok, t()} | {:error, :build_failed}` since it has no
+  `from_enumerable/2`). `FilterChain` is excluded (bespoke construction
+  shape wrapping sub-sketches, each already covered independently).
 
 ### Fixed
 

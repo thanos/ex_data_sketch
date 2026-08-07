@@ -325,6 +325,12 @@ defmodule ExDataSketch.Cuckoo do
   @doc """
   Serializes the filter to the ExDataSketch-native EXSK binary format.
 
+  ## Options
+
+  - `:format` - serialization format: `:v2` (default, EXSK v2 with CRC32C)
+    or `:v1` (legacy EXSK v1, compatible with v0.7.x readers). The v1
+    format is only valid for filters using `:phash2` hash strategy.
+
   ## Examples
 
       iex> cuckoo = ExDataSketch.Cuckoo.new(capacity: 100)
@@ -333,9 +339,14 @@ defmodule ExDataSketch.Cuckoo do
       iex> byte_size(binary) > 0
       true
 
+      iex> cuckoo = ExDataSketch.Cuckoo.new(capacity: 100, hash_strategy: :phash2)
+      iex> binary = ExDataSketch.Cuckoo.serialize(cuckoo, format: :v1)
+      iex> <<"EXSK", 1, 8, _rest::binary>> = binary
+
   """
-  @spec serialize(t()) :: binary()
-  def serialize(%__MODULE__{state: state, opts: opts}) do
+  @spec serialize(t(), keyword()) :: binary()
+  def serialize(%__MODULE__{state: state, opts: opts}, serialize_opts \\ []) do
+    format = Keyword.get(serialize_opts, :format, :v2)
     bucket_count = Keyword.fetch!(opts, :bucket_count)
     fp_size = Keyword.fetch!(opts, :fingerprint_size)
     bucket_size = Keyword.fetch!(opts, :bucket_size)
@@ -345,10 +356,22 @@ defmodule ExDataSketch.Cuckoo do
       <<bucket_count::unsigned-little-32, fp_size::unsigned-8, bucket_size::unsigned-8,
         seed::unsigned-little-32>>
 
-    Binary.encode(
-      Binary.metadata_from_opts(Codec.sketch_id_cuckoo(), 1, opts),
-      Binary.build_payload(params_bin, state)
-    )
+    case format do
+      :v2 ->
+        Binary.encode(
+          Binary.metadata_from_opts(Codec.sketch_id_cuckoo(), 1, opts),
+          Binary.build_payload(params_bin, state)
+        )
+
+      :v1 ->
+        unless Keyword.get(opts, :hash_strategy, :phash2) == :phash2 do
+          raise ArgumentError,
+                "v1 serialization requires :phash2 hash strategy, " <>
+                  "got: #{inspect(Keyword.get(opts, :hash_strategy))}"
+        end
+
+        Codec.encode(Codec.sketch_id_cuckoo(), 1, params_bin, state)
+    end
   end
 
   @doc """

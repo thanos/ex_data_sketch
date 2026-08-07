@@ -268,6 +268,12 @@ defmodule ExDataSketch.CMS do
   @doc """
   Serializes the sketch to the ExDataSketch-native EXSK binary format.
 
+  ## Options
+
+  - `:format` - serialization format: `:v2` (default, EXSK v2 with CRC32C)
+    or `:v1` (legacy EXSK v1, compatible with v0.7.x readers). The v1
+    format is only valid for sketches using `:phash2` hash strategy.
+
   ## Examples
 
       iex> sketch = ExDataSketch.CMS.new(width: 100, depth: 3, counter_width: 32)
@@ -276,28 +282,52 @@ defmodule ExDataSketch.CMS do
       iex> byte_size(binary) > 0
       true
 
+      iex> sketch = ExDataSketch.CMS.new(width: 100, depth: 3, counter_width: 32, hash_strategy: :phash2)
+      iex> binary = ExDataSketch.CMS.serialize(sketch, format: :v1)
+      iex> <<"EXSK", 1, 2, _rest::binary>> = binary
+
   """
-  @spec serialize(t()) :: binary()
-  def serialize(%__MODULE__{state: state, opts: opts}) do
+  @spec serialize(t(), keyword()) :: binary()
+  def serialize(%__MODULE__{state: state, opts: opts}, serialize_opts \\ []) do
+    format = Keyword.get(serialize_opts, :format, :v2)
     start_time = System.monotonic_time()
 
     width = Keyword.fetch!(opts, :width)
     depth = Keyword.fetch!(opts, :depth)
     counter_width = Keyword.fetch!(opts, :counter_width)
-    hs = hash_strategy_byte(opts)
-
-    params_bin = <<
-      width::unsigned-little-32,
-      depth::unsigned-little-16,
-      counter_width::unsigned-8,
-      hs::unsigned-8
-    >>
 
     binary =
-      Binary.encode(
-        Binary.metadata_from_opts(Codec.sketch_id_cms(), 1, opts),
-        Binary.build_payload(params_bin, state)
-      )
+      case format do
+        :v2 ->
+          hs = hash_strategy_byte(opts)
+
+          params_bin = <<
+            width::unsigned-little-32,
+            depth::unsigned-little-16,
+            counter_width::unsigned-8,
+            hs::unsigned-8
+          >>
+
+          Binary.encode(
+            Binary.metadata_from_opts(Codec.sketch_id_cms(), 1, opts),
+            Binary.build_payload(params_bin, state)
+          )
+
+        :v1 ->
+          unless Keyword.get(opts, :hash_strategy, :phash2) == :phash2 do
+            raise ArgumentError,
+                  "v1 serialization requires :phash2 hash strategy, " <>
+                    "got: #{inspect(Keyword.get(opts, :hash_strategy))}"
+          end
+
+          params_bin = <<
+            width::unsigned-little-32,
+            depth::unsigned-little-16,
+            counter_width::unsigned-8
+          >>
+
+          Codec.encode(Codec.sketch_id_cms(), 1, params_bin, state)
+      end
 
     :ok =
       Telemetry.execute(

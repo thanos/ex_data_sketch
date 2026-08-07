@@ -62,7 +62,7 @@ For the v0.x series, `ex_data_sketch` does NOT promise:
 
 | Format | Version byte | Used by | Status |
 |--------|--------------|---------|--------|
-| EXSK v1 | `1` | v0.1 through v0.7.x writers, v0.8.0 reader | Read-only in v0.8.0+ |
+| EXSK v1 | `1` | v0.1 through v0.7.x writers; readable by every v0.8.0+ reader; writable again, opt-in, via `serialize(sketch, format: :v1)` on every family except `FilterChain` (v0.10.0+) | Read always; write available opt-in for rolling upgrades |
 | EXSK v2 | `2` | v0.8.0+ writers and readers | Current default |
 | Theta CompactSketch | (Apache DataSketches binary layout) | `Theta.serialize_datasketches/2` | Cross-language stable |
 | KLL Compact (float/double) | (Apache DataSketches binary layout) | `KLL.serialize_datasketches/2` | Cross-language stable |
@@ -185,7 +185,7 @@ The compatibility contract is locked by tests:
 
 | Contract | Lock |
 |----------|------|
-| v0.7.x EXSK v1 binaries decode in v0.8.0 | `test/ex_data_sketch_v1_compat_test.exs` — 9 tests over `test/vectors_v1/` corpus |
+| v0.7.x EXSK v1 binaries decode; `format: :v1` opt-in write round-trips | `test/ex_data_sketch_v1_compat_test.exs` — decode regression over `test/vectors_v1/` corpus, plus generated per-family write/round-trip tests for every family except `FilterChain` |
 | v0.8.0 EXSK v2 binaries round-trip identically | `test/ex_data_sketch_vectors_test.exs` (regenerated) + per-sketch round-trip tests |
 | Bit-flip corruption is always detected | `test/ex_data_sketch/binary/header_test.exs` — 200-mutation fuzz |
 | Random binaries never crash the decoder | `test/ex_data_sketch/binary/header_test.exs` — 200 random-binary property |

@@ -381,6 +381,12 @@ defmodule ExDataSketch.KLL do
   The serialized binary includes magic bytes, version, sketch type,
   parameters, and state. See `ExDataSketch.Codec` for format details.
 
+  ## Options
+
+  - `:format` - serialization format: `:v2` (default, EXSK v2 with CRC32C)
+    or `:v1` (legacy EXSK v1, compatible with v0.7.x readers). KLL does
+    not hash its inputs, so v1 has no hash-strategy restriction.
+
   ## Examples
 
       iex> sketch = ExDataSketch.KLL.new()
@@ -389,18 +395,29 @@ defmodule ExDataSketch.KLL do
       iex> byte_size(binary) > 0
       true
 
+      iex> sketch = ExDataSketch.KLL.new()
+      iex> binary = ExDataSketch.KLL.serialize(sketch, format: :v1)
+      iex> <<"EXSK", 1, 4, _rest::binary>> = binary
+
   """
-  @spec serialize(t()) :: binary()
-  def serialize(%__MODULE__{state: state, opts: opts}) do
+  @spec serialize(t(), keyword()) :: binary()
+  def serialize(%__MODULE__{state: state, opts: opts}, serialize_opts \\ []) do
+    format = Keyword.get(serialize_opts, :format, :v2)
     start_time = System.monotonic_time()
     k = Keyword.fetch!(opts, :k)
     params_bin = <<k::unsigned-little-32>>
 
     binary =
-      Binary.encode(
-        Binary.metadata_from_opts(Codec.sketch_id_kll(), 1, opts),
-        Binary.build_payload(params_bin, state)
-      )
+      case format do
+        :v2 ->
+          Binary.encode(
+            Binary.metadata_from_opts(Codec.sketch_id_kll(), 1, opts),
+            Binary.build_payload(params_bin, state)
+          )
+
+        :v1 ->
+          Codec.encode(Codec.sketch_id_kll(), 1, params_bin, state)
+      end
 
     :ok =
       Telemetry.execute(
