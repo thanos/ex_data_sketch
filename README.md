@@ -1,8 +1,9 @@
+
 # ExDataSketch
 
 
 
-<img width="500"  alt="ex_data_sketch" src="https://github.com/user-attachments/assets/07a406c5-e0e5-46b3-bc3a-5ea40e21220f" />
+<img width="500"  alt="ex_data_sketch" src="https://github.com/user-attachments/assets/92eb84a7-f8b8-4a05-98f8-f496da164f69" alt="chipmunk full of Elixir, using a very rusty nail, to carve data sketches" />
 
 
 Production-grade streaming data sketching algorithms for Elixir.
