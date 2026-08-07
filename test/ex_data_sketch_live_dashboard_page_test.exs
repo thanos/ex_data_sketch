@@ -20,6 +20,11 @@ defmodule ExDataSketch.LiveDashboard.PageTest do
     end
 
     test "exports render/1" do
+      # function_exported?/3 does not trigger module loading (unlike calling
+      # a function on the module directly) -- ExUnit randomizes test order,
+      # so without this the assertion flakes whenever this test happens to
+      # run before anything else in the file that references Page.
+      Code.ensure_loaded!(Page)
       assert function_exported?(Page, :render, 1)
     end
   end
