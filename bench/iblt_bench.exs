@@ -2,7 +2,7 @@
 #
 # Run with: EX_DATA_SKETCH_BUILD=true mix run bench/iblt_bench.exs
 
-alias ExDataSketch.{Backend, IBLT}
+alias ExDataSketch.{Backend, Hash, IBLT}
 
 IO.puts("ExDataSketch IBLT Benchmark")
 IO.puts("===========================")
@@ -58,6 +58,31 @@ scenarios =
      }}
   end
 
+# Phase 6 moved item hashing for put_many from Elixir into the Rust NIF
+# itself (see guides/filter_performance.md). This reproduces the old
+# pre-hash-in-Elixir-then-NIF path directly against the backend, bypassing
+# IBLT.put_many's now-automatic raw dispatch, as the "before" baseline.
+legacy_benches =
+  if Backend.Rust.available?() do
+    legacy_sketch = IBLT.new(cell_count: 2000, backend: Backend.Rust)
+    legacy_sketch_100k = IBLT.new(cell_count: 200_000, backend: Backend.Rust)
+
+    legacy_put_many = fn sketch, items ->
+      seed = Keyword.get(sketch.opts, :seed, 0)
+      pairs = Enum.map(items, fn item -> {Hash.hash64(item, seed: seed), 0} end)
+      Backend.Rust.iblt_put_many(sketch.state, pairs, sketch.opts)
+    end
+
+    [
+      {"iblt_put_many 1k [Rust (pre-hashed, legacy)]",
+       fn -> legacy_put_many.(legacy_sketch, items_1k) end},
+      {"iblt_put_many 100k [Rust (pre-hashed, legacy)]",
+       fn -> legacy_put_many.(legacy_sketch_100k, items_100k) end}
+    ]
+  else
+    []
+  end
+
 benches =
   Enum.flat_map(scenarios, fn {name, s} ->
     [
@@ -79,7 +104,7 @@ benches =
 File.mkdir_p!("bench/output")
 
 Benchee.run(
-  Map.new(benches),
+  Map.new(benches ++ legacy_benches),
   warmup: 1,
   time: 3,
   formatters: [

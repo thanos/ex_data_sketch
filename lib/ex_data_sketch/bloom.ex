@@ -42,7 +42,7 @@ defmodule ExDataSketch.Bloom do
   can merge only if they have identical `bit_count`, `hash_count`, and `seed`.
   """
 
-  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash}
+  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash, Telemetry}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -51,6 +51,8 @@ defmodule ExDataSketch.Bloom do
         }
 
   defstruct [:state, :opts, :backend]
+
+  @behaviour ExDataSketch.Sketch
 
   @default_capacity 10_000
   @default_fpr 0.01
@@ -142,10 +144,52 @@ defmodule ExDataSketch.Bloom do
   """
   @spec put_many(t(), Enumerable.t()) :: t()
   def put_many(%__MODULE__{state: state, opts: opts, backend: backend} = bloom, items) do
-    hashes = Enum.map(items, &hash_item(&1, opts))
-    new_state = backend.bloom_put_many(state, hashes, opts)
+    use_raw =
+      backend == Backend.Rust and Keyword.get(opts, :hash_fn) == nil and
+        Keyword.get(opts, :hash_strategy) != :phash2
+
+    new_state =
+      if use_raw do
+        Backend.Rust.bloom_put_many_raw(state, Enum.to_list(items), opts)
+      else
+        hashes = Enum.map(items, &hash_item(&1, opts))
+        backend.bloom_put_many(state, hashes, opts)
+      end
+
     %{bloom | state: new_state}
   end
+
+  @doc """
+  Alias for `put/2`, added so `ExDataSketch.Bloom` satisfies the
+  `ExDataSketch.Sketch` behaviour's generic `update/2` callback.
+
+  `put/2` remains the family-idiomatic name and the one used throughout this
+  module's own documentation; `update/2` exists purely for cross-family
+  generic code (see `ExDataSketch.update/2`).
+
+  ## Examples
+
+      iex> bloom = ExDataSketch.Bloom.new() |> ExDataSketch.Bloom.update("hello")
+      iex> ExDataSketch.Bloom.member?(bloom, "hello")
+      true
+
+  """
+  @spec update(t(), term()) :: t()
+  def update(%__MODULE__{} = bloom, item), do: put(bloom, item)
+
+  @doc """
+  Alias for `put_many/2`, added so `ExDataSketch.Bloom` satisfies the
+  `ExDataSketch.Sketch` behaviour's generic `update_many/2` callback.
+
+  ## Examples
+
+      iex> bloom = ExDataSketch.Bloom.new() |> ExDataSketch.Bloom.update_many(["a", "b", "c"])
+      iex> ExDataSketch.Bloom.member?(bloom, "a")
+      true
+
+  """
+  @spec update_many(t(), Enumerable.t()) :: t()
+  def update_many(%__MODULE__{} = bloom, items), do: put_many(bloom, items)
 
   @doc """
   Tests whether an item may be a member of the set.
@@ -212,11 +256,25 @@ defmodule ExDataSketch.Bloom do
   """
   @spec merge_many(Enumerable.t()) :: t()
   def merge_many(blooms) do
-    Enum.reduce(blooms, fn bloom, acc -> merge(acc, bloom) end)
+    blooms_list = Enum.to_list(blooms)
+
+    Telemetry.span(
+      Telemetry.event_name(:sketch, :merge),
+      %{merge_count: length(blooms_list)},
+      %{sketch_type: :bloom},
+      :sketch,
+      fn -> Enum.reduce(blooms_list, fn bloom, acc -> merge(acc, bloom) end) end
+    )
   end
 
   @doc """
   Serializes the filter to the ExDataSketch-native EXSK binary format.
+
+  ## Options
+
+  - `:format` - serialization format: `:v2` (default, EXSK v2 with CRC32C)
+    or `:v1` (legacy EXSK v1, compatible with v0.7.x readers). The v1
+    format is only valid for filters using `:phash2` hash strategy.
 
   ## Examples
 
@@ -226,9 +284,15 @@ defmodule ExDataSketch.Bloom do
       iex> byte_size(binary) > 0
       true
 
+      iex> bloom = ExDataSketch.Bloom.new(capacity: 100, hash_strategy: :phash2)
+      iex> binary = ExDataSketch.Bloom.serialize(bloom, format: :v1)
+      iex> <<"EXSK", 1, 7, _rest::binary>> = binary
+
   """
-  @spec serialize(t()) :: binary()
-  def serialize(%__MODULE__{state: state, opts: opts}) do
+  @spec serialize(t(), keyword()) :: binary()
+  def serialize(%__MODULE__{state: state, opts: opts}, serialize_opts \\ []) do
+    format = Keyword.get(serialize_opts, :format, :v2)
+    start_time = System.monotonic_time()
     bit_count = Keyword.fetch!(opts, :bit_count)
     hash_count = Keyword.fetch!(opts, :hash_count)
     seed = Keyword.get(opts, :seed, @default_seed)
@@ -236,10 +300,33 @@ defmodule ExDataSketch.Bloom do
     params_bin =
       <<bit_count::unsigned-little-32, hash_count::unsigned-little-16, seed::unsigned-little-32>>
 
-    Binary.encode(
-      Binary.metadata_from_opts(Codec.sketch_id_bloom(), 1, opts),
-      Binary.build_payload(params_bin, state)
-    )
+    binary =
+      case format do
+        :v2 ->
+          Binary.encode(
+            Binary.metadata_from_opts(Codec.sketch_id_bloom(), 1, opts),
+            Binary.build_payload(params_bin, state)
+          )
+
+        :v1 ->
+          unless Keyword.get(opts, :hash_strategy, :phash2) == :phash2 do
+            raise ArgumentError,
+                  "v1 serialization requires :phash2 hash strategy, " <>
+                    "got: #{inspect(Keyword.get(opts, :hash_strategy))}"
+          end
+
+          Codec.encode(Codec.sketch_id_bloom(), 1, params_bin, state)
+      end
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:sketch, :serialize),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: :bloom},
+        :sketch
+      )
+
+    binary
   end
 
   @doc """
@@ -257,19 +344,32 @@ defmodule ExDataSketch.Bloom do
   """
   @spec deserialize(binary()) :: {:ok, t()} | {:error, Exception.t()}
   def deserialize(binary) when is_binary(binary) do
-    with {:ok, decoded} <- Binary.decode(binary),
-         :ok <- validate_sketch_id(decoded.sketch_id),
-         {:ok, opts} <- decode_params(decoded.params),
-         :ok <- validate_state_header(decoded.state, opts) do
-      backend = Backend.default()
+    start_time = System.monotonic_time()
 
-      {:ok,
-       %__MODULE__{
-         state: decoded.state,
-         opts: opts,
-         backend: backend
-       }}
-    end
+    result =
+      with {:ok, decoded} <- Binary.decode(binary),
+           :ok <- validate_sketch_id(decoded.sketch_id),
+           {:ok, opts} <- decode_params(decoded.params),
+           :ok <- validate_state_header(decoded.state, opts) do
+        backend = Backend.default()
+
+        {:ok,
+         %__MODULE__{
+           state: decoded.state,
+           opts: opts,
+           backend: backend
+         }}
+      end
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:sketch, :deserialize),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: :bloom},
+        :sketch
+      )
+
+    result
   end
 
   @doc """
@@ -339,7 +439,14 @@ defmodule ExDataSketch.Bloom do
   """
   @spec from_enumerable(Enumerable.t(), keyword()) :: t()
   def from_enumerable(enumerable, opts \\ []) do
-    new(opts) |> put_many(enumerable)
+    Telemetry.span_with_result(
+      Telemetry.event_name(:sketch, :ingest),
+      %{},
+      %{sketch_type: :bloom},
+      :sketch,
+      fn -> new(opts) |> put_many(enumerable) end,
+      fn sketch -> %{size_bytes: size_bytes(sketch)} end
+    )
   end
 
   @doc """

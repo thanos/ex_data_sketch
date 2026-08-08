@@ -2,7 +2,7 @@
 #
 # Run with: EX_DATA_SKETCH_BUILD=true mix run bench/xor_filter_bench.exs
 
-alias ExDataSketch.{Backend, XorFilter}
+alias ExDataSketch.{Backend, Hash, XorFilter}
 
 IO.puts("ExDataSketch XorFilter Benchmark")
 IO.puts("================================")
@@ -58,10 +58,30 @@ benches =
     ]
   end)
 
+# Phase 6 moved item hashing for build/2 from Elixir into the Rust NIF
+# itself (see guides/filter_performance.md). This reproduces the old
+# pre-hash-in-Elixir-then-NIF path directly against the backend, bypassing
+# XorFilter.build's now-automatic raw dispatch, as the "before" baseline.
+legacy_benches =
+  if Backend.Rust.available?() do
+    legacy_build = fn items ->
+      opts = [fingerprint_bits: 8, seed: 0]
+      hashes = items |> Enum.map(&Hash.hash64(&1, seed: 0)) |> Enum.uniq()
+      {:ok, _} = Backend.Rust.xor_build(hashes, opts)
+    end
+
+    [
+      {"xor_build 1k xor8 [Rust (pre-hashed, legacy)]", fn -> legacy_build.(items_1k) end},
+      {"xor_build 100k xor8 [Rust (pre-hashed, legacy)]", fn -> legacy_build.(items_100k) end}
+    ]
+  else
+    []
+  end
+
 File.mkdir_p!("bench/output")
 
 Benchee.run(
-  Map.new(benches),
+  Map.new(benches ++ legacy_benches),
   warmup: 1,
   time: 3,
   formatters: [

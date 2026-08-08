@@ -42,7 +42,7 @@ defmodule ExDataSketch.CQF do
 
   import Bitwise
 
-  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash}
+  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash, Telemetry}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -51,6 +51,8 @@ defmodule ExDataSketch.CQF do
         }
 
   defstruct [:state, :opts, :backend]
+
+  @behaviour ExDataSketch.Sketch
 
   @default_q 16
   @default_r 8
@@ -134,10 +136,52 @@ defmodule ExDataSketch.CQF do
   """
   @spec put_many(t(), Enumerable.t()) :: t()
   def put_many(%__MODULE__{state: state, opts: opts, backend: backend} = cqf, items) do
-    hashes = Enum.map(items, &hash_item(&1, opts))
-    new_state = backend.cqf_put_many(state, hashes, opts)
+    use_raw =
+      backend == Backend.Rust and Keyword.get(opts, :hash_fn) == nil and
+        Keyword.get(opts, :hash_strategy) != :phash2
+
+    new_state =
+      if use_raw do
+        Backend.Rust.cqf_put_many_raw(state, Enum.to_list(items), opts)
+      else
+        hashes = Enum.map(items, &hash_item(&1, opts))
+        backend.cqf_put_many(state, hashes, opts)
+      end
+
     %{cqf | state: new_state}
   end
+
+  @doc """
+  Alias for `put/2`, added so `ExDataSketch.CQF` satisfies the
+  `ExDataSketch.Sketch` behaviour's generic `update/2` callback.
+
+  `put/2` remains the family-idiomatic name and the one used throughout this
+  module's own documentation; `update/2` exists purely for cross-family
+  generic code (see `ExDataSketch.update/2`).
+
+  ## Examples
+
+      iex> cqf = ExDataSketch.CQF.new() |> ExDataSketch.CQF.update("hello")
+      iex> ExDataSketch.CQF.member?(cqf, "hello")
+      true
+
+  """
+  @spec update(t(), term()) :: t()
+  def update(%__MODULE__{} = cqf, item), do: put(cqf, item)
+
+  @doc """
+  Alias for `put_many/2`, added so `ExDataSketch.CQF` satisfies the
+  `ExDataSketch.Sketch` behaviour's generic `update_many/2` callback.
+
+  ## Examples
+
+      iex> cqf = ExDataSketch.CQF.new() |> ExDataSketch.CQF.update_many(["a", "b", "c"])
+      iex> ExDataSketch.CQF.member?(cqf, "a")
+      true
+
+  """
+  @spec update_many(t(), Enumerable.t()) :: t()
+  def update_many(%__MODULE__{} = cqf, items), do: put_many(cqf, items)
 
   @doc """
   Tests whether an item may be a member of the multiset.
@@ -243,7 +287,15 @@ defmodule ExDataSketch.CQF do
   """
   @spec merge_many(Enumerable.t()) :: t()
   def merge_many(filters) do
-    Enum.reduce(filters, fn cqf, acc -> merge(acc, cqf) end)
+    filters_list = Enum.to_list(filters)
+
+    Telemetry.span(
+      Telemetry.event_name(:sketch, :merge),
+      %{merge_count: length(filters_list)},
+      %{sketch_type: :cqf},
+      :sketch,
+      fn -> Enum.reduce(filters_list, fn cqf, acc -> merge(acc, cqf) end) end
+    )
   end
 
   @doc """
@@ -263,6 +315,12 @@ defmodule ExDataSketch.CQF do
   @doc """
   Serializes the filter to the EXSK binary format.
 
+  ## Options
+
+  - `:format` - serialization format: `:v2` (default, EXSK v2 with CRC32C)
+    or `:v1` (legacy EXSK v1, compatible with v0.7.x readers). The v1
+    format is only valid for filters using `:phash2` hash strategy.
+
   ## Examples
 
       iex> cqf = ExDataSketch.CQF.new(q: 10, r: 8)
@@ -271,19 +329,48 @@ defmodule ExDataSketch.CQF do
       iex> byte_size(binary) > 0
       true
 
+      iex> cqf = ExDataSketch.CQF.new(q: 10, r: 8, hash_strategy: :phash2)
+      iex> binary = ExDataSketch.CQF.serialize(cqf, format: :v1)
+      iex> <<"EXSK", 1, 10, _rest::binary>> = binary
+
   """
-  @spec serialize(t()) :: binary()
-  def serialize(%__MODULE__{state: state, opts: opts}) do
+  @spec serialize(t(), keyword()) :: binary()
+  def serialize(%__MODULE__{state: state, opts: opts}, serialize_opts \\ []) do
+    format = Keyword.get(serialize_opts, :format, :v2)
+    start_time = System.monotonic_time()
     q = Keyword.fetch!(opts, :q)
     r = Keyword.fetch!(opts, :r)
     seed = Keyword.get(opts, :seed, @default_seed)
 
     params_bin = <<q::unsigned-8, r::unsigned-8, seed::unsigned-little-32>>
 
-    Binary.encode(
-      Binary.metadata_from_opts(Codec.sketch_id_cqf(), 1, opts),
-      Binary.build_payload(params_bin, state)
-    )
+    binary =
+      case format do
+        :v2 ->
+          Binary.encode(
+            Binary.metadata_from_opts(Codec.sketch_id_cqf(), 1, opts),
+            Binary.build_payload(params_bin, state)
+          )
+
+        :v1 ->
+          unless Keyword.get(opts, :hash_strategy, :phash2) == :phash2 do
+            raise ArgumentError,
+                  "v1 serialization requires :phash2 hash strategy, " <>
+                    "got: #{inspect(Keyword.get(opts, :hash_strategy))}"
+          end
+
+          Codec.encode(Codec.sketch_id_cqf(), 1, params_bin, state)
+      end
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:sketch, :serialize),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: :cqf},
+        :sketch
+      )
+
+    binary
   end
 
   @doc """
@@ -301,19 +388,32 @@ defmodule ExDataSketch.CQF do
   """
   @spec deserialize(binary()) :: {:ok, t()} | {:error, Exception.t()}
   def deserialize(binary) when is_binary(binary) do
-    with {:ok, decoded} <- Binary.decode(binary),
-         :ok <- validate_sketch_id(decoded.sketch_id),
-         {:ok, opts} <- decode_params(decoded.params),
-         :ok <- validate_state_header(decoded.state) do
-      backend = Backend.default()
+    start_time = System.monotonic_time()
 
-      {:ok,
-       %__MODULE__{
-         state: decoded.state,
-         opts: opts,
-         backend: backend
-       }}
-    end
+    result =
+      with {:ok, decoded} <- Binary.decode(binary),
+           :ok <- validate_sketch_id(decoded.sketch_id),
+           {:ok, opts} <- decode_params(decoded.params),
+           :ok <- validate_state_header(decoded.state) do
+        backend = Backend.default()
+
+        {:ok,
+         %__MODULE__{
+           state: decoded.state,
+           opts: opts,
+           backend: backend
+         }}
+      end
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:sketch, :deserialize),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: :cqf},
+        :sketch
+      )
+
+    result
   end
 
   @doc """
@@ -379,7 +479,14 @@ defmodule ExDataSketch.CQF do
   """
   @spec from_enumerable(Enumerable.t(), keyword()) :: t()
   def from_enumerable(enumerable, opts \\ []) do
-    new(opts) |> put_many(enumerable)
+    Telemetry.span_with_result(
+      Telemetry.event_name(:sketch, :ingest),
+      %{},
+      %{sketch_type: :cqf},
+      :sketch,
+      fn -> new(opts) |> put_many(enumerable) end,
+      fn sketch -> %{size_bytes: size_bytes(sketch)} end
+    )
   end
 
   @doc """

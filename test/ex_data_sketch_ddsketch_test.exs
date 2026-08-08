@@ -1,6 +1,8 @@
 defmodule ExDataSketch.DDSketchTest do
   use ExUnit.Case, async: true
 
+  doctest ExDataSketch.DDSketch
+
   alias ExDataSketch.DDSketch
 
   # Fibonacci-like dataset: 16 items, min=1.0, max=144.0

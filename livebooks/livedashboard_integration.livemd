@@ -1,0 +1,189 @@
+<!-- livebook:{"app_settings":{"auto_dependency_loading":true}} -->
+
+# LiveDashboard Integration
+
+```elixir
+Mix.install([
+  {:ex_data_sketch, "~> 0.10.0"},
+  {:phoenix_live_dashboard, "~> 0.8"}
+])
+```
+
+## Introduction
+
+Phoenix LiveDashboard provides real-time visibility into running BEAM
+applications. This Livebook shows how to wire ExDataSketch telemetry
+events into LiveDashboard metrics, and how to expose sketch estimates
+via custom LiveDashboard pages.
+
+LiveDashboard is a Phoenix dependency. In a Livebook we demonstrate the
+telemetry wiring patterns that transfer directly to a Phoenix application.
+
+## Section 1: Attach Telemetry Handlers
+
+ExDataSketch emits telemetry events at batch boundaries. Attach handlers
+to route these events into LiveDashboard-compatible metrics:
+
+```elixir
+# Track cardinality estimates from HLL ingest events
+:telemetry.attach(
+  "hll-ingest-handler",
+  [:ex_data_sketch, :sketch, :ingest],
+  fn _name, measurements, metadata, _config ->
+    IO.puts("[INGEST] #{metadata[:sketch_type]}: #{measurements[:duration]}ns")
+  end,
+  nil
+)
+
+# Track persistence operations
+:telemetry.attach(
+  "persistence-handler",
+  [:ex_data_sketch, :persistence, :save],
+  fn _name, measurements, metadata, _config ->
+    IO.puts("[SAVE] #{metadata[:sketch_type]} -> #{metadata[:backend]}:#{metadata[:key]}, #{measurements[:size_bytes]} bytes, #{measurements[:duration]}ns")
+  end,
+  nil
+)
+
+# Trigger an ingest event
+sketch = ExDataSketch.HLL.from_enumerable(1..10_000, p: 14)
+IO.puts("HLL estimate: #{Float.round(ExDataSketch.HLL.estimate(sketch), 0)} (true: 10000)")
+
+:telemetry.detach("hll-ingest-handler")
+:telemetry.detach("persistence-handler")
+```
+
+## Section 2: Phoenix Metrics Telemetry
+
+`ExDataSketch.Telemetry.Metrics.all/0` returns a ready-made
+`Telemetry.Metrics` definition for every ExDataSketch event -- no need to
+hand-write one per event. This is real, executable code, not a pattern to
+copy:
+
+```elixir
+metrics = ExDataSketch.Telemetry.Metrics.all()
+IO.puts("#{length(metrics)} metrics covering #{length(ExDataSketch.Telemetry.all_event_names())} events")
+
+for metric <- Enum.take(metrics, 5) do
+  type = metric.__struct__ |> Module.split() |> List.last()
+  IO.puts("  [#{type}] #{Enum.join(metric.name, ".")}")
+end
+```
+
+In a Phoenix application's `lib/my_app_web/telemetry.ex`, use it directly
+as (part of) the metrics list LiveDashboard reads:
+
+```elixir
+# def metrics do
+#   ExDataSketch.Telemetry.Metrics.all() ++ [
+#     # ... your application's own metrics
+#   ]
+# end
+```
+
+Pass `prefix: "my_app"` to `all/1` to namespace every metric name
+differently (the underlying `:telemetry` event listened to is unaffected):
+
+```elixir
+prefixed = ExDataSketch.Telemetry.Metrics.all(prefix: "my_app")
+[first | _] = prefixed
+IO.puts("Prefixed metric name: #{Enum.join(first.name, ".")}")
+IO.puts("Still listens to the real event: #{inspect(first.event_name)}")
+```
+
+## Section 3: Custom LiveDashboard Page for Sketch Metrics
+
+`ExDataSketch.LiveDashboard.Page` ships a ready-made page (behind the
+optional `:phoenix_live_dashboard` dependency) listing every event and its
+derived metric names -- a static reference page, not a live view of any
+particular running sketch (it has no way to know which
+`ExDataSketch.Server` instances your application started). Wire it into a
+Phoenix router the ordinary way:
+
+```elixir
+# In your router:
+#   live_dashboard "/dashboard", additional_pages: [
+#     sketches: ExDataSketch.LiveDashboard.Page
+#   ]
+
+IO.puts("ExDataSketch.LiveDashboard.Page available: #{Code.ensure_loaded?(ExDataSketch.LiveDashboard.Page)}")
+```
+
+For **live** per-instance estimates (rather than this static reference
+page), build an application-specific LiveDashboard page that calls
+`ExDataSketch.Server.estimate/2` on the `ExDataSketch.Server` or
+`ExDataSketch.Sketches` instances your application actually runs -- see
+`guides/supervised_sketches.md`.
+
+## Section 4: All Available Telemetry Events
+
+```elixir
+# ExDataSketch.Telemetry.all_event_names/0 returns all canonical events
+events = ExDataSketch.Telemetry.all_event_names()
+IO.puts("Total telemetry events: #{length(events)}")
+IO.puts("Events:")
+for event <- events do
+  IO.puts("  #{inspect(event)}")
+end
+```
+
+## Section 5: Event Categories
+
+```elixir
+categories = ExDataSketch.Telemetry.categories()
+IO.puts("Categories: #{inspect(categories)}")
+
+# Per-category events
+IO.puts("\nSketch events:")
+for action <- [:ingest, :merge, :serialize, :deserialize] do
+  IO.puts("  #{inspect(ExDataSketch.Telemetry.event_name(:sketch, action))}")
+end
+
+IO.puts("\nPersistence events:")
+for action <- [:save, :load, :merge, :delete] do
+  IO.puts("  #{inspect(ExDataSketch.Telemetry.event_name(:persistence, action))}")
+end
+
+IO.puts("\nStream events:")
+for action <- [:reduce, :partition_merge] do
+  IO.puts("  #{inspect(ExDataSketch.Telemetry.event_name(:stream, action))}")
+end
+
+IO.puts("\nPipeline events:")
+for action <- [:accumulate, :periodic_flush] do
+  IO.puts("  #{inspect(ExDataSketch.Telemetry.event_name(:pipeline, action))}")
+end
+
+IO.puts("\nWindow events:")
+for action <- [:roll] do
+  IO.puts("  #{inspect(ExDataSketch.Telemetry.event_name(:window, action))}")
+end
+
+IO.puts("\nServer events:")
+for action <- [:snapshot, :restore, :flush, :drop] do
+  IO.puts("  #{inspect(ExDataSketch.Telemetry.event_name(:server, action))}")
+end
+```
+
+## Section 6: Operational Guidance
+
+**Enable/disable telemetry**:
+```elixir
+# Disable all telemetry (zero overhead)
+Application.put_env(:ex_data_sketch, :telemetry_enabled, false)
+
+# Disable only persistence events
+Application.put_env(:ex_data_sketch, :telemetry, persistence: false)
+
+# Re-enable all
+Application.put_env(:ex_data_sketch, :telemetry_enabled, true)
+Application.delete_env(:ex_data_sketch, :telemetry)
+```
+
+**OpenTelemetry bridge**: When `:opentelemetry_api` is available:
+```elixir
+# In application.ex start callback:
+ExDataSketch.Telemetry.OpenTelemetry.setup()
+```
+
+This creates OTEL spans for all ExDataSketch operations.

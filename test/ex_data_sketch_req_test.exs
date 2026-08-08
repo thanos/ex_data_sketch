@@ -2,6 +2,8 @@ defmodule ExDataSketch.REQTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  doctest ExDataSketch.REQ
+
   alias ExDataSketch.REQ
 
   describe "struct" do

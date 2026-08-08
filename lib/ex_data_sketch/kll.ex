@@ -34,6 +34,17 @@ defmodule ExDataSketch.KLL do
       30+P    num_levels * 4          level_sizes (u32 little-endian each)
       30+P+L  sum(level_sizes) * 8    items (f64 little-endian, level 0 first)
 
+  ## Apache DataSketches Interop
+
+  `serialize_datasketches/2` and `deserialize_datasketches/2` implement
+  the Apache DataSketches KLL compact binary format (`KllFloatsSketch`/
+  `KllDoublesSketch`), enabling cross-language compatibility with Java,
+  C++, and Python DataSketches libraries. See
+  `ExDataSketch.DataSketches.KLLSketch` for the binary layout and
+  `guides/apache_interop.md` for the full interop story. Unlike Theta,
+  KLL does not hash its inputs, so this is a full item-level round trip
+  with no hash-equality caveat.
+
   ## Options
 
   - `:k` - accuracy parameter, integer 8..65535 (default: 200).
@@ -47,7 +58,8 @@ defmodule ExDataSketch.KLL do
   merge order, though internal state may differ due to compaction parity.
   """
 
-  alias ExDataSketch.{Backend, Binary, Codec, Errors}
+  alias ExDataSketch.{Backend, Binary, Codec, Errors, Telemetry}
+  alias ExDataSketch.DataSketches.KLLSketch
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -56,6 +68,8 @@ defmodule ExDataSketch.KLL do
         }
 
   defstruct [:state, :opts, :backend]
+
+  @behaviour ExDataSketch.Sketch
 
   @default_k 200
   @min_k 8
@@ -178,7 +192,15 @@ defmodule ExDataSketch.KLL do
   """
   @spec merge_many(Enumerable.t()) :: t()
   def merge_many(sketches) do
-    Enum.reduce(sketches, fn sketch, acc -> merge(acc, sketch) end)
+    sketches_list = Enum.to_list(sketches)
+
+    Telemetry.span(
+      Telemetry.event_name(:sketch, :merge),
+      %{merge_count: length(sketches_list)},
+      %{sketch_type: :kll},
+      :sketch,
+      fn -> Enum.reduce(sketches_list, fn sketch, acc -> merge(acc, sketch) end) end
+    )
   end
 
   @doc """
@@ -359,6 +381,12 @@ defmodule ExDataSketch.KLL do
   The serialized binary includes magic bytes, version, sketch type,
   parameters, and state. See `ExDataSketch.Codec` for format details.
 
+  ## Options
+
+  - `:format` - serialization format: `:v2` (default, EXSK v2 with CRC32C)
+    or `:v1` (legacy EXSK v1, compatible with v0.7.x readers). KLL does
+    not hash its inputs, so v1 has no hash-strategy restriction.
+
   ## Examples
 
       iex> sketch = ExDataSketch.KLL.new()
@@ -367,16 +395,39 @@ defmodule ExDataSketch.KLL do
       iex> byte_size(binary) > 0
       true
 
+      iex> sketch = ExDataSketch.KLL.new()
+      iex> binary = ExDataSketch.KLL.serialize(sketch, format: :v1)
+      iex> <<"EXSK", 1, 4, _rest::binary>> = binary
+
   """
-  @spec serialize(t()) :: binary()
-  def serialize(%__MODULE__{state: state, opts: opts}) do
+  @spec serialize(t(), keyword()) :: binary()
+  def serialize(%__MODULE__{state: state, opts: opts}, serialize_opts \\ []) do
+    format = Keyword.get(serialize_opts, :format, :v2)
+    start_time = System.monotonic_time()
     k = Keyword.fetch!(opts, :k)
     params_bin = <<k::unsigned-little-32>>
 
-    Binary.encode(
-      Binary.metadata_from_opts(Codec.sketch_id_kll(), 1, opts),
-      Binary.build_payload(params_bin, state)
-    )
+    binary =
+      case format do
+        :v2 ->
+          Binary.encode(
+            Binary.metadata_from_opts(Codec.sketch_id_kll(), 1, opts),
+            Binary.build_payload(params_bin, state)
+          )
+
+        :v1 ->
+          Codec.encode(Codec.sketch_id_kll(), 1, params_bin, state)
+      end
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:sketch, :serialize),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: :kll},
+        :sketch
+      )
+
+    binary
   end
 
   @doc """
@@ -392,63 +443,98 @@ defmodule ExDataSketch.KLL do
   """
   @spec deserialize(binary()) :: {:ok, t()} | {:error, Exception.t()}
   def deserialize(binary) when is_binary(binary) do
-    with {:ok, decoded} <- Binary.decode(binary),
-         :ok <- validate_sketch_id(decoded.sketch_id),
-         {:ok, opts} <- decode_params(decoded.params) do
-      backend = Backend.default()
+    start_time = System.monotonic_time()
 
-      {:ok,
-       %__MODULE__{
-         state: decoded.state,
-         opts: opts,
-         backend: backend
-       }}
+    result =
+      with {:ok, decoded} <- Binary.decode(binary),
+           :ok <- validate_sketch_id(decoded.sketch_id),
+           {:ok, opts} <- decode_params(decoded.params) do
+        backend = Backend.default()
+
+        {:ok,
+         %__MODULE__{
+           state: decoded.state,
+           opts: opts,
+           backend: backend
+         }}
+      end
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:sketch, :deserialize),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: :kll},
+        :sketch
+      )
+
+    result
+  end
+
+  @doc """
+  Serializes the sketch to the Apache DataSketches KLL compact binary format.
+
+  Enables cross-language interoperability with Java, C++, and Python
+  DataSketches libraries. See `ExDataSketch.DataSketches.KLLSketch` for
+  the binary layout.
+
+  ## Options
+
+  - `:variant` - `:float` or `:double` (default: `:double`). Apache's
+    wire format doesn't self-describe item width, so the variant must be
+    chosen explicitly -- see `ExDataSketch.DataSketches.KLLSketch`.
+
+  ## Examples
+
+      iex> sketch = ExDataSketch.KLL.new(k: 200) |> ExDataSketch.KLL.update_many(1..100)
+      iex> binary = ExDataSketch.KLL.serialize_datasketches(sketch)
+      iex> {:ok, restored} = ExDataSketch.KLL.deserialize_datasketches(binary)
+      iex> ExDataSketch.KLL.quantile(restored, 0.5) == ExDataSketch.KLL.quantile(sketch, 0.5)
+      true
+
+  """
+  @spec serialize_datasketches(t(), keyword()) :: binary()
+  def serialize_datasketches(%__MODULE__{} = sketch, opts \\ []) do
+    KLLSketch.encode(sketch, opts)
+  end
+
+  @doc """
+  Deserializes an Apache DataSketches KLL compact binary into a KLL sketch.
+
+  ## Options
+
+  - `:variant` - `:float` or `:double` (default: `:double`). Must match
+    the variant the binary was produced as -- see
+    `ExDataSketch.DataSketches.KLLSketch`.
+
+  ## Examples
+
+      iex> sketch = ExDataSketch.KLL.new(k: 200) |> ExDataSketch.KLL.update_many(1..100)
+      iex> binary = ExDataSketch.KLL.serialize_datasketches(sketch)
+      iex> {:ok, restored} = ExDataSketch.KLL.deserialize_datasketches(binary)
+      iex> ExDataSketch.KLL.count(restored)
+      100
+
+  """
+  @spec deserialize_datasketches(binary(), keyword()) :: {:ok, t()} | {:error, Exception.t()}
+  def deserialize_datasketches(binary, opts \\ []) when is_binary(binary) do
+    case KLLSketch.decode(binary, opts) do
+      {:ok, decoded} ->
+        backend = Backend.default()
+
+        state =
+          backend.kll_from_components(
+            decoded.k,
+            decoded.n,
+            decoded.min_val,
+            decoded.max_val,
+            decoded.levels
+          )
+
+        {:ok, %__MODULE__{state: state, opts: [k: decoded.k], backend: backend}}
+
+      error ->
+        error
     end
-  end
-
-  @doc """
-  Serializes the sketch to Apache DataSketches KLL format.
-
-  Not implemented. Apache DataSketches KLL interop is planned for a future
-  release. For KLL serialization, use `serialize/1` (ExDataSketch-native
-  EXSK format).
-
-  ## Examples
-
-      iex> try do
-      ...>   sketch = %ExDataSketch.KLL{state: <<>>, opts: [k: 200], backend: nil}
-      ...>   ExDataSketch.KLL.serialize_datasketches(sketch)
-      ...> rescue
-      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
-      ...> end
-      "ExDataSketch.KLL.serialize_datasketches is not yet implemented"
-
-  """
-  @spec serialize_datasketches(t()) :: binary()
-  @dialyzer {:nowarn_function, serialize_datasketches: 1}
-  def serialize_datasketches(%__MODULE__{}) do
-    Errors.not_implemented!(__MODULE__, "serialize_datasketches")
-  end
-
-  @doc """
-  Deserializes an Apache DataSketches KLL binary.
-
-  Not implemented. See `serialize_datasketches/1` for details.
-
-  ## Examples
-
-      iex> try do
-      ...>   ExDataSketch.KLL.deserialize_datasketches(<<>>)
-      ...> rescue
-      ...>   e in ExDataSketch.Errors.NotImplementedError -> e.message
-      ...> end
-      "ExDataSketch.KLL.deserialize_datasketches is not yet implemented"
-
-  """
-  @spec deserialize_datasketches(binary()) :: {:ok, t()} | {:error, Exception.t()}
-  @dialyzer {:nowarn_function, deserialize_datasketches: 1}
-  def deserialize_datasketches(_binary) do
-    Errors.not_implemented!(__MODULE__, "deserialize_datasketches")
   end
 
   @doc """
@@ -469,7 +555,14 @@ defmodule ExDataSketch.KLL do
   """
   @spec from_enumerable(Enumerable.t(), keyword()) :: t()
   def from_enumerable(enumerable, opts \\ []) do
-    new(opts) |> update_many(enumerable)
+    Telemetry.span_with_result(
+      Telemetry.event_name(:sketch, :ingest),
+      %{},
+      %{sketch_type: :kll},
+      :sketch,
+      fn -> new(opts) |> update_many(enumerable) end,
+      fn sketch -> %{size_bytes: size_bytes(sketch)} end
+    )
   end
 
   @doc """
@@ -502,6 +595,35 @@ defmodule ExDataSketch.KLL do
   @spec merger(keyword()) :: (t(), t() -> t())
   def merger(_opts \\ []) do
     fn a, b -> merge(a, b) end
+  end
+
+  @doc """
+  Returns the set of operation names supported by `ExDataSketch.KLL`.
+
+  See `ExDataSketch.Sketch` for the shared capability vocabulary.
+
+  ## Examples
+
+      iex> ExDataSketch.KLL.capabilities() |> MapSet.member?(:count)
+      true
+
+      iex> ExDataSketch.KLL.capabilities() |> MapSet.member?(:no_such_operation)
+      false
+
+  """
+  @spec capabilities() :: ExDataSketch.Sketch.capabilities()
+  @dialyzer {:no_opaque, capabilities: 0}
+  def capabilities do
+    MapSet.new([
+      :new,
+      :update,
+      :update_many,
+      :merge,
+      :merge_many,
+      :count,
+      :serialize,
+      :deserialize
+    ])
   end
 
   # -- Private --

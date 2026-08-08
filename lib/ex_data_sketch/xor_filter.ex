@@ -28,6 +28,11 @@ defmodule ExDataSketch.XorFilter do
   `merge/2`. The struct has no meaningful empty state. Use `build/2` to construct
   a filter from a complete set of items.
 
+  It implements `ExDataSketch.Sketch`, but `new/1`, `update/2`, `update_many/2`,
+  and `merge/2` are all `@optional_callbacks` that this module deliberately
+  does not implement for the same reason -- see `ExDataSketch.new/2`, which
+  raises a clear error directing callers to `build/2` for this family.
+
   ## Parameters
 
   - `:fingerprint_bits` -- 8 (default, Xor8) or 16 (Xor16).
@@ -56,6 +61,8 @@ defmodule ExDataSketch.XorFilter do
         }
 
   defstruct [:state, :opts, :backend]
+
+  @behaviour ExDataSketch.Sketch
 
   @default_fingerprint_bits 8
   @default_seed 0
@@ -97,12 +104,19 @@ defmodule ExDataSketch.XorFilter do
         seed: seed
       ] ++ if(hash_fn, do: [hash_fn: hash_fn], else: [])
 
-    hashes =
-      items
-      |> Enum.map(&hash_item(&1, clean_opts))
-      |> Enum.uniq()
+    use_raw =
+      backend == Backend.Rust and hash_fn == nil and
+        Keyword.get(opts, :hash_strategy) != :phash2
 
-    case backend.xor_build(hashes, clean_opts) do
+    result =
+      if use_raw do
+        Backend.Rust.xor_build_raw(Enum.to_list(items), clean_opts)
+      else
+        hashes = items |> Enum.map(&hash_item(&1, clean_opts)) |> Enum.uniq()
+        backend.xor_build(hashes, clean_opts)
+      end
+
+    case result do
       {:ok, state} ->
         {:ok, %__MODULE__{state: state, opts: clean_opts, backend: backend}}
 
@@ -149,6 +163,12 @@ defmodule ExDataSketch.XorFilter do
   @doc """
   Serializes the filter to the EXSK binary format.
 
+  ## Options
+
+  - `:format` - serialization format: `:v2` (default, EXSK v2 with CRC32C)
+    or `:v1` (legacy EXSK v1, compatible with v0.7.x readers). The v1
+    format is only valid for filters using `:phash2` hash strategy.
+
   ## Examples
 
       iex> {:ok, filter} = ExDataSketch.XorFilter.build(["a"])
@@ -157,19 +177,36 @@ defmodule ExDataSketch.XorFilter do
       iex> byte_size(binary) > 0
       true
 
+      iex> {:ok, filter} = ExDataSketch.XorFilter.build(["a"], hash_strategy: :phash2)
+      iex> binary = ExDataSketch.XorFilter.serialize(filter, format: :v1)
+      iex> <<"EXSK", 1, 11, _rest::binary>> = binary
+
   """
-  @spec serialize(t()) :: binary()
-  def serialize(%__MODULE__{state: state, opts: opts}) do
+  @spec serialize(t(), keyword()) :: binary()
+  def serialize(%__MODULE__{state: state, opts: opts}, serialize_opts \\ []) do
+    format = Keyword.get(serialize_opts, :format, :v2)
     fp_bits = Keyword.fetch!(opts, :fingerprint_bits)
     seed = Keyword.get(opts, :seed, @default_seed)
     variant = if fp_bits == 16, do: 1, else: 0
 
     params_bin = <<fp_bits::unsigned-8, variant::unsigned-8, seed::unsigned-little-32>>
 
-    Binary.encode(
-      Binary.metadata_from_opts(Codec.sketch_id_xor(), 1, opts),
-      Binary.build_payload(params_bin, state)
-    )
+    case format do
+      :v2 ->
+        Binary.encode(
+          Binary.metadata_from_opts(Codec.sketch_id_xor(), 1, opts),
+          Binary.build_payload(params_bin, state)
+        )
+
+      :v1 ->
+        unless Keyword.get(opts, :hash_strategy, :phash2) == :phash2 do
+          raise ArgumentError,
+                "v1 serialization requires :phash2 hash strategy, " <>
+                  "got: #{inspect(Keyword.get(opts, :hash_strategy))}"
+        end
+
+        Codec.encode(Codec.sketch_id_xor(), 1, params_bin, state)
+    end
   end
 
   @doc """

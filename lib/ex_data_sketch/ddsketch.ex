@@ -65,7 +65,7 @@ defmodule ExDataSketch.DDSketch do
   have identical `alpha` parameters to merge.
   """
 
-  alias ExDataSketch.{Backend, Binary, Codec, Errors}
+  alias ExDataSketch.{Backend, Binary, Codec, Errors, Telemetry}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -74,6 +74,8 @@ defmodule ExDataSketch.DDSketch do
         }
 
   defstruct [:state, :opts, :backend]
+
+  @behaviour ExDataSketch.Sketch
 
   @default_alpha 0.01
 
@@ -191,7 +193,15 @@ defmodule ExDataSketch.DDSketch do
   """
   @spec merge_many(Enumerable.t()) :: t()
   def merge_many(sketches) do
-    Enum.reduce(sketches, fn sketch, acc -> merge(acc, sketch) end)
+    sketches_list = Enum.to_list(sketches)
+
+    Telemetry.span(
+      Telemetry.event_name(:sketch, :merge),
+      %{merge_count: length(sketches_list)},
+      %{sketch_type: :ddsketch},
+      :sketch,
+      fn -> Enum.reduce(sketches_list, fn sketch, acc -> merge(acc, sketch) end) end
+    )
   end
 
   @doc """
@@ -320,6 +330,12 @@ defmodule ExDataSketch.DDSketch do
   The serialized binary includes magic bytes, version, sketch type,
   parameters, and state. See `ExDataSketch.Codec` for format details.
 
+  ## Options
+
+  - `:format` - serialization format: `:v2` (default, EXSK v2 with CRC32C)
+    or `:v1` (legacy EXSK v1, compatible with v0.7.x readers). DDSketch
+    does not hash its inputs, so v1 has no hash-strategy restriction.
+
   ## Examples
 
       iex> sketch = ExDataSketch.DDSketch.new()
@@ -328,16 +344,39 @@ defmodule ExDataSketch.DDSketch do
       iex> byte_size(binary) > 0
       true
 
+      iex> sketch = ExDataSketch.DDSketch.new()
+      iex> binary = ExDataSketch.DDSketch.serialize(sketch, format: :v1)
+      iex> <<"EXSK", 1, 5, _rest::binary>> = binary
+
   """
-  @spec serialize(t()) :: binary()
-  def serialize(%__MODULE__{state: state, opts: opts}) do
+  @spec serialize(t(), keyword()) :: binary()
+  def serialize(%__MODULE__{state: state, opts: opts}, serialize_opts \\ []) do
+    format = Keyword.get(serialize_opts, :format, :v2)
+    start_time = System.monotonic_time()
     alpha = Keyword.fetch!(opts, :alpha)
     params_bin = <<alpha::float-little-64>>
 
-    Binary.encode(
-      Binary.metadata_from_opts(Codec.sketch_id_ddsketch(), 1, opts),
-      Binary.build_payload(params_bin, state)
-    )
+    binary =
+      case format do
+        :v2 ->
+          Binary.encode(
+            Binary.metadata_from_opts(Codec.sketch_id_ddsketch(), 1, opts),
+            Binary.build_payload(params_bin, state)
+          )
+
+        :v1 ->
+          Codec.encode(Codec.sketch_id_ddsketch(), 1, params_bin, state)
+      end
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:sketch, :serialize),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: :ddsketch},
+        :sketch
+      )
+
+    binary
   end
 
   @doc """
@@ -353,18 +392,31 @@ defmodule ExDataSketch.DDSketch do
   """
   @spec deserialize(binary()) :: {:ok, t()} | {:error, Exception.t()}
   def deserialize(binary) when is_binary(binary) do
-    with {:ok, decoded} <- Binary.decode(binary),
-         :ok <- validate_sketch_id(decoded.sketch_id),
-         {:ok, opts} <- decode_params(decoded.params) do
-      backend = Backend.default()
+    start_time = System.monotonic_time()
 
-      {:ok,
-       %__MODULE__{
-         state: decoded.state,
-         opts: opts,
-         backend: backend
-       }}
-    end
+    result =
+      with {:ok, decoded} <- Binary.decode(binary),
+           :ok <- validate_sketch_id(decoded.sketch_id),
+           {:ok, opts} <- decode_params(decoded.params) do
+        backend = Backend.default()
+
+        {:ok,
+         %__MODULE__{
+           state: decoded.state,
+           opts: opts,
+           backend: backend
+         }}
+      end
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:sketch, :deserialize),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: :ddsketch},
+        :sketch
+      )
+
+    result
   end
 
   @doc """
@@ -385,7 +437,14 @@ defmodule ExDataSketch.DDSketch do
   """
   @spec from_enumerable(Enumerable.t(), keyword()) :: t()
   def from_enumerable(enumerable, opts \\ []) do
-    new(opts) |> update_many(enumerable)
+    Telemetry.span_with_result(
+      Telemetry.event_name(:sketch, :ingest),
+      %{},
+      %{sketch_type: :ddsketch},
+      :sketch,
+      fn -> new(opts) |> update_many(enumerable) end,
+      fn sketch -> %{size_bytes: size_bytes(sketch)} end
+    )
   end
 
   @doc """
@@ -418,6 +477,35 @@ defmodule ExDataSketch.DDSketch do
   @spec merger(keyword()) :: (t(), t() -> t())
   def merger(_opts \\ []) do
     fn a, b -> merge(a, b) end
+  end
+
+  @doc """
+  Returns the set of operation names supported by `ExDataSketch.DDSketch`.
+
+  See `ExDataSketch.Sketch` for the shared capability vocabulary.
+
+  ## Examples
+
+      iex> ExDataSketch.DDSketch.capabilities() |> MapSet.member?(:count)
+      true
+
+      iex> ExDataSketch.DDSketch.capabilities() |> MapSet.member?(:no_such_operation)
+      false
+
+  """
+  @spec capabilities() :: ExDataSketch.Sketch.capabilities()
+  @dialyzer {:no_opaque, capabilities: 0}
+  def capabilities do
+    MapSet.new([
+      :new,
+      :update,
+      :update_many,
+      :merge,
+      :merge_many,
+      :count,
+      :serialize,
+      :deserialize
+    ])
   end
 
   # -- Private --

@@ -35,11 +35,18 @@ defmodule ExDataSketch.FilterChain do
 
   ## Binary Format (FCN1)
 
-  FilterChain serializes each stage independently using its own `serialize/1`,
-  wrapped in a chain manifest with magic bytes "FCN1".
+  FilterChain serializes each stage independently using its own `serialize/1`
+  (always the default `:v2` format -- FilterChain does not currently thread
+  a `:format` option through to its stages), wrapped in a chain manifest
+  with magic bytes "FCN1". This is a bespoke container format, not an
+  `ExDataSketch.Codec`/EXSK frame -- it has no `Codec.sketch_id` of its
+  own. The `format: :v1` escape hatch available on every other sketch
+  family (opt-in legacy EXSK v1 output for v0.7.x readers, see e.g.
+  `ExDataSketch.Bloom.serialize/2`) therefore does not apply to
+  `FilterChain.serialize/1` itself.
   """
 
-  alias ExDataSketch.{Bloom, CQF, Cuckoo, Errors, IBLT, Quotient, XorFilter}
+  alias ExDataSketch.{Bloom, CQF, Cuckoo, Errors, IBLT, Quotient, Sketch, XorFilter}
 
   @type t :: %__MODULE__{
           stages: [struct()],
@@ -47,6 +54,8 @@ defmodule ExDataSketch.FilterChain do
         }
 
   defstruct stages: [], adjuncts: []
+
+  @behaviour ExDataSketch.Sketch
 
   @fcn1_magic "FCN1"
   @fcn1_version 1
@@ -133,6 +142,53 @@ defmodule ExDataSketch.FilterChain do
   @spec put(t(), term()) :: {:ok, t()} | {:error, :full}
   def put(%__MODULE__{stages: stages} = chain, item) do
     put_stages(stages, item, [], chain)
+  end
+
+  @doc """
+  Inserts an item into all query stages that support `:put`, raising if a
+  stage is full.
+
+  Added so `ExDataSketch.FilterChain` satisfies the `ExDataSketch.Sketch`
+  behaviour's generic `update/2` callback, which requires a bare-struct
+  return. `put/2` (returning `{:ok, chain} | {:error, :full}`) remains the
+  family-idiomatic name for callers who need to detect a full stage.
+
+  ## Examples
+
+      iex> chain = ExDataSketch.FilterChain.new()
+      iex> chain = ExDataSketch.FilterChain.add_stage(chain, ExDataSketch.Bloom.new(capacity: 100))
+      iex> chain = ExDataSketch.FilterChain.update(chain, "hello")
+      iex> ExDataSketch.FilterChain.member?(chain, "hello")
+      true
+
+  """
+  @spec update(t(), term()) :: t()
+  def update(%__MODULE__{} = chain, item) do
+    case put(chain, item) do
+      {:ok, updated} -> updated
+      {:error, :full} -> raise "FilterChain stage is full"
+    end
+  end
+
+  @doc """
+  Inserts every item in an enumerable via `update/2`, raising if a stage
+  fills up partway through.
+
+  Added so `ExDataSketch.FilterChain` satisfies the `ExDataSketch.Sketch`
+  behaviour's generic `update_many/2` callback.
+
+  ## Examples
+
+      iex> chain = ExDataSketch.FilterChain.new()
+      iex> chain = ExDataSketch.FilterChain.add_stage(chain, ExDataSketch.Bloom.new(capacity: 100))
+      iex> chain = ExDataSketch.FilterChain.update_many(chain, ["a", "b", "c"])
+      iex> ExDataSketch.FilterChain.member?(chain, "a")
+      true
+
+  """
+  @spec update_many(t(), Enumerable.t()) :: t()
+  def update_many(%__MODULE__{} = chain, items) do
+    Enum.reduce(items, chain, fn item, acc -> update(acc, item) end)
   end
 
   @doc """
@@ -381,7 +437,7 @@ defmodule ExDataSketch.FilterChain do
   defp supports_capability?(stage, capability) do
     module = stage.__struct__
 
-    if function_exported?(module, :capabilities, 0) do
+    if Sketch.implemented?(module) do
       MapSet.member?(module.capabilities(), capability)
     else
       false
@@ -411,7 +467,7 @@ defmodule ExDataSketch.FilterChain do
 
     module = filter.__struct__
 
-    if function_exported?(module, :capabilities, 0) do
+    if Sketch.implemented?(module) do
       unless MapSet.member?(module.capabilities(), :member?) do
         raise Errors.InvalidChainCompositionError,
           reason: "#{inspect(module)} does not support :member? and cannot be a query stage"

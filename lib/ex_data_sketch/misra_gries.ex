@@ -57,7 +57,7 @@ defmodule ExDataSketch.MisraGries do
   `k` parameter. Count (`n`) is always exactly additive.
   """
 
-  alias ExDataSketch.{Backend, Binary, Codec, Errors}
+  alias ExDataSketch.{Backend, Binary, Codec, Errors, Telemetry}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -66,6 +66,8 @@ defmodule ExDataSketch.MisraGries do
         }
 
   defstruct [:state, :opts, :backend]
+
+  @behaviour ExDataSketch.Sketch
 
   @default_k 10
 
@@ -176,7 +178,15 @@ defmodule ExDataSketch.MisraGries do
   """
   @spec merge_many(Enumerable.t()) :: t()
   def merge_many(sketches) do
-    Enum.reduce(sketches, fn sketch, acc -> merge(acc, sketch) end)
+    sketches_list = Enum.to_list(sketches)
+
+    Telemetry.span(
+      Telemetry.event_name(:sketch, :merge),
+      %{merge_count: length(sketches_list)},
+      %{sketch_type: :misra_gries},
+      :sketch,
+      fn -> Enum.reduce(sketches_list, fn sketch, acc -> merge(acc, sketch) end) end
+    )
   end
 
   @doc """
@@ -300,6 +310,12 @@ defmodule ExDataSketch.MisraGries do
   @doc """
   Serializes the sketch to the ExDataSketch-native EXSK binary format.
 
+  ## Options
+
+  - `:format` - serialization format: `:v2` (default, EXSK v2 with CRC32C)
+    or `:v1` (legacy EXSK v1, compatible with v0.7.x readers). MisraGries
+    does not have a hash-strategy option, so v1 has no restriction.
+
   ## Examples
 
       iex> sketch = ExDataSketch.MisraGries.new()
@@ -308,18 +324,41 @@ defmodule ExDataSketch.MisraGries do
       iex> byte_size(binary) > 0
       true
 
+      iex> sketch = ExDataSketch.MisraGries.new()
+      iex> binary = ExDataSketch.MisraGries.serialize(sketch, format: :v1)
+      iex> <<"EXSK", 1, 14, _rest::binary>> = binary
+
   """
-  @spec serialize(t()) :: binary()
-  def serialize(%__MODULE__{state: state, opts: opts}) do
+  @spec serialize(t(), keyword()) :: binary()
+  def serialize(%__MODULE__{state: state, opts: opts}, serialize_opts \\ []) do
+    format = Keyword.get(serialize_opts, :format, :v2)
+    start_time = System.monotonic_time()
     k = Keyword.fetch!(opts, :k)
     key_encoding = Keyword.get(opts, :key_encoding, :binary)
     enc_byte = encode_key_encoding(key_encoding)
     params_bin = <<k::unsigned-little-32, enc_byte::unsigned-8>>
 
-    Binary.encode(
-      Binary.metadata_from_opts(Codec.sketch_id_mg(), 1, opts),
-      Binary.build_payload(params_bin, state)
-    )
+    binary =
+      case format do
+        :v2 ->
+          Binary.encode(
+            Binary.metadata_from_opts(Codec.sketch_id_mg(), 1, opts),
+            Binary.build_payload(params_bin, state)
+          )
+
+        :v1 ->
+          Codec.encode(Codec.sketch_id_mg(), 1, params_bin, state)
+      end
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:sketch, :serialize),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: :misra_gries},
+        :sketch
+      )
+
+    binary
   end
 
   @doc """
@@ -335,19 +374,32 @@ defmodule ExDataSketch.MisraGries do
   """
   @spec deserialize(binary()) :: {:ok, t()} | {:error, Exception.t()}
   def deserialize(binary) when is_binary(binary) do
-    with {:ok, decoded} <- Binary.decode(binary),
-         :ok <- validate_sketch_id(decoded.sketch_id),
-         {:ok, opts} <- decode_params(decoded.params),
-         :ok <- validate_state_header(decoded.state) do
-      backend = Backend.default()
+    start_time = System.monotonic_time()
 
-      {:ok,
-       %__MODULE__{
-         state: decoded.state,
-         opts: opts,
-         backend: backend
-       }}
-    end
+    result =
+      with {:ok, decoded} <- Binary.decode(binary),
+           :ok <- validate_sketch_id(decoded.sketch_id),
+           {:ok, opts} <- decode_params(decoded.params),
+           :ok <- validate_state_header(decoded.state) do
+        backend = Backend.default()
+
+        {:ok,
+         %__MODULE__{
+           state: decoded.state,
+           opts: opts,
+           backend: backend
+         }}
+      end
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:sketch, :deserialize),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: :misra_gries},
+        :sketch
+      )
+
+    result
   end
 
   @doc """
@@ -362,7 +414,14 @@ defmodule ExDataSketch.MisraGries do
   """
   @spec from_enumerable(Enumerable.t(), keyword()) :: t()
   def from_enumerable(enumerable, opts \\ []) do
-    new(opts) |> update_many(enumerable)
+    Telemetry.span_with_result(
+      Telemetry.event_name(:sketch, :ingest),
+      %{},
+      %{sketch_type: :misra_gries},
+      :sketch,
+      fn -> new(opts) |> update_many(enumerable) end,
+      fn sketch -> %{size_bytes: size_bytes(sketch)} end
+    )
   end
 
   @doc """
@@ -391,6 +450,36 @@ defmodule ExDataSketch.MisraGries do
   @spec merger(keyword()) :: (t(), t() -> t())
   def merger(_opts \\ []) do
     fn a, b -> merge(a, b) end
+  end
+
+  @doc """
+  Returns the set of operation names supported by `ExDataSketch.MisraGries`.
+
+  See `ExDataSketch.Sketch` for the shared capability vocabulary.
+
+  ## Examples
+
+      iex> ExDataSketch.MisraGries.capabilities() |> MapSet.member?(:estimate)
+      true
+
+      iex> ExDataSketch.MisraGries.capabilities() |> MapSet.member?(:no_such_operation)
+      false
+
+  """
+  @spec capabilities() :: ExDataSketch.Sketch.capabilities()
+  @dialyzer {:no_opaque, capabilities: 0}
+  def capabilities do
+    MapSet.new([
+      :new,
+      :update,
+      :update_many,
+      :merge,
+      :merge_many,
+      :count,
+      :estimate,
+      :serialize,
+      :deserialize
+    ])
   end
 
   # -- Private --

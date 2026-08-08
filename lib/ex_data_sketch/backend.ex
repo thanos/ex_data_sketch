@@ -126,6 +126,15 @@ defmodule ExDataSketch.Backend do
   @doc "Return the PMF at the given split points from KLL state."
   @callback kll_pmf(state_bin(), [float()], opts()) :: [float()] | nil
 
+  @doc "Build KLL state binary from raw components (k, n, min, max, levels list-of-lists, level 0 first)."
+  @callback kll_from_components(
+              pos_integer(),
+              non_neg_integer(),
+              float() | :nan,
+              float() | :nan,
+              [[float()]]
+            ) :: state_bin()
+
   # -- DDSketch callbacks --
 
   @doc "Create a new DDSketch state binary with the given options."

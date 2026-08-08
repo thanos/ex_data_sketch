@@ -49,23 +49,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - elixir: "1.16"
-            otp: "26"
-          - elixir: "1.17"
-            otp: "27"
           - elixir: "1.18"
             otp: "27"
           - elixir: "1.18"
             otp: "28"
           - elixir: "1.19"
             otp: "28"
-          - elixir: "1.20.0-rc.1"
+          - elixir: "1.20.2"
             otp: "28"
-            experimental: true
-          - elixir: "1.20.0-rc.1"
-            otp: "29.0-rc1"
-            experimental: true
-    continue-on-error: ${{ matrix.experimental || false }}
+          - elixir: "1.20.2"
+            otp: "29"
     steps:
       - uses: actions/checkout@v4
 
@@ -97,24 +90,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - elixir: "1.16"
-            otp: "26"
-          - elixir: "1.17"
-            otp: "27"
           - elixir: "1.18"
             otp: "27"
           - elixir: "1.18"
             otp: "28"
           - elixir: "1.19"
             otp: "28"
-            coverage: true
-          - elixir: "1.20.0-rc.1"
+          - elixir: "1.20.2"
             otp: "28"
-            experimental: true
-          - elixir: "1.20.0-rc.1"
-            otp: "29.0-rc1"
-            experimental: true
-    continue-on-error: ${{ matrix.experimental || false }}
+          - elixir: "1.20.2"
+            otp: "29"
+            coverage: true
     steps:
       - uses: actions/checkout@v4
 
@@ -149,6 +135,10 @@ jobs:
       - name: Check coverage threshold
         if: ${{ matrix.coverage }}
         run: mix run ci/compare_coverage.exs
+
+      - name: Check roadmap consistency
+        if: ${{ matrix.coverage }}
+        run: mix run ci/check_roadmap.exs
 
       - name: Upload coverage artifact
         if: ${{ matrix.coverage }}
@@ -194,9 +184,17 @@ jobs:
       - run: mix deps.get
       - run: mkdir -p priv/plts
 
-      - name: Remove stale PLT on cache miss
-        if: steps.plt-cache.outputs.cache-hit != 'true'
-        run: rm -f priv/plts/dialyzer.plt
+      - name: Remove stale or corrupt PLT
+        # dialyxir tracks freshness via dialyzer.plt.hash, matched against
+        # mix.lock. If the cache restored the hash file but not the (much
+        # larger) .plt file itself -- a partial cache hit, or an interrupted
+        # save from a previous run -- dialyxir trusts the hash match and
+        # tries to open the missing .plt directly, crashing with
+        # "Could not read PLT file: no_such_file" instead of rebuilding.
+        # Clearing the hash whenever the .plt itself is absent forces a
+        # clean rebuild in that case, regardless of the cache-hit status.
+        if: steps.plt-cache.outputs.cache-hit != 'true' || hashFiles('priv/plts/dialyzer.plt') == ''
+        run: rm -f priv/plts/dialyzer.plt priv/plts/dialyzer.plt.hash
 
       - run: mix dialyzer
 
@@ -211,8 +209,8 @@ jobs:
 
       - uses: erlef/setup-beam@v1
         with:
-          elixir-version: "1.17"
-          otp-version: "27"
+          elixir-version: "1.20.2"
+          otp-version: "29"
 
       - name: Cache deps
         uses: actions/cache@v4
@@ -224,8 +222,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: _build
-          key: build-dev-bench-1.17-27-${{ hashFiles('mix.lock') }}
-          restore-keys: build-dev-bench-1.17-27-
+          key: build-dev-bench-1.20.2-29-${{ hashFiles('mix.lock') }}
+          restore-keys: build-dev-bench-1.20.2-29-
 
       - run: mix deps.get
 
@@ -262,8 +260,8 @@ jobs:
 
       - uses: erlef/setup-beam@v1
         with:
-          elixir-version: "1.19"
-          otp-version: "28"
+          elixir-version: "1.20.2"
+          otp-version: "29"
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -277,8 +275,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: _build
-          key: build-test-rust-1.19-28-${{ hashFiles('mix.lock') }}-${{ hashFiles('native/ex_data_sketch_nif/Cargo.lock') }}
-          restore-keys: build-test-rust-1.19-28-
+          key: build-test-rust-1.20.2-29-${{ hashFiles('mix.lock') }}-${{ hashFiles('native/ex_data_sketch_nif/Cargo.lock') }}
+          restore-keys: build-test-rust-1.20.2-29-
 
       - name: Cache Rust target
         uses: actions/cache@v4
@@ -308,8 +306,8 @@ jobs:
 
       - uses: erlef/setup-beam@v1
         with:
-          elixir-version: "1.19"
-          otp-version: "28"
+          elixir-version: "1.20.2"
+          otp-version: "29"
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -323,8 +321,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: _build
-          key: build-dev-rust-1.19-28-${{ hashFiles('mix.lock') }}-${{ hashFiles('native/ex_data_sketch_nif/Cargo.lock') }}
-          restore-keys: build-dev-rust-1.19-28-
+          key: build-dev-rust-1.20.2-29-${{ hashFiles('mix.lock') }}-${{ hashFiles('native/ex_data_sketch_nif/Cargo.lock') }}
+          restore-keys: build-dev-rust-1.20.2-29-
 
       - name: Cache Rust target
         uses: actions/cache@v4

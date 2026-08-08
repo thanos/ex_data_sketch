@@ -2,6 +2,8 @@ defmodule ExDataSketch.IBLTTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  doctest ExDataSketch.IBLT
+
   alias ExDataSketch.IBLT
 
   # -- new/1 --

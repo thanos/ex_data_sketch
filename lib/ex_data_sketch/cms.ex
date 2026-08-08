@@ -44,6 +44,9 @@ defmodule ExDataSketch.CMS do
   - `:depth` - number of rows (hash functions), pos_integer (default: 5).
   - `:counter_width` - bits per counter, 32 or 64 (default: 32).
   - `:backend` - backend module (default: `ExDataSketch.Backend.Pure`).
+  - `:update_many_chunk_size` - chunk size for `update_many/2` internal
+    batching (default: 10000). Must be set at creation time; cannot be
+    overridden on a per-call basis.
 
   ## Overflow Policy
 
@@ -58,7 +61,7 @@ defmodule ExDataSketch.CMS do
   same result, making CMS safe for parallel and distributed aggregation.
   """
 
-  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash}
+  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash, Telemetry}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -67,6 +70,8 @@ defmodule ExDataSketch.CMS do
         }
 
   defstruct [:state, :opts, :backend]
+
+  @behaviour ExDataSketch.Sketch
 
   @default_width 2048
   @default_depth 5
@@ -110,7 +115,11 @@ defmodule ExDataSketch.CMS do
     clean_opts =
       [width: width, depth: depth, counter_width: counter_width, hash_strategy: hash_strategy] ++
         if(hash_fn, do: [hash_fn: hash_fn], else: []) ++
-        if(seed, do: [seed: seed], else: [])
+        if(seed, do: [seed: seed], else: []) ++
+        if(Keyword.has_key?(opts, :update_many_chunk_size),
+          do: [update_many_chunk_size: Keyword.fetch!(opts, :update_many_chunk_size)],
+          else: []
+        )
 
     state = backend.cms_new(clean_opts)
     %__MODULE__{state: state, opts: clean_opts, backend: backend}
@@ -153,6 +162,9 @@ defmodule ExDataSketch.CMS do
   Accepts an enumerable of items (each with implicit increment of 1) or
   an enumerable of `{item, increment}` tuples.
 
+  The internal batch size is controlled by `:update_many_chunk_size`,
+  which must be set at `new/1` time and cannot be changed per call.
+
   ## Examples
 
       iex> sketch = ExDataSketch.CMS.new() |> ExDataSketch.CMS.update_many(["a", "b", "a"])
@@ -160,17 +172,19 @@ defmodule ExDataSketch.CMS do
       2
 
   """
-  @update_many_chunk_size 10_000
+  @default_update_many_chunk_size 10_000
 
   @spec update_many(t(), Enumerable.t()) :: t()
   def update_many(%__MODULE__{state: state, opts: opts, backend: backend} = sketch, items) do
+    chunk_size = Keyword.get(opts, :update_many_chunk_size, @default_update_many_chunk_size)
+
     use_raw =
       backend == Backend.Rust and Keyword.get(opts, :hash_fn) == nil and
         Keyword.get(opts, :hash_strategy) != :phash2
 
     new_state =
       items
-      |> Stream.chunk_every(@update_many_chunk_size)
+      |> Stream.chunk_every(chunk_size)
       |> Enum.reduce(state, fn chunk, state_acc ->
         if use_raw do
           Backend.Rust.cms_update_many_raw(state_acc, chunk, opts)
@@ -254,6 +268,12 @@ defmodule ExDataSketch.CMS do
   @doc """
   Serializes the sketch to the ExDataSketch-native EXSK binary format.
 
+  ## Options
+
+  - `:format` - serialization format: `:v2` (default, EXSK v2 with CRC32C)
+    or `:v1` (legacy EXSK v1, compatible with v0.7.x readers). The v1
+    format is only valid for sketches using `:phash2` hash strategy.
+
   ## Examples
 
       iex> sketch = ExDataSketch.CMS.new(width: 100, depth: 3, counter_width: 32)
@@ -262,25 +282,62 @@ defmodule ExDataSketch.CMS do
       iex> byte_size(binary) > 0
       true
 
+      iex> sketch = ExDataSketch.CMS.new(width: 100, depth: 3, counter_width: 32, hash_strategy: :phash2)
+      iex> binary = ExDataSketch.CMS.serialize(sketch, format: :v1)
+      iex> <<"EXSK", 1, 2, _rest::binary>> = binary
+
   """
-  @spec serialize(t()) :: binary()
-  def serialize(%__MODULE__{state: state, opts: opts}) do
+  @spec serialize(t(), keyword()) :: binary()
+  def serialize(%__MODULE__{state: state, opts: opts}, serialize_opts \\ []) do
+    format = Keyword.get(serialize_opts, :format, :v2)
+    start_time = System.monotonic_time()
+
     width = Keyword.fetch!(opts, :width)
     depth = Keyword.fetch!(opts, :depth)
     counter_width = Keyword.fetch!(opts, :counter_width)
-    hs = hash_strategy_byte(opts)
 
-    params_bin = <<
-      width::unsigned-little-32,
-      depth::unsigned-little-16,
-      counter_width::unsigned-8,
-      hs::unsigned-8
-    >>
+    binary =
+      case format do
+        :v2 ->
+          hs = hash_strategy_byte(opts)
 
-    Binary.encode(
-      Binary.metadata_from_opts(Codec.sketch_id_cms(), 1, opts),
-      Binary.build_payload(params_bin, state)
-    )
+          params_bin = <<
+            width::unsigned-little-32,
+            depth::unsigned-little-16,
+            counter_width::unsigned-8,
+            hs::unsigned-8
+          >>
+
+          Binary.encode(
+            Binary.metadata_from_opts(Codec.sketch_id_cms(), 1, opts),
+            Binary.build_payload(params_bin, state)
+          )
+
+        :v1 ->
+          unless Keyword.get(opts, :hash_strategy, :phash2) == :phash2 do
+            raise ArgumentError,
+                  "v1 serialization requires :phash2 hash strategy, " <>
+                    "got: #{inspect(Keyword.get(opts, :hash_strategy))}"
+          end
+
+          params_bin = <<
+            width::unsigned-little-32,
+            depth::unsigned-little-16,
+            counter_width::unsigned-8
+          >>
+
+          Codec.encode(Codec.sketch_id_cms(), 1, params_bin, state)
+      end
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:sketch, :serialize),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: :cms},
+        :sketch
+      )
+
+    binary
   end
 
   @doc """
@@ -296,26 +353,40 @@ defmodule ExDataSketch.CMS do
   """
   @spec deserialize(binary()) :: {:ok, t()} | {:error, Exception.t()}
   def deserialize(binary) when is_binary(binary) do
-    with {:ok, decoded} <- Binary.decode(binary),
-         :ok <- validate_sketch_id(decoded.sketch_id),
-         {:ok, opts} <- decode_params(decoded.params) do
-      backend = Backend.default()
+    start_time = System.monotonic_time()
 
-      {:ok,
-       %__MODULE__{
-         state: decoded.state,
-         opts: opts,
-         backend: backend
-       }}
-    end
+    result =
+      with {:ok, decoded} <- Binary.decode(binary),
+           :ok <- validate_sketch_id(decoded.sketch_id),
+           {:ok, opts} <- decode_params(decoded.params) do
+        backend = Backend.default()
+
+        {:ok,
+         %__MODULE__{
+           state: decoded.state,
+           opts: opts,
+           backend: backend
+         }}
+      end
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:sketch, :deserialize),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: :cms},
+        :sketch
+      )
+
+    result
   end
 
   @doc """
   Serializes the sketch to Apache DataSketches CMS format.
 
-  Not implemented. Apache DataSketches does not define a standard CMS binary
-  format. Only Theta sketches support DataSketches interop via
-  `ExDataSketch.Theta.serialize_datasketches/1`. For CMS serialization,
+  Not implemented, and not planned. Apache DataSketches does not define a
+  standard CMS binary format. Only Theta and KLL sketches support
+  DataSketches interop, via `ExDataSketch.Theta.serialize_datasketches/1`
+  and `ExDataSketch.KLL.serialize_datasketches/2`. For CMS serialization,
   use `serialize/1` (ExDataSketch-native EXSK format).
 
   ## Examples
@@ -374,7 +445,14 @@ defmodule ExDataSketch.CMS do
   """
   @spec from_enumerable(Enumerable.t(), keyword()) :: t()
   def from_enumerable(enumerable, opts \\ []) do
-    new(opts) |> update_many(enumerable)
+    Telemetry.span_with_result(
+      Telemetry.event_name(:sketch, :ingest),
+      %{},
+      %{sketch_type: :cms},
+      :sketch,
+      fn -> new(opts) |> update_many(enumerable) end,
+      fn sketch -> %{size_bytes: size_bytes(sketch)} end
+    )
   end
 
   @doc """
@@ -393,7 +471,15 @@ defmodule ExDataSketch.CMS do
   """
   @spec merge_many(Enumerable.t()) :: t()
   def merge_many(sketches) do
-    Enum.reduce(sketches, fn sketch, acc -> merge(acc, sketch) end)
+    sketches_list = Enum.to_list(sketches)
+
+    Telemetry.span(
+      Telemetry.event_name(:sketch, :merge),
+      %{merge_count: length(sketches_list)},
+      %{sketch_type: :cms},
+      :sketch,
+      fn -> Enum.reduce(sketches_list, fn sketch, acc -> merge(acc, sketch) end) end
+    )
   end
 
   @doc """
@@ -426,6 +512,35 @@ defmodule ExDataSketch.CMS do
   @spec merger(keyword()) :: (t(), t() -> t())
   def merger(_opts \\ []) do
     fn a, b -> merge(a, b) end
+  end
+
+  @doc """
+  Returns the set of operation names supported by `ExDataSketch.CMS`.
+
+  See `ExDataSketch.Sketch` for the shared capability vocabulary.
+
+  ## Examples
+
+      iex> ExDataSketch.CMS.capabilities() |> MapSet.member?(:estimate)
+      true
+
+      iex> ExDataSketch.CMS.capabilities() |> MapSet.member?(:no_such_operation)
+      false
+
+  """
+  @spec capabilities() :: ExDataSketch.Sketch.capabilities()
+  @dialyzer {:no_opaque, capabilities: 0}
+  def capabilities do
+    MapSet.new([
+      :new,
+      :update,
+      :update_many,
+      :merge,
+      :merge_many,
+      :estimate,
+      :serialize,
+      :deserialize
+    ])
   end
 
   # -- Private --

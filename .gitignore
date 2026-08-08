@@ -13,6 +13,9 @@
 # If the VM crashes, it generates a dump, let's ignore it too.
 erl_crash.dump
 
+# macOS Finder metadata.
+.DS_Store
+
 # Also ignore archive artifacts (built via "mix archive.build").
 *.ez
 
@@ -37,3 +40,4 @@ ex_data_sketch-*.tar
 # publish time and would also produce confusing checksum mismatches for
 # users installing from git rather than from Hex.
 /checksum-Elixir.ExDataSketch.Nif.exs
+/baoulo/

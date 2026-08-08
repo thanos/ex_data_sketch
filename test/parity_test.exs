@@ -314,6 +314,18 @@ defmodule ExDataSketch.ParityTest do
                "Bloom member? parity mismatch for #{item}"
       end
     end
+
+    test "a custom :hash_fn bypasses the raw NIF path and still matches Pure" do
+      hash_fn = fn item -> :erlang.phash2(item, 1_000_000_000) end
+
+      pure =
+        Bloom.new(capacity: 1000, hash_fn: hash_fn, backend: Pure) |> Bloom.put_many(@items_a)
+
+      rust =
+        Bloom.new(capacity: 1000, hash_fn: hash_fn, backend: Rust) |> Bloom.put_many(@items_a)
+
+      assert Bloom.serialize(pure) == Bloom.serialize(rust)
+    end
   end
 
   describe "Cuckoo parity" do
@@ -338,6 +350,20 @@ defmodule ExDataSketch.ParityTest do
         assert Cuckoo.member?(pure, item) == Cuckoo.member?(rust, item),
                "Cuckoo member? parity mismatch for #{item}"
       end
+    end
+
+    test "a custom :hash_fn bypasses the raw NIF path and still matches Pure" do
+      hash_fn = fn item -> :erlang.phash2(item, 1_000_000_000) end
+
+      {:ok, pure} =
+        Cuckoo.new(capacity: 512, hash_fn: hash_fn, backend: Pure)
+        |> Cuckoo.put_many(@cuckoo_items)
+
+      {:ok, rust} =
+        Cuckoo.new(capacity: 512, hash_fn: hash_fn, backend: Rust)
+        |> Cuckoo.put_many(@cuckoo_items)
+
+      assert Cuckoo.serialize(pure) == Cuckoo.serialize(rust)
     end
   end
 
@@ -375,6 +401,18 @@ defmodule ExDataSketch.ParityTest do
         assert Quotient.member?(pure, item) == Quotient.member?(rust, item),
                "Quotient member? parity mismatch for #{item}"
       end
+    end
+
+    test "a custom :hash_fn bypasses the raw NIF path and still matches Pure" do
+      hash_fn = fn item -> :erlang.phash2(item, 1_000_000_000) end
+
+      pure =
+        Quotient.new(q: 8, r: 5, hash_fn: hash_fn, backend: Pure) |> Quotient.put_many(@qot_items)
+
+      rust =
+        Quotient.new(q: 8, r: 5, hash_fn: hash_fn, backend: Rust) |> Quotient.put_many(@qot_items)
+
+      assert Quotient.serialize(pure) == Quotient.serialize(rust)
     end
   end
 
@@ -418,6 +456,18 @@ defmodule ExDataSketch.ParityTest do
         assert CQF.estimate_count(pure, item) == CQF.estimate_count(rust, item),
                "CQF estimate_count parity mismatch for #{item}"
       end
+    end
+
+    test "a custom :hash_fn bypasses the raw NIF path and still matches Pure" do
+      hash_fn = fn item -> :erlang.phash2(item, 1_000_000_000) end
+
+      pure =
+        CQF.new(q: 8, r: 5, hash_fn: hash_fn, backend: Pure) |> CQF.put_many(@cqf_dupes)
+
+      rust =
+        CQF.new(q: 8, r: 5, hash_fn: hash_fn, backend: Rust) |> CQF.put_many(@cqf_dupes)
+
+      assert CQF.serialize(pure) == CQF.serialize(rust)
     end
   end
 
@@ -472,6 +522,15 @@ defmodule ExDataSketch.ParityTest do
                "XorFilter member? parity mismatch for non-member #{item}"
       end
     end
+
+    test "a custom :hash_fn bypasses the raw NIF path and still matches Pure" do
+      hash_fn = fn item -> :erlang.phash2(item, 1_000_000_000) end
+
+      {:ok, pure} = XorFilter.build(@xor_items, hash_fn: hash_fn, backend: Pure)
+      {:ok, rust} = XorFilter.build(@xor_items, hash_fn: hash_fn, backend: Rust)
+
+      assert XorFilter.serialize(pure) == XorFilter.serialize(rust)
+    end
   end
 
   describe "IBLT parity" do
@@ -510,6 +569,18 @@ defmodule ExDataSketch.ParityTest do
         assert IBLT.member?(pure, item) == IBLT.member?(rust, item),
                "IBLT member? parity mismatch for #{item}"
       end
+    end
+
+    test "a custom :hash_fn bypasses the raw NIF path and still matches Pure" do
+      hash_fn = fn item -> :erlang.phash2(item, 1_000_000_000) end
+
+      pure =
+        IBLT.new(cell_count: 256, hash_fn: hash_fn, backend: Pure) |> IBLT.put_many(@iblt_items)
+
+      rust =
+        IBLT.new(cell_count: 256, hash_fn: hash_fn, backend: Rust) |> IBLT.put_many(@iblt_items)
+
+      assert IBLT.serialize(pure) == IBLT.serialize(rust)
     end
   end
 

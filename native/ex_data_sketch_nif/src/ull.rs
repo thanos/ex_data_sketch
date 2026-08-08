@@ -184,25 +184,46 @@ fn ull_estimate_impl<'a>(env: Env<'a>, state_bin: Binary, p: u8) -> Term<'a> {
         return error::ok_float(env, 0.0);
     }
 
-    let c0 = counts[0] as f64;
+    let zeros = counts[0] as f64;
+
+    // Estimation strategy:
+    //   1. Linear counting fast path (zeros > 0): m * ln(m / zeros). Skips
+    //      the FGRA Horner loop entirely. Linear counting is the dominant
+    //      estimator for realistic ULL workloads (n < m * ln(m)) and
+    //      outperforms FGRA at small precision in the moderate-n regime.
+    //   2. FGRA estimator (zeros == 0): raw estimate via Algorithm 4 of
+    //      Ertl 2017. The published RSE ~0.835/sqrt(m) applies here.
+    //   3. Large range correction when raw_estimate exceeds 2^56 / 30.
+    if zeros > 0.0 {
+        let estimate = m_f * (m_f / zeros).ln();
+        return error::ok_float(env, estimate);
+    }
+
     let c_q = counts[q_max] as f64;
 
     // Horner scheme from Ertl 2017 Algorithm 4:
     // z = m * tau(1 - C[q]/m)
     // for k from q-1 down to 1: z = (z + C[k]) * 0.5
-    // z += m * sigma(C[0]/m)
+    // z += m * sigma(0)        // zeros == 0 here, so C[0]/m == 0
     let mut z = m_f * tau(1.0 - c_q / m_f);
 
     for k in (1..q_max).rev() {
         z = (z + counts[k] as f64) * 0.5;
     }
 
-    z += m_f * sigma(c0 / m_f);
+    z += m_f * sigma(0.0);
 
-    let estimate = if z == 0.0 {
+    let raw_estimate = if z == 0.0 {
         0.0
     } else {
         alpha_inf * m_f * m_f / z
+    };
+
+    let estimate = if raw_estimate > (0x100000000000000u64 as f64) / 30.0 {
+        // Large range correction (effectively unreachable with 64-bit hashes).
+        -(0x10000000000000000u128 as f64) * (1.0 - raw_estimate / (0x10000000000000000u128 as f64)).ln()
+    } else {
+        raw_estimate
     };
 
     error::ok_float(env, estimate)

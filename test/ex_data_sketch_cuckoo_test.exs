@@ -2,6 +2,8 @@ defmodule ExDataSketch.CuckooTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  doctest ExDataSketch.Cuckoo
+
   alias ExDataSketch.Cuckoo
 
   # Deterministic test data
