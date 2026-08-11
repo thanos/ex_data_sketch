@@ -37,3 +37,4 @@ ex_data_sketch-*.tar
 # publish time and would also produce confusing checksum mismatches for
 # users installing from git rather than from Hex.
 /checksum-Elixir.ExDataSketch.Nif.exs
+.tool-versions
