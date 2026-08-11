@@ -38,3 +38,4 @@ ex_data_sketch-*.tar
 # users installing from git rather than from Hex.
 /checksum-Elixir.ExDataSketch.Nif.exs
 .tool-versions
+ baoulo/
