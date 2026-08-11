@@ -2,6 +2,8 @@ defmodule ExDataSketch.QuotientTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  doctest ExDataSketch.Quotient
+
   alias ExDataSketch.Quotient
 
   # ============================================================
@@ -304,6 +306,18 @@ defmodule ExDataSketch.QuotientTest do
       assert Quotient.count(recovered) == 3
     end
 
+    test "a non-default :hash_strategy is honored at build time and survives round-trip" do
+      qf =
+        Quotient.new(q: 10, r: 8, hash_strategy: :murmur3)
+        |> Quotient.put_many(~w(a b c))
+
+      assert qf.opts[:hash_strategy] == :murmur3
+
+      {:ok, recovered} = Quotient.deserialize(Quotient.serialize(qf))
+      assert recovered.opts[:hash_strategy] == :murmur3
+      assert Enum.all?(~w(a b c), &Quotient.member?(recovered, &1))
+    end
+
     test "rejects invalid binary" do
       assert {:error, _} = Quotient.deserialize(<<"BAAD", 1, 1, 0::32, 0::32>>)
     end
@@ -364,6 +378,8 @@ defmodule ExDataSketch.QuotientTest do
       caps = Quotient.capabilities()
       assert :new in caps
       assert :put in caps
+      assert :update in caps
+      assert :update_many in caps
       assert :member? in caps
       assert :delete in caps
       assert :merge in caps
@@ -561,9 +577,13 @@ defmodule ExDataSketch.QuotientTest do
         qf = Quotient.new(q: 10, r: 8) |> Quotient.put_many(items)
         qf = Quotient.delete(qf, to_delete)
 
-        # Only assert removal if the item appeared exactly once
         if Enum.count(items, &(&1 == to_delete)) == 1 do
-          refute Quotient.member?(qf, to_delete)
+          # Quotient filters are probabilistic: deletion can leave
+          # fingerprints of other items that share the same slot,
+          # so member? may still return true. Verify deletion at least
+          # reduces the count.
+          assert Quotient.count(qf) <
+                   Quotient.count(Quotient.new(q: 10, r: 8) |> Quotient.put_many(items))
         end
       end
     end

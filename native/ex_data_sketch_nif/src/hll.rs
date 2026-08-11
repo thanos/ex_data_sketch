@@ -11,11 +11,11 @@ const ALGO_MURMUR3: u8 = 2;
 
 const HLL_HEADER_SIZE: usize = 4;
 const HLL_MIN_P: u8 = 4;
-const HLL_MAX_P: u8 = 16;
+const HLL_MAX_P: u8 = 26;
 
 fn validate_p(env: Env, p: u8) -> Result<usize, Term> {
     if p < HLL_MIN_P || p > HLL_MAX_P {
-        return Err(error::error_string(env, "invalid HLL precision p, must be 4..16"));
+        return Err(error::error_string(env, "invalid HLL precision p, must be 4..26"));
     }
     Ok(1usize << p)
 }

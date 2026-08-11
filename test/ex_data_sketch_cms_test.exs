@@ -163,6 +163,19 @@ defmodule ExDataSketch.CMSTest do
         sketch = CMS.update_many(sketch, ["a", "b", "c"])
         assert CMS.estimate(sketch, "a") >= 1
       end
+
+      test "update_many_chunk_size respects creation-time option" do
+        items = Enum.map(1..5000, &"item_#{&1}")
+        default = CMS.new(width: 256, depth: 3, backend: @backend) |> CMS.update_many(items)
+
+        chunked =
+          CMS.new(width: 256, depth: 3, update_many_chunk_size: 5, backend: @backend)
+          |> CMS.update_many(items)
+
+        assert CMS.estimate(default, "item_1") >= 1
+        assert CMS.estimate(chunked, "item_1") >= 1
+        assert default.state == chunked.state
+      end
     end
 
     describe "no-undercount [#{backend_name}]" do
@@ -476,6 +489,47 @@ defmodule ExDataSketch.CMSTest do
     test "returns correct size" do
       sketch = CMS.new(width: 100, depth: 3, counter_width: 32)
       assert CMS.size_bytes(sketch) == 9 + 100 * 3 * 4
+    end
+  end
+
+  describe "capabilities/0" do
+    test "does not claim :estimate -- CMS has no single-value cardinality reading" do
+      refute MapSet.member?(CMS.capabilities(), :estimate)
+    end
+
+    test "every claimed capability actually works via the top-level facade" do
+      sketch = CMS.new(width: 100, depth: 3) |> CMS.update("a")
+
+      for capability <- CMS.capabilities() do
+        case capability do
+          :new ->
+            assert %CMS{} = ExDataSketch.new(:cms, width: 100, depth: 3)
+
+          :update ->
+            assert %CMS{} = ExDataSketch.update(sketch, "b")
+
+          :update_many ->
+            assert %CMS{} = ExDataSketch.update_many(sketch, ["b", "c"])
+
+          :merge ->
+            assert %CMS{} = ExDataSketch.merge(sketch, sketch)
+
+          :merge_many ->
+            assert %CMS{} = ExDataSketch.merge_many([sketch, sketch])
+
+          :serialize ->
+            assert is_binary(ExDataSketch.serialize(sketch))
+
+          :deserialize ->
+            assert {:ok, %CMS{}} = ExDataSketch.deserialize(CMS.serialize(sketch), :cms)
+        end
+      end
+
+      # And the one operation deliberately NOT claimed really is unsupported
+      # via the facade, confirming the capability set and the facade agree.
+      assert_raise ExDataSketch.Errors.UnsupportedOperationError, fn ->
+        ExDataSketch.estimate(sketch)
+      end
     end
   end
 

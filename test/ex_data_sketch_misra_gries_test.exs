@@ -2,6 +2,8 @@ defmodule ExDataSketch.MisraGriesTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  doctest ExDataSketch.MisraGries
+
   alias ExDataSketch.MisraGries
 
   describe "option validation" do

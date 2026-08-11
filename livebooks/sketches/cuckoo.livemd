@@ -1,0 +1,138 @@
+# Cuckoo Filter Tutorial
+
+```elixir
+Mix.install([
+  {:ex_data_sketch, "~> 0.10"}
+])
+```
+
+## Introduction
+
+`ExDataSketch.Cuckoo` is a membership filter like `ExDataSketch.Bloom`,
+with two things Bloom can't do: **deletion**, and a filter that can
+report when it's genuinely **full** rather than silently degrading. The
+trade-off is that Cuckoo has no `merge/2` -- its per-bucket fingerprint
+layout isn't associatively mergeable the way Bloom's bit array is.
+
+## Sample data (cached locally)
+
+```elixir
+cache_path = Path.join(System.tmp_dir!(), "ex_data_sketch_livebook_cache/cuckoo_sample.bin")
+
+{inserted, novel} =
+  if File.exists?(cache_path) do
+    IO.puts("Loading cached sample data from #{cache_path}")
+    cache_path |> File.read!() |> :erlang.binary_to_term()
+  else
+    IO.puts("Generating sample data (this takes a few seconds)...")
+    inserted = for i <- 1..500_000, do: "session_#{i}"
+    novel = for i <- 500_001..1_000_000, do: "session_#{i}"
+    File.mkdir_p!(Path.dirname(cache_path))
+    File.write!(cache_path, :erlang.term_to_binary({inserted, novel}))
+    {inserted, novel}
+  end
+
+IO.puts("#{length(inserted)} inserted sessions, #{length(novel)} novel sessions")
+```
+
+## Basic usage
+
+```elixir
+alias ExDataSketch.Cuckoo
+
+{:ok, filter} = Cuckoo.new(capacity: 500_000) |> Cuckoo.put_many(inserted)
+
+Cuckoo.member?(filter, hd(inserted))
+```
+
+`put/2` returns `{:ok, cuckoo} | {:error, :full}` so you can detect and
+handle a full filter explicitly; `put!/2` (and `update/2`, its alias)
+raises `ExDataSketch.Errors.FilterFullError` instead, for callers who'd
+rather crash than silently drop an insert:
+
+```elixir
+f = Cuckoo.new(capacity: 100)
+f = Cuckoo.put!(f, "a")
+Cuckoo.member?(f, "a")
+```
+
+## Deletion
+
+```elixir
+f = Cuckoo.new(capacity: 100) |> Cuckoo.put!("x")
+IO.puts("Before delete: #{Cuckoo.member?(f, "x")}")
+
+{:ok, f} = Cuckoo.delete(f, "x")
+IO.puts("After delete: #{Cuckoo.member?(f, "x")}")
+```
+
+Unlike Bloom (where you can't safely un-set a shared bit), Cuckoo stores
+one fingerprint per logical slot, so removing an item's fingerprint
+doesn't affect any other item.
+
+## What "full" looks like
+
+A Cuckoo filter's load factor tops out well under 100% -- push past it
+and inserts start failing instead of silently corrupting the filter.
+Force it with a tiny capacity:
+
+```elixir
+tiny = Cuckoo.new(capacity: 16, bucket_size: 4)
+
+result =
+  Enum.reduce_while(1..1000, {:ok, tiny}, fn i, {:ok, f} ->
+    case Cuckoo.put(f, "item_#{i}") do
+      {:ok, updated} -> {:cont, {:ok, updated}}
+      {:error, :full} -> {:halt, {:error, :full, i - 1}}
+    end
+  end)
+
+case result do
+  {:error, :full, items_inserted} ->
+    IO.puts("Filter reported full after #{items_inserted} inserts (capacity was 16)")
+
+  {:ok, _} ->
+    IO.puts("Never filled -- try a smaller capacity")
+end
+```
+
+## No false negatives, measured false-positive rate
+
+Same property as Bloom -- every inserted item is always found; measure
+the false-positive rate on novel items:
+
+```elixir
+false_positives = Enum.count(novel, &Cuckoo.member?(filter, &1))
+observed_fpr = false_positives / length(novel)
+IO.puts("False positives: #{false_positives} / #{length(novel)} (#{Float.round(observed_fpr * 100, 4)}%)")
+```
+
+## Sizing: fingerprint_size trade-off
+
+Wider fingerprints mean a lower false-positive rate at the cost of more
+memory per slot:
+
+```elixir
+for fp_size <- [8, 12, 16] do
+  {:ok, f} = Cuckoo.new(capacity: 500_000, fingerprint_size: fp_size) |> Cuckoo.put_many(inserted)
+  observed = Enum.count(Enum.take(novel, 50_000), &Cuckoo.member?(f, &1)) / 50_000
+  IO.puts("fingerprint_size=#{fp_size} (#{Cuckoo.size_bytes(f)} bytes): observed FPR=#{Float.round(observed * 100, 4)}%")
+end
+```
+
+## Serialization
+
+```elixir
+binary = Cuckoo.serialize(filter)
+{:ok, restored} = Cuckoo.deserialize(binary)
+IO.puts("Round-tripped membership check: #{Cuckoo.member?(restored, hd(inserted))}")
+```
+
+## See also
+
+- `ExDataSketch.Cuckoo` module documentation -- full API reference.
+- `ExDataSketch.Quotient` -- deletion that's *always* safe (deleting a
+  non-member is a guaranteed no-op, not just usually one) and does
+  support `merge/2`; see `livebooks/sketches/quotient.livemd`.
+- `ExDataSketch.Bloom` -- no deletion, but mergeable and simpler; see
+  `livebooks/sketches/bloom.livemd`.

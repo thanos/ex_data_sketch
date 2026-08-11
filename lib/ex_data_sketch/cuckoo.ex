@@ -58,7 +58,7 @@ defmodule ExDataSketch.Cuckoo do
   For mergeable membership filters, use `ExDataSketch.Bloom`.
   """
 
-  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash}
+  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash, Telemetry}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -67,6 +67,8 @@ defmodule ExDataSketch.Cuckoo do
         }
 
   defstruct [:state, :opts, :backend]
+
+  @behaviour ExDataSketch.Sketch
 
   @default_capacity 10_000
   @default_fingerprint_size 8
@@ -110,6 +112,7 @@ defmodule ExDataSketch.Cuckoo do
     max_kicks = Keyword.get(opts, :max_kicks, @default_max_kicks)
     seed = Keyword.get(opts, :seed, @default_seed)
     hash_fn = Keyword.get(opts, :hash_fn)
+    hash_strategy = Hash.resolve_strategy(opts)
 
     validate_capacity!(capacity)
     validate_fingerprint_size!(fp_size)
@@ -127,7 +130,8 @@ defmodule ExDataSketch.Cuckoo do
         bucket_size: bucket_size,
         bucket_count: bucket_count,
         max_kicks: max_kicks,
-        seed: seed
+        seed: seed,
+        hash_strategy: hash_strategy
       ] ++ if(hash_fn, do: [hash_fn: hash_fn], else: [])
 
     state = backend.cuckoo_new(clean_opts)
@@ -173,7 +177,7 @@ defmodule ExDataSketch.Cuckoo do
   def put!(cuckoo, item) do
     case put(cuckoo, item) do
       {:ok, updated} -> updated
-      {:error, :full} -> raise "Cuckoo filter is full"
+      {:error, :full} -> raise Errors.FilterFullError, structure: "Cuckoo filter"
     end
   end
 
@@ -194,11 +198,64 @@ defmodule ExDataSketch.Cuckoo do
   """
   @spec put_many(t(), Enumerable.t()) :: {:ok, t()} | {:error, :full, t()}
   def put_many(%__MODULE__{state: state, opts: opts, backend: backend} = cuckoo, items) do
-    hashes = Enum.map(items, &hash_item(&1, opts))
+    use_raw =
+      backend == Backend.Rust and Keyword.get(opts, :hash_fn) == nil and
+        Keyword.get(opts, :hash_strategy) != :phash2
 
-    case backend.cuckoo_put_many(state, hashes, opts) do
+    result =
+      if use_raw do
+        Backend.Rust.cuckoo_put_many_raw(state, Enum.to_list(items), opts)
+      else
+        hashes = Enum.map(items, &hash_item(&1, opts))
+        backend.cuckoo_put_many(state, hashes, opts)
+      end
+
+    case result do
       {:ok, new_state} -> {:ok, %{cuckoo | state: new_state}}
       {:error, :full, partial_state} -> {:error, :full, %{cuckoo | state: partial_state}}
+    end
+  end
+
+  @doc """
+  Alias for `put!/2`, added so `ExDataSketch.Cuckoo` satisfies the
+  `ExDataSketch.Sketch` behaviour's generic `update/2` callback.
+
+  `put/2` (returning `{:ok, cuckoo} | {:error, :full}`) remains the
+  family-idiomatic name for callers who need to detect a full filter;
+  `update/2` raises instead, matching the bare-struct-return contract every
+  other family's `update/2` follows (see `ExDataSketch.update/2`).
+
+  ## Examples
+
+      iex> cuckoo = ExDataSketch.Cuckoo.new(capacity: 100) |> ExDataSketch.Cuckoo.update("hello")
+      iex> ExDataSketch.Cuckoo.member?(cuckoo, "hello")
+      true
+
+  """
+  @spec update(t(), term()) :: t()
+  def update(%__MODULE__{} = cuckoo, item), do: put!(cuckoo, item)
+
+  @doc """
+  Inserts every item in an enumerable, raising if the filter fills up partway
+  through.
+
+  Added so `ExDataSketch.Cuckoo` satisfies the `ExDataSketch.Sketch`
+  behaviour's generic `update_many/2` callback. `put_many/2` (returning
+  `{:ok, cuckoo} | {:error, :full, cuckoo}`) remains the family-idiomatic
+  name for callers who need the partially updated filter on failure.
+
+  ## Examples
+
+      iex> cuckoo = ExDataSketch.Cuckoo.new(capacity: 100) |> ExDataSketch.Cuckoo.update_many(["a", "b", "c"])
+      iex> ExDataSketch.Cuckoo.member?(cuckoo, "a")
+      true
+
+  """
+  @spec update_many(t(), Enumerable.t()) :: t()
+  def update_many(%__MODULE__{} = cuckoo, items) do
+    case put_many(cuckoo, items) do
+      {:ok, updated} -> updated
+      {:error, :full, _partial} -> raise Errors.FilterFullError, structure: "Cuckoo filter"
     end
   end
 
@@ -270,6 +327,12 @@ defmodule ExDataSketch.Cuckoo do
   @doc """
   Serializes the filter to the ExDataSketch-native EXSK binary format.
 
+  ## Options
+
+  - `:format` - serialization format: `:v2` (default, EXSK v2 with CRC32C)
+    or `:v1` (legacy EXSK v1, compatible with v0.7.x readers). The v1
+    format is only valid for filters using `:phash2` hash strategy.
+
   ## Examples
 
       iex> cuckoo = ExDataSketch.Cuckoo.new(capacity: 100)
@@ -278,9 +341,14 @@ defmodule ExDataSketch.Cuckoo do
       iex> byte_size(binary) > 0
       true
 
+      iex> cuckoo = ExDataSketch.Cuckoo.new(capacity: 100, hash_strategy: :phash2)
+      iex> binary = ExDataSketch.Cuckoo.serialize(cuckoo, format: :v1)
+      iex> <<"EXSK", 1, 8, _rest::binary>> = binary
+
   """
-  @spec serialize(t()) :: binary()
-  def serialize(%__MODULE__{state: state, opts: opts}) do
+  @spec serialize(t(), keyword()) :: binary()
+  def serialize(%__MODULE__{state: state, opts: opts}, serialize_opts \\ []) do
+    format = Keyword.get(serialize_opts, :format, :v2)
     bucket_count = Keyword.fetch!(opts, :bucket_count)
     fp_size = Keyword.fetch!(opts, :fingerprint_size)
     bucket_size = Keyword.fetch!(opts, :bucket_size)
@@ -290,10 +358,22 @@ defmodule ExDataSketch.Cuckoo do
       <<bucket_count::unsigned-little-32, fp_size::unsigned-8, bucket_size::unsigned-8,
         seed::unsigned-little-32>>
 
-    Binary.encode(
-      Binary.metadata_from_opts(Codec.sketch_id_cuckoo(), 1, opts),
-      Binary.build_payload(params_bin, state)
-    )
+    case format do
+      :v2 ->
+        Binary.encode(
+          Binary.metadata_from_opts(Codec.sketch_id_cuckoo(), 1, opts),
+          Binary.build_payload(params_bin, state)
+        )
+
+      :v1 ->
+        unless Keyword.get(opts, :hash_strategy, :phash2) == :phash2 do
+          raise ArgumentError,
+                "v1 serialization requires :phash2 hash strategy, " <>
+                  "got: #{inspect(Keyword.get(opts, :hash_strategy))}"
+        end
+
+        Codec.encode(Codec.sketch_id_cuckoo(), 1, params_bin, state)
+    end
   end
 
   @doc """
@@ -316,6 +396,7 @@ defmodule ExDataSketch.Cuckoo do
          {:ok, opts} <- decode_params(decoded.params),
          :ok <- validate_state_header(decoded.state, opts) do
       backend = Backend.default()
+      opts = restore_hash_strategy(opts, decoded.metadata)
 
       {:ok,
        %__MODULE__{
@@ -363,6 +444,8 @@ defmodule ExDataSketch.Cuckoo do
       :new,
       :put,
       :put_many,
+      :update,
+      :update_many,
       :member?,
       :delete,
       :count,
@@ -401,7 +484,14 @@ defmodule ExDataSketch.Cuckoo do
   """
   @spec from_enumerable(Enumerable.t(), keyword()) :: {:ok, t()} | {:error, :full, t()}
   def from_enumerable(enumerable, opts \\ []) do
-    new(opts) |> put_many(enumerable)
+    Telemetry.span_with_result(
+      Telemetry.event_name(:sketch, :ingest),
+      %{},
+      %{sketch_type: :cuckoo},
+      :sketch,
+      fn -> new(opts) |> put_many(enumerable) end,
+      fn _sketch -> %{} end
+    )
   end
 
   @doc """
@@ -426,7 +516,8 @@ defmodule ExDataSketch.Cuckoo do
     case Keyword.get(opts, :hash_fn) do
       nil ->
         seed = Keyword.get(opts, :seed, @default_seed)
-        Hash.hash64(item, seed: seed)
+        strategy = Keyword.get(opts, :hash_strategy)
+        Hash.hash64(item, seed: seed, hash_strategy: strategy)
 
       hash_fn ->
         Hash.hash64(item, hash_fn: hash_fn)
@@ -517,6 +608,15 @@ defmodule ExDataSketch.Cuckoo do
   defp decode_params(_other) do
     {:error, Errors.DeserializationError.exception(reason: "invalid Cuckoo params binary")}
   end
+
+  # v1 frames carry no metadata block and are phash2-only by construction
+  # (see the :v1 branch of serialize/2); v2 frames record the algorithm
+  # actually used at build time, which must be restored so `hash_item/2`
+  # queries with the same algorithm the filter's buckets were set with.
+  defp restore_hash_strategy(opts, nil), do: Keyword.put(opts, :hash_strategy, :phash2)
+
+  defp restore_hash_strategy(opts, metadata),
+    do: Keyword.put(opts, :hash_strategy, metadata.algorithm)
 
   defp validate_state_header(
          <<"CKO1", 1::unsigned-8, _fp_bits::unsigned-8, _bs::unsigned-8, _flags::unsigned-8,

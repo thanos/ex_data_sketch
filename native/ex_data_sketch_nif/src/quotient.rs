@@ -1,7 +1,14 @@
-use rustler::{Binary, Env, Term};
+use rustler::{Binary, Env, ListIterator, Term};
+use xxhash_rust::xxh3;
 
 use crate::error;
+use crate::hash::murmur3_x64_128;
 use crate::quotient_core as qc;
+
+// Hash algorithm wire bytes for the v2 raw NIF dispatch.
+// MUST match `ExDataSketch.Hash.Metadata.algorithm_to_byte/1`.
+const ALGO_XXH3: u8 = 1;
+const ALGO_MURMUR3: u8 = 2;
 
 const QOT_HEADER_SIZE: usize = 32;
 
@@ -41,6 +48,68 @@ fn quotient_put_many_impl<'a>(
     for h in 0..hash_count {
         let off = h * 8;
         let hash64 = u64::from_le_bytes(hashes[off..off + 8].try_into().unwrap());
+        let (fq, fr) = qc::qot_split_hash(hash64, q, r);
+
+        if !qc::lookup(&slots, fq, fr, slot_count) {
+            qc::do_insert(&mut slots, fq, fr, slot_count);
+            item_count += 1;
+        }
+    }
+
+    let new_body = qc::encode_slots(&slots, slot_bytes, slot_count);
+
+    let mut result = Vec::with_capacity(expected_len);
+    result.extend_from_slice(&state[..QOT_HEADER_SIZE]);
+    result[12..16].copy_from_slice(&item_count.to_le_bytes());
+    result.extend_from_slice(&new_body);
+
+    error::ok_binary(env, &result)
+}
+
+fn quotient_put_many_raw_impl<'a>(
+    env: Env<'a>,
+    state_bin: Binary,
+    items: ListIterator<'a>,
+    q: u8,
+    r: u8,
+    seed: u64,
+    algorithm: u8,
+) -> Term<'a> {
+    if state_bin.len() < QOT_HEADER_SIZE {
+        return error::error_string(env, "Quotient state too short for header");
+    }
+
+    let slot_bytes = ((3 + r as usize) + 7) / 8;
+    let state = state_bin.as_slice();
+
+    let slot_count = u32::from_le_bytes(state[8..12].try_into().unwrap());
+    let expected_len = QOT_HEADER_SIZE + (slot_count as usize) * slot_bytes;
+
+    if state_bin.len() != expected_len {
+        return error::error_string(env, "invalid Quotient state length");
+    }
+
+    let mut item_count = u32::from_le_bytes(state[12..16].try_into().unwrap());
+
+    let body = &state[QOT_HEADER_SIZE..];
+    let mut slots = qc::decode_slots(body, slot_bytes, slot_count);
+    let m3_seed = seed as u32;
+
+    for item_term in items {
+        let bin: Binary = match item_term.decode() {
+            Ok(b) => b,
+            Err(_) => return error::error_string(env, "all items must be binaries"),
+        };
+        let hash64 = match algorithm {
+            ALGO_XXH3 => xxh3::xxh3_64_with_seed(bin.as_slice(), seed),
+            ALGO_MURMUR3 => murmur3_x64_128(bin.as_slice(), m3_seed).0,
+            _ => {
+                return error::error_string(
+                    env,
+                    "unsupported hash algorithm byte (expected 1=xxhash3, 2=murmur3)",
+                )
+            }
+        };
         let (fq, fr) = qc::qot_split_hash(hash64, q, r);
 
         if !qc::lookup(&slots, fq, fr, slot_count) {
@@ -158,6 +227,56 @@ fn quotient_put_many_dirty_nif<'a>(
     r: u8,
 ) -> Term<'a> {
     quotient_put_many_impl(env, state_bin, hashes_bin, q, r)
+}
+
+#[rustler::nif]
+fn quotient_put_many_raw_nif<'a>(
+    env: Env<'a>,
+    state_bin: Binary,
+    items: ListIterator<'a>,
+    q: u8,
+    r: u8,
+    seed: u64,
+) -> Term<'a> {
+    quotient_put_many_raw_impl(env, state_bin, items, q, r, seed, ALGO_XXH3)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn quotient_put_many_raw_dirty_nif<'a>(
+    env: Env<'a>,
+    state_bin: Binary,
+    items: ListIterator<'a>,
+    q: u8,
+    r: u8,
+    seed: u64,
+) -> Term<'a> {
+    quotient_put_many_raw_impl(env, state_bin, items, q, r, seed, ALGO_XXH3)
+}
+
+#[rustler::nif]
+fn quotient_put_many_raw_h_nif<'a>(
+    env: Env<'a>,
+    state_bin: Binary,
+    items: ListIterator<'a>,
+    q: u8,
+    r: u8,
+    seed: u64,
+    algorithm: u8,
+) -> Term<'a> {
+    quotient_put_many_raw_impl(env, state_bin, items, q, r, seed, algorithm)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn quotient_put_many_raw_h_dirty_nif<'a>(
+    env: Env<'a>,
+    state_bin: Binary,
+    items: ListIterator<'a>,
+    q: u8,
+    r: u8,
+    seed: u64,
+    algorithm: u8,
+) -> Term<'a> {
+    quotient_put_many_raw_impl(env, state_bin, items, q, r, seed, algorithm)
 }
 
 #[rustler::nif]

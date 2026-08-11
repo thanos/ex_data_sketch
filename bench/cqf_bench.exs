@@ -2,7 +2,7 @@
 #
 # Run with: EX_DATA_SKETCH_BUILD=true mix run bench/cqf_bench.exs
 
-alias ExDataSketch.{Backend, CQF}
+alias ExDataSketch.{Backend, CQF, Hash}
 
 IO.puts("ExDataSketch CQF Benchmark")
 IO.puts("==========================")
@@ -50,6 +50,28 @@ scenarios =
      }}
   end
 
+# Phase 6 moved item hashing for put_many from Elixir into the Rust NIF
+# itself (see guides/filter_performance.md). This reproduces the old
+# pre-hash-in-Elixir-then-NIF path directly against the backend, bypassing
+# CQF.put_many's now-automatic raw dispatch, as the "before" baseline.
+legacy_benches =
+  if Backend.Rust.available?() do
+    sketch = CQF.new(q: 16, r: 8, backend: Backend.Rust)
+    seed = Keyword.get(sketch.opts, :seed, 0)
+
+    legacy_put_many = fn items ->
+      hashes = Enum.map(items, &Hash.hash64(&1, seed: seed))
+      Backend.Rust.cqf_put_many(sketch.state, hashes, sketch.opts)
+    end
+
+    [
+      {"cqf_put_many 1k [Rust (pre-hashed, legacy)]", fn -> legacy_put_many.(items_1k) end},
+      {"cqf_put_many 100k [Rust (pre-hashed, legacy)]", fn -> legacy_put_many.(items_100k) end}
+    ]
+  else
+    []
+  end
+
 benches =
   Enum.flat_map(scenarios, fn {name, s} ->
     [
@@ -73,7 +95,7 @@ benches =
 File.mkdir_p!("bench/output")
 
 Benchee.run(
-  Map.new(benches),
+  Map.new(benches ++ legacy_benches),
   warmup: 1,
   time: 3,
   formatters: [

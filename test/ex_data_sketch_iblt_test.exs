@@ -2,6 +2,8 @@ defmodule ExDataSketch.IBLTTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  doctest ExDataSketch.IBLT
+
   alias ExDataSketch.IBLT
 
   # -- new/1 --
@@ -276,6 +278,18 @@ defmodule ExDataSketch.IBLTTest do
 
       assert {:error, _} = IBLT.deserialize(corrupted)
     end
+
+    test "a non-default :hash_strategy is honored at build time and survives round-trip" do
+      iblt =
+        IBLT.new(hash_strategy: :murmur3) |> IBLT.put("test") |> IBLT.put("data")
+
+      assert iblt.opts[:hash_strategy] == :murmur3
+
+      {:ok, recovered} = IBLT.deserialize(IBLT.serialize(iblt))
+      assert recovered.opts[:hash_strategy] == :murmur3
+      assert IBLT.member?(recovered, "test")
+      assert IBLT.member?(recovered, "data")
+    end
   end
 
   # -- compatible_with?/2 --
@@ -313,6 +327,8 @@ defmodule ExDataSketch.IBLTTest do
       caps = IBLT.capabilities()
       assert MapSet.member?(caps, :new)
       assert MapSet.member?(caps, :put)
+      assert MapSet.member?(caps, :update)
+      assert MapSet.member?(caps, :update_many)
       assert MapSet.member?(caps, :member?)
       assert MapSet.member?(caps, :delete)
       assert MapSet.member?(caps, :subtract)

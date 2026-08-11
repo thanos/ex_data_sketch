@@ -1,0 +1,138 @@
+# Bloom Filter Tutorial
+
+```elixir
+Mix.install([
+  {:ex_data_sketch, "~> 0.10"}
+])
+```
+
+## Introduction
+
+`ExDataSketch.Bloom` answers "have I seen this before" -- deduplication,
+"is this URL on the blocklist," "should I even bother checking the
+database for this key" -- in fixed memory, with **no false negatives**
+(if it says "no," the item was definitely never inserted) but a tunable
+rate of **false positives** (if it says "yes," it's probably right, but
+might be wrong). It's the simplest and most widely used of the membership
+filters here.
+
+## Sample data (cached locally)
+
+```elixir
+cache_path = Path.join(System.tmp_dir!(), "ex_data_sketch_livebook_cache/bloom_sample.bin")
+
+{inserted, novel} =
+  if File.exists?(cache_path) do
+    IO.puts("Loading cached sample data from #{cache_path}")
+    cache_path |> File.read!() |> :erlang.binary_to_term()
+  else
+    IO.puts("Generating sample data (this takes a few seconds)...")
+
+    # 500,000 URLs we've "crawled" (to insert), and 500,000 different URLs
+    # we haven't (to test the false-positive rate against).
+    inserted = for i <- 1..500_000, do: "https://example.com/page/#{i}"
+    novel = for i <- 500_001..1_000_000, do: "https://example.com/page/#{i}"
+
+    File.mkdir_p!(Path.dirname(cache_path))
+    File.write!(cache_path, :erlang.term_to_binary({inserted, novel}))
+    {inserted, novel}
+  end
+
+IO.puts("#{length(inserted)} inserted URLs, #{length(novel)} novel URLs to test against")
+```
+
+## Basic usage
+
+```elixir
+alias ExDataSketch.Bloom
+
+filter = Bloom.new(capacity: 500_000, false_positive_rate: 0.01)
+filter = Bloom.put(filter, "https://example.com/page/1")
+
+Bloom.member?(filter, "https://example.com/page/1")
+```
+
+`put_many/2` is far more efficient than looping `put/2` for a batch:
+
+```elixir
+filter = Bloom.new(capacity: 500_000, false_positive_rate: 0.01) |> Bloom.put_many(inserted)
+
+IO.puts("Filter size: #{Bloom.size_bytes(filter)} bytes for #{length(inserted)} items")
+```
+
+## No false negatives, measured false-positive rate
+
+Every inserted item must test as a member (no false negatives, ever).
+Every *novel* item might incorrectly test as a member (false positive) --
+measure the actual rate against the configured target:
+
+```elixir
+all_inserted_found? = Enum.all?(inserted, &Bloom.member?(filter, &1))
+IO.puts("All inserted URLs found: #{all_inserted_found?}")
+
+false_positives = Enum.count(novel, &Bloom.member?(filter, &1))
+observed_fpr = false_positives / length(novel)
+
+IO.puts("False positives: #{false_positives} / #{length(novel)} (#{Float.round(observed_fpr * 100, 3)}%)")
+IO.puts("Configured target: #{filter.opts[:false_positive_rate] * 100}%")
+```
+
+## Sizing: capacity and false_positive_rate
+
+Both `:capacity` and `:false_positive_rate` feed directly into the
+derived bit-array size -- lower FPR or higher capacity means more memory:
+
+```elixir
+for fpr <- [0.1, 0.01, 0.001] do
+  f = Bloom.new(capacity: 500_000, false_positive_rate: fpr) |> Bloom.put_many(inserted)
+  observed = Enum.count(Enum.take(novel, 50_000), &Bloom.member?(f, &1)) / 50_000
+
+  IO.puts(
+    "target=#{fpr * 100}% (#{f.opts[:bit_count]} bits, #{Bloom.size_bytes(f)} bytes): " <>
+      "observed=#{Float.round(observed * 100, 3)}%"
+  )
+end
+```
+
+## Merging
+
+Bloom merge is a bitwise OR -- both filters must share identical
+`bit_count`/`hash_count`/`seed` (i.e. identical `:capacity`/
+`:false_positive_rate`/`:seed` at construction):
+
+```elixir
+half = div(length(inserted), 2)
+{first_half, second_half} = Enum.split(inserted, half)
+
+worker_a = Bloom.new(capacity: 500_000, false_positive_rate: 0.01) |> Bloom.put_many(first_half)
+worker_b = Bloom.new(capacity: 500_000, false_positive_rate: 0.01) |> Bloom.put_many(second_half)
+
+merged = Bloom.merge(worker_a, worker_b)
+IO.puts("Merged filter contains first-half item: #{Bloom.member?(merged, hd(first_half))}")
+IO.puts("Merged filter contains second-half item: #{Bloom.member?(merged, hd(second_half))}")
+```
+
+## Serialization
+
+```elixir
+binary = Bloom.serialize(filter)
+{:ok, restored} = Bloom.deserialize(binary)
+IO.puts("Round-tripped membership check: #{Bloom.member?(restored, hd(inserted))}")
+```
+
+## What Bloom can't do
+
+Bloom filters can't be shrunk or have individual items removed (setting
+bits back to 0 could un-set a bit another item also depends on), and
+can't tell you *how many* distinct items were inserted, or *which* items
+those were. If you need deletion, see
+`livebooks/sketches/cuckoo.livemd` or `livebooks/sketches/quotient.livemd`;
+if you need approximate counting per item, see
+`livebooks/sketches/cqf.livemd`.
+
+## See also
+
+* `ExDataSketch.Bloom` module documentation -- full API reference and the
+  BLM1 binary layout.
+* `ExDataSketch.FilterChain` -- composing a Bloom filter with a more
+  precise second-stage filter; see `livebooks/sketches/filter_chain.livemd`.

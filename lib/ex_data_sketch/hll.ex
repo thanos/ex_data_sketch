@@ -12,12 +12,33 @@ defmodule ExDataSketch.HLL do
   - Memory: `m` bytes (one byte per register in v1 format)
   - Relative standard error: approximately `1.04 / sqrt(m)`
 
-  | p  | Registers | Memory  | ~Error |
-  |----|-----------|---------|--------|
-  | 10 | 1,024     | 1 KiB  | 3.25%  |
-  | 12 | 4,096     | 4 KiB  | 1.63%  |
-  | 14 | 16,384    | 16 KiB | 0.81%  |
-  | 16 | 65,536    | 64 KiB | 0.41%  |
+  | p  | Registers  | Memory  | ~Error |
+  |----|------------|---------|--------|
+  | 10 | 1,024      | 1 KiB   | 3.25%  |
+  | 12 | 4,096      | 4 KiB   | 1.63%  |
+  | 14 | 16,384     | 16 KiB  | 0.81%  |
+  | 16 | 65,536     | 64 KiB  | 0.41%  |
+  | 20 | 1,048,576  | 1 MiB   | 0.10%  |
+  | 26 | 67,108,864 | 64 MiB  | 0.013% |
+
+  ## Precision Range (4..26)
+
+  - **`p >= 4` is a hard requirement.** The bias-correction constant
+    `alpha(m)` is only defined for `m = 2^p in {16, 32, 64}` as exact
+    published values, with a general asymptotic formula covering every
+    `m >= 128` (i.e. every `p >= 7`); together these cover `p >= 4`
+    exactly, with no case for `p < 4`. This is a real algorithmic floor,
+    not a convention.
+  - **`p <= 26` is a practical ceiling, not an algorithmic one.** Nothing
+    in the register encoding or estimator caps `p` below 26 -- registers
+    are a plain byte each (max representable rank is `64 - p + 1`, far
+    under 255 for any realistic `p`), and `alpha(m)`'s general formula is
+    valid for any `m >= 128`. 26 is chosen to match `ExDataSketch.ULL`'s
+    ceiling (itself a hard limit -- see its moduledoc) so the two
+    cardinality estimators offer the same maximum precision/memory budget
+    for a like-for-like choice between them. At `p = 26` a single sketch
+    is 64 MiB; most workloads need nowhere near this and should stay at
+    `p <= 18` or so.
 
   ## Binary State Layout (v1)
 
@@ -26,7 +47,7 @@ defmodule ExDataSketch.HLL do
       Offset  Size    Field
       ------  ------  -----
       0       1       Version (u8, currently 1)
-      1       1       Precision p (u8, 4..16)
+      1       1       Precision p (u8, 4..26)
       2       2       Reserved flags (u16 little-endian, must be 0)
       4       m       Registers (m = 2^p bytes, one u8 per register)
 
@@ -34,7 +55,8 @@ defmodule ExDataSketch.HLL do
 
   ## Options
 
-  - `:p` - precision parameter, integer 4..16 (default: 14)
+  - `:p` - precision parameter, integer 4..26 (default: 14). See
+    "Precision Range" above.
   - `:backend` - backend module (default: `ExDataSketch.Backend.Pure`)
 
   ## Merge Properties
@@ -44,7 +66,7 @@ defmodule ExDataSketch.HLL do
   same result, making HLL safe for parallel and distributed aggregation.
   """
 
-  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash}
+  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash, Telemetry}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -54,9 +76,11 @@ defmodule ExDataSketch.HLL do
 
   defstruct [:state, :opts, :backend]
 
+  @behaviour ExDataSketch.Sketch
+
   @default_p 14
   @min_p 4
-  @max_p 16
+  @max_p 26
 
   @doc """
   Creates a new HLL sketch.
@@ -68,6 +92,9 @@ defmodule ExDataSketch.HLL do
   - `:backend` - backend module (default: `ExDataSketch.Backend.Pure`).
   - `:hash_fn` - custom hash function `(term -> non_neg_integer)`.
   - `:seed` - hash seed (default: 0).
+  - `:update_many_chunk_size` - chunk size for `update_many/2` internal
+    batching (default: 10000). Must be set at creation time; cannot be
+    overridden on a per-call basis.
 
   ## Examples
 
@@ -91,7 +118,11 @@ defmodule ExDataSketch.HLL do
     clean_opts =
       [p: p, hash_strategy: hash_strategy] ++
         if(hash_fn, do: [hash_fn: hash_fn], else: []) ++
-        if(seed, do: [seed: seed], else: [])
+        if(seed, do: [seed: seed], else: []) ++
+        if(Keyword.has_key?(opts, :update_many_chunk_size),
+          do: [update_many_chunk_size: Keyword.fetch!(opts, :update_many_chunk_size)],
+          else: []
+        )
 
     state = backend.hll_new(clean_opts)
     %__MODULE__{state: state, opts: clean_opts, backend: backend}
@@ -123,6 +154,9 @@ defmodule ExDataSketch.HLL do
   More efficient than calling `update/2` repeatedly because it minimizes
   intermediate binary allocations.
 
+  The internal batch size is controlled by `:update_many_chunk_size`,
+  which must be set at `new/1` time and cannot be changed per call.
+
   ## Examples
 
       iex> sketch = ExDataSketch.HLL.new(p: 10) |> ExDataSketch.HLL.update_many(["a", "b", "c"])
@@ -130,14 +164,16 @@ defmodule ExDataSketch.HLL do
       true
 
   """
-  @update_many_chunk_size 10_000
+  @default_update_many_chunk_size 10_000
 
   @spec update_many(t(), Enumerable.t()) :: t()
   def update_many(%__MODULE__{opts: opts, backend: backend} = sketch, items)
       when backend == Backend.Pure do
+    chunk_size = Keyword.get(opts, :update_many_chunk_size, @default_update_many_chunk_size)
+
     new_state =
       items
-      |> Stream.chunk_every(@update_many_chunk_size)
+      |> Stream.chunk_every(chunk_size)
       |> Enum.reduce(sketch.state, fn chunk, state_acc ->
         hashes = Enum.map(chunk, &hash_item(&1, opts))
         backend.hll_update_many(state_acc, hashes, opts)
@@ -147,13 +183,15 @@ defmodule ExDataSketch.HLL do
   end
 
   def update_many(%__MODULE__{opts: opts, backend: backend} = sketch, items) do
+    chunk_size = Keyword.get(opts, :update_many_chunk_size, @default_update_many_chunk_size)
+
     use_raw =
       backend == Backend.Rust and Keyword.get(opts, :hash_fn) == nil and
         Keyword.get(opts, :hash_strategy) != :phash2
 
     new_state =
       items
-      |> Stream.chunk_every(@update_many_chunk_size)
+      |> Stream.chunk_every(chunk_size)
       |> Enum.reduce(sketch.state, fn chunk, state_acc ->
         if use_raw do
           Backend.Rust.hll_update_many_raw(state_acc, chunk, opts)
@@ -244,6 +282,12 @@ defmodule ExDataSketch.HLL do
   See `ExDataSketch.Binary` for the high-level frame contract and
   `ExDataSketch.Binary.Header` for the byte-level layout.
 
+  Accepts an optional keyword list with the following keys:
+
+  - `:format` - serialization format: `:v2` (default, EXSK v2 with CRC32C)
+    or `:v1` (legacy EXSK v1, compatible with v0.7.x readers). The v1
+    format is only valid for sketches using `:phash2` hash strategy.
+
   ## Examples
 
       iex> sketch = ExDataSketch.HLL.new(p: 10)
@@ -252,14 +296,46 @@ defmodule ExDataSketch.HLL do
       iex> byte_size(binary) > 0
       true
 
+      iex> sketch = ExDataSketch.HLL.new(p: 10, hash_strategy: :phash2)
+      iex> binary = ExDataSketch.HLL.serialize(sketch, format: :v1)
+      iex> <<"EXSK", 1, 1, _rest::binary>> = binary
+
   """
-  @spec serialize(t()) :: binary()
-  def serialize(%__MODULE__{state: state, opts: opts}) do
-    p = Keyword.fetch!(opts, :p)
-    hs = hash_strategy_byte(opts)
-    params_bin = <<p::unsigned-8, hs::unsigned-8>>
-    metadata = Binary.metadata_from_opts(Codec.sketch_id_hll(), 1, opts)
-    Binary.encode(metadata, Binary.build_payload(params_bin, state))
+  @spec serialize(t(), keyword()) :: binary()
+  def serialize(%__MODULE__{state: state, opts: opts}, serialize_opts \\ []) do
+    format = Keyword.get(serialize_opts, :format, :v2)
+    start_time = System.monotonic_time()
+
+    binary =
+      case format do
+        :v2 ->
+          p = Keyword.fetch!(opts, :p)
+          hs = hash_strategy_byte(opts)
+          params_bin = <<p::unsigned-8, hs::unsigned-8>>
+          metadata = Binary.metadata_from_opts(Codec.sketch_id_hll(), 1, opts)
+          Binary.encode(metadata, Binary.build_payload(params_bin, state))
+
+        :v1 ->
+          unless Keyword.get(opts, :hash_strategy, :phash2) == :phash2 do
+            raise ArgumentError,
+                  "v1 serialization requires :phash2 hash strategy, " <>
+                    "got: #{inspect(Keyword.get(opts, :hash_strategy))}"
+          end
+
+          p = Keyword.fetch!(opts, :p)
+          params_bin = <<p::unsigned-8>>
+          Codec.encode(Codec.sketch_id_hll(), 1, params_bin, state)
+      end
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:sketch, :serialize),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: :hll},
+        :sketch
+      )
+
+    binary
   end
 
   @doc """
@@ -280,26 +356,42 @@ defmodule ExDataSketch.HLL do
   """
   @spec deserialize(binary()) :: {:ok, t()} | {:error, Exception.t()}
   def deserialize(binary) when is_binary(binary) do
-    with {:ok, decoded} <- Binary.decode(binary),
-         :ok <- validate_sketch_id(decoded.sketch_id),
-         {:ok, opts} <- decode_params(decoded.params) do
-      backend = Backend.default()
+    start_time = System.monotonic_time()
 
-      {:ok,
-       %__MODULE__{
-         state: decoded.state,
-         opts: opts,
-         backend: backend
-       }}
-    end
+    result =
+      with {:ok, decoded} <- Binary.decode(binary),
+           :ok <- validate_sketch_id(decoded.sketch_id),
+           {:ok, opts} <- decode_params(decoded.params) do
+        backend = Backend.default()
+
+        {:ok,
+         %__MODULE__{
+           state: decoded.state,
+           opts: opts,
+           backend: backend
+         }}
+      end
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:sketch, :deserialize),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: :hll},
+        :sketch
+      )
+
+    result
   end
 
   @doc """
   Serializes the sketch to Apache DataSketches HLL format.
 
-  Not implemented. Apache DataSketches HLL interop is not planned for the
-  current release series. Only Theta sketches support DataSketches interop
-  via `ExDataSketch.Theta.serialize_datasketches/1`. For HLL serialization,
+  Not implemented. Apache DataSketches HLL interop is planned for v0.11.0
+  (blocked on hash-function equality between `ExDataSketch.Hash.hash64/1`
+  and DataSketches' HLL union of LIST/SET/HLL_4/6/8 encodings). Only Theta
+  and KLL sketches support DataSketches interop today, via
+  `ExDataSketch.Theta.serialize_datasketches/1` and
+  `ExDataSketch.KLL.serialize_datasketches/2`. For HLL serialization,
   use `serialize/1` (ExDataSketch-native EXSK format).
 
   ## Examples
@@ -358,7 +450,14 @@ defmodule ExDataSketch.HLL do
   """
   @spec from_enumerable(Enumerable.t(), keyword()) :: t()
   def from_enumerable(enumerable, opts \\ []) do
-    new(opts) |> update_many(enumerable)
+    Telemetry.span_with_result(
+      Telemetry.event_name(:sketch, :ingest),
+      %{},
+      %{sketch_type: :hll},
+      :sketch,
+      fn -> new(opts) |> update_many(enumerable) end,
+      fn sketch -> %{size_bytes: size_bytes(sketch)} end
+    )
   end
 
   @doc """
@@ -377,7 +476,15 @@ defmodule ExDataSketch.HLL do
   """
   @spec merge_many(Enumerable.t()) :: t()
   def merge_many(sketches) do
-    Enum.reduce(sketches, fn sketch, acc -> merge(acc, sketch) end)
+    sketches_list = Enum.to_list(sketches)
+
+    Telemetry.span(
+      Telemetry.event_name(:sketch, :merge),
+      %{merge_count: length(sketches_list)},
+      %{sketch_type: :hll},
+      :sketch,
+      fn -> Enum.reduce(sketches_list, fn sketch, acc -> merge(acc, sketch) end) end
+    )
   end
 
   @doc """
@@ -410,6 +517,35 @@ defmodule ExDataSketch.HLL do
   @spec merger(keyword()) :: (t(), t() -> t())
   def merger(_opts \\ []) do
     fn a, b -> merge(a, b) end
+  end
+
+  @doc """
+  Returns the set of operation names supported by `ExDataSketch.HLL`.
+
+  See `ExDataSketch.Sketch` for the shared capability vocabulary.
+
+  ## Examples
+
+      iex> ExDataSketch.HLL.capabilities() |> MapSet.member?(:estimate)
+      true
+
+      iex> ExDataSketch.HLL.capabilities() |> MapSet.member?(:no_such_operation)
+      false
+
+  """
+  @spec capabilities() :: ExDataSketch.Sketch.capabilities()
+  @dialyzer {:no_opaque, capabilities: 0}
+  def capabilities do
+    MapSet.new([
+      :new,
+      :update,
+      :update_many,
+      :merge,
+      :merge_many,
+      :estimate,
+      :serialize,
+      :deserialize
+    ])
   end
 
   # -- Private --

@@ -1,14 +1,14 @@
 defmodule ExDataSketch.MixProject do
   use Mix.Project
 
-  @version "0.8.0"
+  @version "0.10.1"
   @source_url "https://github.com/thanos/ex_data_sketch"
 
   def project do
     [
       app: :ex_data_sketch,
       version: @version,
-      elixir: "~> 1.15",
+      elixir: "~> 1.18",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       deps: deps(),
@@ -28,7 +28,15 @@ defmodule ExDataSketch.MixProject do
       # Dialyzer
       dialyzer: [
         plt_file: {:no_warn, "priv/plts/dialyzer.plt"},
-        plt_add_apps: [:mix, :ex_unit]
+        plt_add_apps: [
+          :mix,
+          :ex_unit,
+          :mnesia,
+          :cubdb,
+          :ecto_sql,
+          :telemetry_metrics,
+          :phoenix_live_dashboard
+        ]
       ]
     ]
   end
@@ -47,9 +55,16 @@ defmodule ExDataSketch.MixProject do
   end
 
   def application do
-    [
-      extra_applications: [:logger]
-    ]
+    extra_apps = [:logger]
+
+    extra_apps =
+      if Mix.env() in [:test, :dev] do
+        [:mnesia | extra_apps]
+      else
+        extra_apps
+      end
+
+    [extra_applications: extra_apps]
   end
 
   defp elixirc_paths(:test), do: ["lib", "test/support"]
@@ -68,7 +83,16 @@ defmodule ExDataSketch.MixProject do
       {:jason, "~> 1.4"},
       {:excoveralls, "~> 0.18", only: :test, runtime: false},
       {:mox, "~> 1.0", only: :test},
-      {:ex_slop, "~> 0.1", only: [:dev, :test], runtime: false}
+      {:ex_slop, "~> 0.1", only: [:dev, :test], runtime: false},
+      {:telemetry, "~> 1.0"},
+      {:telemetry_metrics, "~> 1.0"},
+      {:opentelemetry_api, "~> 1.0", optional: true},
+      {:phoenix_live_dashboard, "~> 0.8", optional: true},
+      {:broadway, "~> 1.0", optional: true},
+      {:flow, "~> 1.2", optional: true},
+      {:gen_stage, "~> 1.0", optional: true},
+      {:cubdb, "~> 2.0", optional: true},
+      {:ecto_sql, "~> 3.0", optional: true}
     ]
   end
 
@@ -102,21 +126,150 @@ defmodule ExDataSketch.MixProject do
     [
       main: "ExDataSketch",
       extras: [
+        # -- Getting Started --
         "guides/quick_start.md",
         "guides/usage_guide.md",
         "guides/integrations.md",
+        "guides/livebooks.md",
+
+        # -- Sketch Family Tutorials (grouped by task below) --
+        {"livebooks/sketches/hll.livemd", [filename: "livebook_hll"]},
+        {"livebooks/sketches/ull.livemd", [filename: "livebook_ull"]},
+        {"livebooks/sketches/cms.livemd", [filename: "livebook_cms"]},
+        {"livebooks/sketches/frequent_items.livemd", [filename: "livebook_frequent_items"]},
+        {"livebooks/sketches/misra_gries.livemd", [filename: "livebook_misra_gries"]},
+        {"livebooks/sketches/kll.livemd", [filename: "livebook_kll"]},
+        {"livebooks/sketches/ddsketch.livemd", [filename: "livebook_ddsketch"]},
+        {"livebooks/sketches/req.livemd", [filename: "livebook_req"]},
+        {"livebooks/sketches/theta.livemd", [filename: "livebook_theta"]},
+        {"livebooks/sketches/bloom.livemd", [filename: "livebook_bloom"]},
+        {"livebooks/sketches/cuckoo.livemd", [filename: "livebook_cuckoo"]},
+        {"livebooks/sketches/quotient.livemd", [filename: "livebook_quotient"]},
+        {"livebooks/sketches/cqf.livemd", [filename: "livebook_cqf"]},
+        {"livebooks/sketches/xor_filter.livemd", [filename: "livebook_xor_filter"]},
+        {"livebooks/sketches/filter_chain.livemd", [filename: "livebook_filter_chain"]},
+        {"livebooks/sketches/iblt.livemd", [filename: "livebook_iblt"]},
+
+        # -- Core Concepts --
+        "guides/aggregation_wall.md",
+        "guides/distributed_merge_semantics.md",
         "guides/hash_strategies.md",
-        "guides/hll_performance.md",
+
+        # -- Production & Operations --
+        "guides/persistence.md",
+        {"livebooks/persistence_snapshots.livemd", [filename: "livebook_persistence_snapshots"]},
+        "guides/windowing.md",
+        "guides/supervised_sketches.md",
+        "guides/telemetry.md",
+        "guides/observability.md",
         "guides/precompiled_nifs.md",
+
+        # -- Framework Integrations (guide + matching livebook, paired) --
+        "guides/streaming_sketches.md",
+        {"livebooks/streaming_cardinality.livemd", [filename: "livebook_streaming_cardinality"]},
+        "guides/broadway_integration.md",
+        {"livebooks/broadway_integration.livemd",
+         [filename: "livebook_broadway_integration", title: "Broadway Integration (Livebook)"]},
+        "guides/genstage_integration.md",
+        {"livebooks/genstage_aggregation.livemd", [filename: "livebook_genstage_aggregation"]},
+        "guides/flow_integration.md",
+        {"livebooks/distributed_merges.livemd", [filename: "livebook_distributed_merges"]},
+
+        # -- Case Studies --
+        {"livebooks/ai_token_analytics.livemd", [filename: "livebook_ai_token_analytics"]},
+        {"livebooks/sketching_one_billion_rows.livemd",
+         [filename: "livebook_sketching_one_billion_rows"]},
+
+        # -- Interop & Compatibility --
+        "guides/apache_interop.md",
         "guides/serialization_compatibility.md",
-        "guides/v0.8.0_migration_notes.md",
-        "guides/v0.8.0_architecture.md",
-        "guides/roadmap.md",
         "docs/frequent_items_format.md",
+
+        # -- Project History & Internals --
+        "guides/hll_performance.md",
+        "guides/filter_performance.md",
+        "guides/v0.8.0_architecture.md",
+        "guides/v0.8.0_migration_notes.md",
+        "guides/roadmap.md",
+
+        # -- Changelog (kept ungrouped, prominent) --
         "CHANGELOG.md"
       ],
       groups_for_extras: [
-        Guides: ~r/guides\/.*/
+        "Getting Started": [
+          "guides/quick_start.md",
+          "guides/usage_guide.md",
+          "guides/integrations.md",
+          "guides/livebooks.md"
+        ],
+        "Tutorials: Cardinality": [
+          "livebooks/sketches/hll.livemd",
+          "livebooks/sketches/ull.livemd"
+        ],
+        "Tutorials: Frequency & Heavy Hitters": [
+          "livebooks/sketches/cms.livemd",
+          "livebooks/sketches/frequent_items.livemd",
+          "livebooks/sketches/misra_gries.livemd"
+        ],
+        "Tutorials: Quantiles": [
+          "livebooks/sketches/kll.livemd",
+          "livebooks/sketches/ddsketch.livemd",
+          "livebooks/sketches/req.livemd"
+        ],
+        "Tutorials: Set Operations": [
+          "livebooks/sketches/theta.livemd"
+        ],
+        "Tutorials: Membership Filters": [
+          "livebooks/sketches/bloom.livemd",
+          "livebooks/sketches/cuckoo.livemd",
+          "livebooks/sketches/quotient.livemd",
+          "livebooks/sketches/cqf.livemd",
+          "livebooks/sketches/xor_filter.livemd",
+          "livebooks/sketches/filter_chain.livemd"
+        ],
+        "Tutorials: Set Reconciliation": [
+          "livebooks/sketches/iblt.livemd"
+        ],
+        "Core Concepts": [
+          "guides/aggregation_wall.md",
+          "guides/distributed_merge_semantics.md",
+          "guides/hash_strategies.md"
+        ],
+        "Production & Operations": [
+          "guides/persistence.md",
+          "livebooks/persistence_snapshots.livemd",
+          "guides/windowing.md",
+          "guides/supervised_sketches.md",
+          "guides/telemetry.md",
+          "guides/observability.md",
+          "guides/precompiled_nifs.md"
+        ],
+        "Framework Integrations": [
+          "guides/streaming_sketches.md",
+          "livebooks/streaming_cardinality.livemd",
+          "guides/broadway_integration.md",
+          "livebooks/broadway_integration.livemd",
+          "guides/genstage_integration.md",
+          "livebooks/genstage_aggregation.livemd",
+          "guides/flow_integration.md",
+          "livebooks/distributed_merges.livemd"
+        ],
+        "Case Studies": [
+          "livebooks/ai_token_analytics.livemd",
+          "livebooks/sketching_one_billion_rows.livemd"
+        ],
+        "Interop & Compatibility": [
+          "guides/apache_interop.md",
+          "guides/serialization_compatibility.md",
+          "docs/frequent_items_format.md"
+        ],
+        "Project History & Internals": [
+          "guides/hll_performance.md",
+          "guides/filter_performance.md",
+          "guides/v0.8.0_architecture.md",
+          "guides/v0.8.0_migration_notes.md",
+          "guides/roadmap.md"
+        ]
       ],
       groups_for_modules: [
         "Sketch Algorithms": [
@@ -138,12 +291,48 @@ defmodule ExDataSketch.MixProject do
           ExDataSketch.ULL,
           ExDataSketch.Quantiles
         ],
+        "Stream Integration": [
+          ExDataSketch.Stream
+        ],
+        "Dataflow Integration": [
+          ExDataSketch.Broadway,
+          ExDataSketch.Broadway.PeriodicAggregator,
+          ExDataSketch.GenStage,
+          ExDataSketch.GenStage.SketchConsumer,
+          ExDataSketch.GenStage.SketchProducer,
+          ExDataSketch.GenStage.SketchStage,
+          ExDataSketch.Flow
+        ],
+        Persistence: [
+          ExDataSketch.Storage,
+          ExDataSketch.Storage.ETS,
+          ExDataSketch.Storage.DETS,
+          ExDataSketch.Storage.CubDB,
+          ExDataSketch.Storage.Mnesia,
+          ExDataSketch.Storage.Ecto,
+          ExDataSketch.Storage.Ecto.Schema,
+          ExDataSketch.Storage.Ecto.Migration
+        ],
+        Windowing: [
+          ExDataSketch.Window
+        ],
+        Supervision: [
+          ExDataSketch.Server,
+          ExDataSketch.Sketches
+        ],
         Infrastructure: [
+          ExDataSketch.Sketch,
           ExDataSketch.Hash,
           ExDataSketch.Codec,
           ExDataSketch.Backend,
           ExDataSketch.Backend.Pure,
-          ExDataSketch.Backend.Rust
+          ExDataSketch.Backend.Rust,
+          ExDataSketch.Telemetry,
+          ExDataSketch.Telemetry.Metrics,
+          ExDataSketch.Telemetry.OpenTelemetry
+        ],
+        Dashboard: [
+          ExDataSketch.LiveDashboard.Page
         ],
         Errors: [
           ExDataSketch.Errors
@@ -176,7 +365,8 @@ defmodule ExDataSketch.MixProject do
         "run bench/req_bench.exs",
         "run bench/misra_gries_bench.exs",
         "run bench/ull_bench.exs",
-        "run bench/xxhash3_bench.exs"
+        "run bench/xxhash3_bench.exs",
+        "run bench/stream_ingestion_bench.exs"
       ],
       # Switching between NIF-on and NIF-off modes locally requires cleaning
       # rustler_precompiled's per-env compiled config (which captures the

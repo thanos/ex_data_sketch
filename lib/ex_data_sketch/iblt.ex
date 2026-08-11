@@ -36,7 +36,7 @@ defmodule ExDataSketch.IBLT do
   count (i32), key_sum (u64), value_sum (u64), check_sum (u32).
   """
 
-  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash}
+  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash, Telemetry}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -45,6 +45,8 @@ defmodule ExDataSketch.IBLT do
         }
 
   defstruct [:state, :opts, :backend]
+
+  @behaviour ExDataSketch.Sketch
 
   @default_cell_count 1000
   @default_hash_count 3
@@ -78,6 +80,7 @@ defmodule ExDataSketch.IBLT do
     hash_count = Keyword.get(opts, :hash_count, @default_hash_count)
     seed = Keyword.get(opts, :seed, @default_seed)
     hash_fn = Keyword.get(opts, :hash_fn)
+    hash_strategy = Hash.resolve_strategy(opts)
 
     validate_cell_count!(cell_count)
     validate_hash_count!(hash_count)
@@ -88,7 +91,8 @@ defmodule ExDataSketch.IBLT do
       [
         cell_count: cell_count,
         hash_count: hash_count,
-        seed: seed
+        seed: seed,
+        hash_strategy: hash_strategy
       ] ++ if(hash_fn, do: [hash_fn: hash_fn], else: [])
 
     state = backend.iblt_new(clean_opts)
@@ -142,10 +146,52 @@ defmodule ExDataSketch.IBLT do
   """
   @spec put_many(t(), Enumerable.t()) :: t()
   def put_many(%__MODULE__{state: state, opts: opts, backend: backend} = iblt, items) do
-    pairs = Enum.map(items, fn item -> {hash_item(item, opts), 0} end)
-    new_state = backend.iblt_put_many(state, pairs, opts)
+    use_raw =
+      backend == Backend.Rust and Keyword.get(opts, :hash_fn) == nil and
+        Keyword.get(opts, :hash_strategy) != :phash2
+
+    new_state =
+      if use_raw do
+        Backend.Rust.iblt_put_many_raw(state, Enum.to_list(items), opts)
+      else
+        pairs = Enum.map(items, fn item -> {hash_item(item, opts), 0} end)
+        backend.iblt_put_many(state, pairs, opts)
+      end
+
     %{iblt | state: new_state}
   end
+
+  @doc """
+  Alias for `put/2`, added so `ExDataSketch.IBLT` satisfies the
+  `ExDataSketch.Sketch` behaviour's generic `update/2` callback.
+
+  `put/2` remains the family-idiomatic name and the one used throughout this
+  module's own documentation; `update/2` exists purely for cross-family
+  generic code (see `ExDataSketch.update/2`).
+
+  ## Examples
+
+      iex> iblt = ExDataSketch.IBLT.new() |> ExDataSketch.IBLT.update("hello")
+      iex> ExDataSketch.IBLT.member?(iblt, "hello")
+      true
+
+  """
+  @spec update(t(), term()) :: t()
+  def update(%__MODULE__{} = iblt, item), do: put(iblt, item)
+
+  @doc """
+  Alias for `put_many/2`, added so `ExDataSketch.IBLT` satisfies the
+  `ExDataSketch.Sketch` behaviour's generic `update_many/2` callback.
+
+  ## Examples
+
+      iex> iblt = ExDataSketch.IBLT.new() |> ExDataSketch.IBLT.update_many(["a", "b", "c"])
+      iex> ExDataSketch.IBLT.member?(iblt, "a")
+      true
+
+  """
+  @spec update_many(t(), Enumerable.t()) :: t()
+  def update_many(%__MODULE__{} = iblt, items), do: put_many(iblt, items)
 
   @doc """
   Tests whether an item may be a member.
@@ -314,11 +360,25 @@ defmodule ExDataSketch.IBLT do
   """
   @spec merge_many(Enumerable.t()) :: t()
   def merge_many(iblts) do
-    Enum.reduce(iblts, fn iblt, acc -> merge(acc, iblt) end)
+    iblts_list = Enum.to_list(iblts)
+
+    Telemetry.span(
+      Telemetry.event_name(:sketch, :merge),
+      %{merge_count: length(iblts_list)},
+      %{sketch_type: :iblt},
+      :sketch,
+      fn -> Enum.reduce(iblts_list, fn iblt, acc -> merge(acc, iblt) end) end
+    )
   end
 
   @doc """
   Serializes the IBLT to the EXSK binary format.
+
+  ## Options
+
+  - `:format` - serialization format: `:v2` (default, EXSK v2 with CRC32C)
+    or `:v1` (legacy EXSK v1, compatible with v0.7.x readers). The v1
+    format is only valid for sketches using `:phash2` hash strategy.
 
   ## Examples
 
@@ -328,9 +388,15 @@ defmodule ExDataSketch.IBLT do
       iex> byte_size(binary) > 0
       true
 
+      iex> iblt = ExDataSketch.IBLT.new(hash_strategy: :phash2)
+      iex> binary = ExDataSketch.IBLT.serialize(iblt, format: :v1)
+      iex> <<"EXSK", 1, 12, _rest::binary>> = binary
+
   """
-  @spec serialize(t()) :: binary()
-  def serialize(%__MODULE__{state: state, opts: opts}) do
+  @spec serialize(t(), keyword()) :: binary()
+  def serialize(%__MODULE__{state: state, opts: opts}, serialize_opts \\ []) do
+    format = Keyword.get(serialize_opts, :format, :v2)
+    start_time = System.monotonic_time()
     hash_count = Keyword.fetch!(opts, :hash_count)
     seed = Keyword.get(opts, :seed, @default_seed)
     cell_count = Keyword.fetch!(opts, :cell_count)
@@ -339,10 +405,33 @@ defmodule ExDataSketch.IBLT do
       <<hash_count::unsigned-8, 0::unsigned-8, seed::unsigned-little-32,
         cell_count::unsigned-little-32>>
 
-    Binary.encode(
-      Binary.metadata_from_opts(Codec.sketch_id_iblt(), 1, opts),
-      Binary.build_payload(params_bin, state)
-    )
+    binary =
+      case format do
+        :v2 ->
+          Binary.encode(
+            Binary.metadata_from_opts(Codec.sketch_id_iblt(), 1, opts),
+            Binary.build_payload(params_bin, state)
+          )
+
+        :v1 ->
+          unless Keyword.get(opts, :hash_strategy, :phash2) == :phash2 do
+            raise ArgumentError,
+                  "v1 serialization requires :phash2 hash strategy, " <>
+                    "got: #{inspect(Keyword.get(opts, :hash_strategy))}"
+          end
+
+          Codec.encode(Codec.sketch_id_iblt(), 1, params_bin, state)
+      end
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:sketch, :serialize),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: :iblt},
+        :sketch
+      )
+
+    binary
   end
 
   @doc """
@@ -360,19 +449,33 @@ defmodule ExDataSketch.IBLT do
   """
   @spec deserialize(binary()) :: {:ok, t()} | {:error, Exception.t()}
   def deserialize(binary) when is_binary(binary) do
-    with {:ok, decoded} <- Binary.decode(binary),
-         :ok <- validate_sketch_id(decoded.sketch_id),
-         {:ok, opts} <- decode_params(decoded.params),
-         :ok <- validate_state_header(decoded.state) do
-      backend = Backend.default()
+    start_time = System.monotonic_time()
 
-      {:ok,
-       %__MODULE__{
-         state: decoded.state,
-         opts: opts,
-         backend: backend
-       }}
-    end
+    result =
+      with {:ok, decoded} <- Binary.decode(binary),
+           :ok <- validate_sketch_id(decoded.sketch_id),
+           {:ok, opts} <- decode_params(decoded.params),
+           :ok <- validate_state_header(decoded.state) do
+        backend = Backend.default()
+        opts = restore_hash_strategy(opts, decoded.metadata)
+
+        {:ok,
+         %__MODULE__{
+           state: decoded.state,
+           opts: opts,
+           backend: backend
+         }}
+      end
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:sketch, :deserialize),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: :iblt},
+        :sketch
+      )
+
+    result
   end
 
   @doc """
@@ -401,6 +504,8 @@ defmodule ExDataSketch.IBLT do
       :new,
       :put,
       :put_many,
+      :update,
+      :update_many,
       :member?,
       :delete,
       :subtract,
@@ -441,7 +546,14 @@ defmodule ExDataSketch.IBLT do
   """
   @spec from_enumerable(Enumerable.t(), keyword()) :: t()
   def from_enumerable(enumerable, opts \\ []) do
-    new(opts) |> put_many(enumerable)
+    Telemetry.span_with_result(
+      Telemetry.event_name(:sketch, :ingest),
+      %{},
+      %{sketch_type: :iblt},
+      :sketch,
+      fn -> new(opts) |> put_many(enumerable) end,
+      fn sketch -> %{size_bytes: size_bytes(sketch)} end
+    )
   end
 
   @doc """
@@ -478,7 +590,8 @@ defmodule ExDataSketch.IBLT do
     case Keyword.get(opts, :hash_fn) do
       nil ->
         seed = Keyword.get(opts, :seed, @default_seed)
-        Hash.hash64(item, seed: seed)
+        strategy = Keyword.get(opts, :hash_strategy)
+        Hash.hash64(item, seed: seed, hash_strategy: strategy)
 
       hash_fn ->
         Hash.hash64(item, hash_fn: hash_fn)
@@ -546,6 +659,15 @@ defmodule ExDataSketch.IBLT do
   defp decode_params(_other) do
     {:error, Errors.DeserializationError.exception(reason: "invalid IBLT params binary")}
   end
+
+  # v1 frames carry no metadata block and are phash2-only by construction
+  # (see the :v1 branch of serialize/2); v2 frames record the algorithm
+  # actually used at build time, which must be restored so `hash_item/2`
+  # queries with the same algorithm the sketch's cells were set with.
+  defp restore_hash_strategy(opts, nil), do: Keyword.put(opts, :hash_strategy, :phash2)
+
+  defp restore_hash_strategy(opts, metadata),
+    do: Keyword.put(opts, :hash_strategy, metadata.algorithm)
 
   defp validate_state_header(<<"IBL1", 1::unsigned-8, _rest::binary>>), do: :ok
 

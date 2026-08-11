@@ -1,7 +1,14 @@
-use rustler::{Binary, Env, Term};
+use rustler::{Binary, Env, ListIterator, Term};
 use std::collections::VecDeque;
+use xxhash_rust::xxh3;
 
 use crate::error;
+use crate::hash::murmur3_x64_128;
+
+// Hash algorithm wire bytes for the v2 raw NIF dispatch.
+// MUST match `ExDataSketch.Hash.Metadata.algorithm_to_byte/1`.
+const ALGO_XXH3: u8 = 1;
+const ALGO_MURMUR3: u8 = 2;
 
 const XOR_HEADER_SIZE: usize = 32;
 const XOR_MAX_RETRIES: u32 = 100;
@@ -56,13 +63,60 @@ fn xor_build_impl<'a>(
     let raw = hashes_bin.as_slice();
     let hash_count = raw.len() / 8;
 
-    // Deduplicate deterministically (sorted order)
-    let mut unique_hashes = Vec::with_capacity(hash_count);
+    let mut hashes = Vec::with_capacity(hash_count);
     for i in 0..hash_count {
         let off = i * 8;
         let h = u64::from_le_bytes(raw[off..off + 8].try_into().unwrap());
-        unique_hashes.push(h);
+        hashes.push(h);
     }
+
+    xor_build_from_hashes(env, hashes, fp_bits, seed)
+}
+
+fn xor_build_raw_impl<'a>(
+    env: Env<'a>,
+    items: ListIterator<'a>,
+    fp_bits: u8,
+    seed: u32,
+    algorithm: u8,
+) -> Term<'a> {
+    if fp_bits != 8 && fp_bits != 16 {
+        return error::error_string(env, "fp_bits must be 8 or 16");
+    }
+
+    let hash_seed = seed as u64;
+    let mut hashes = Vec::new();
+
+    for item_term in items {
+        let bin: Binary = match item_term.decode() {
+            Ok(b) => b,
+            Err(_) => return error::error_string(env, "all items must be binaries"),
+        };
+        let hash64 = match algorithm {
+            ALGO_XXH3 => xxh3::xxh3_64_with_seed(bin.as_slice(), hash_seed),
+            ALGO_MURMUR3 => murmur3_x64_128(bin.as_slice(), seed).0,
+            _ => {
+                return error::error_string(
+                    env,
+                    "unsupported hash algorithm byte (expected 1=xxhash3, 2=murmur3)",
+                )
+            }
+        };
+        hashes.push(hash64);
+    }
+
+    xor_build_from_hashes(env, hashes, fp_bits, seed)
+}
+
+/// Shared by the pre-hashed and raw (hash-in-Rust) paths: deduplicates
+/// `hashes` (deterministic sorted order) and runs the peeling
+/// construction. Byte-identical regardless of where the hashes came from.
+fn xor_build_from_hashes<'a>(
+    env: Env<'a>,
+    mut unique_hashes: Vec<u64>,
+    fp_bits: u8,
+    seed: u32,
+) -> Term<'a> {
     unique_hashes.sort_unstable();
     unique_hashes.dedup();
     let n = unique_hashes.len() as u32;
@@ -244,4 +298,41 @@ fn xor_build_dirty_nif<'a>(
     seed: u32,
 ) -> Term<'a> {
     xor_build_impl(env, hashes_bin, fp_bits, seed)
+}
+
+#[rustler::nif]
+fn xor_build_raw_nif<'a>(env: Env<'a>, items: ListIterator<'a>, fp_bits: u8, seed: u32) -> Term<'a> {
+    xor_build_raw_impl(env, items, fp_bits, seed, ALGO_XXH3)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn xor_build_raw_dirty_nif<'a>(
+    env: Env<'a>,
+    items: ListIterator<'a>,
+    fp_bits: u8,
+    seed: u32,
+) -> Term<'a> {
+    xor_build_raw_impl(env, items, fp_bits, seed, ALGO_XXH3)
+}
+
+#[rustler::nif]
+fn xor_build_raw_h_nif<'a>(
+    env: Env<'a>,
+    items: ListIterator<'a>,
+    fp_bits: u8,
+    seed: u32,
+    algorithm: u8,
+) -> Term<'a> {
+    xor_build_raw_impl(env, items, fp_bits, seed, algorithm)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn xor_build_raw_h_dirty_nif<'a>(
+    env: Env<'a>,
+    items: ListIterator<'a>,
+    fp_bits: u8,
+    seed: u32,
+    algorithm: u8,
+) -> Term<'a> {
+    xor_build_raw_impl(env, items, fp_bits, seed, algorithm)
 }

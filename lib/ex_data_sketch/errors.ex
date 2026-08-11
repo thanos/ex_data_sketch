@@ -14,6 +14,7 @@ defmodule ExDataSketch.Errors do
   - `IncompatibleSketchesError` -- sketches cannot be merged due to parameter mismatch.
   - `UnsupportedOperationError` -- operation not supported by a structure.
   - `InvalidChainCompositionError` -- invalid FilterChain stage composition.
+  - `FilterFullError` -- a bang insertion function found the filter full.
   """
 
   defmodule NotImplementedError do
@@ -110,6 +111,23 @@ defmodule ExDataSketch.Errors do
     def exception(opts) do
       reason = Keyword.get(opts, :reason, "invalid composition")
       %__MODULE__{message: "invalid chain composition: #{reason}"}
+    end
+  end
+
+  defmodule FilterFullError do
+    @moduledoc """
+    Raised by a bang function (`put!/2`, and so on) when the underlying
+    filter has no capacity left for the insertion, e.g. `ExDataSketch.Cuckoo`
+    exhausting its relocation budget, or an `ExDataSketch.FilterChain` stage
+    reporting `{:error, :full}`. The non-bang counterpart returns
+    `{:error, :full}` (or `{:error, :full, partial}`) instead of raising.
+    """
+    defexception [:message]
+
+    @impl true
+    def exception(opts) do
+      structure = Keyword.get(opts, :structure, "filter")
+      %__MODULE__{message: "#{structure} is full"}
     end
   end
 

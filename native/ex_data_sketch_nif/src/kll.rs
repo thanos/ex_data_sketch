@@ -194,13 +194,29 @@ fn compact_level(state: &mut KllState, level: usize) {
     let mut sorted = state.levels[level].clone();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
+    // Clear-the-level compaction requires an even-length input: promoting
+    // exactly half the items (at double the weight) exactly preserves total
+    // weight only when the starting count is even. Level capacities are
+    // frequently odd (see level_capacity()), so an odd-length level here is
+    // the common case, not an edge case. Hold back one item -- leave it in
+    // place at the current level, unweighted, for a future compaction -- so
+    // the actual compacted subset always has even length. Without this,
+    // every odd-length compaction silently gains or loses one item's worth
+    // of weight (2^level), corrupting the sum-of-retained-weights invariant
+    // (which must equal `n`) that quantile/rank queries depend on.
+    let held_back: Vec<f64> = if sorted.len() % 2 == 1 {
+        vec![sorted.pop().unwrap()]
+    } else {
+        Vec::new()
+    };
+
     let parity = get_parity(&state.compaction_bits, level);
     let promoted = select_half(&sorted, parity);
 
     flip_parity(&mut state.compaction_bits, level);
 
-    // Clear current level
-    state.levels[level].clear();
+    // Current level keeps only the held-back item (if any).
+    state.levels[level] = held_back;
 
     // Add promoted items to next level
     let next = level + 1;

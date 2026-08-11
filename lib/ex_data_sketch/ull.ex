@@ -3,23 +3,65 @@ defmodule ExDataSketch.ULL do
   UltraLogLog (ULL) sketch for cardinality estimation.
 
   ULL (Ertl, 2023) provides approximately 20% better accuracy than HLL at the
-  same memory footprint. It uses the same `2^p` register array but stores a
-  different value per register that encodes both the geometric rank and an extra
-  sub-bucket bit, then applies the FGRA estimator (sigma/tau convergence from
-  Ertl 2017) instead of HLL's harmonic mean.
+  same memory footprint. It uses the same `2^p` register array as HLL, but
+  each register byte stores a compressed 3-bit window of a per-bucket
+  accumulator: the position of the highest bit ever recorded for that bucket
+  (the geometric rank, via a `pack`/`unpack` encoding) plus the two bits just
+  below it as a sub-bucket refinement. Estimation uses the OptimalFGRAEstimator
+  from Ertl 2023: closed-form small-range and large-range correction terms
+  plus a per-register contribution lookup table for the bulk of the range.
 
   ## Memory and Accuracy
 
   - Register count: `m = 2^p`
   - Memory: `8 + m` bytes (8-byte header + one byte per register)
-  - Relative standard error: approximately `0.835 / sqrt(m)` (vs `1.04 / sqrt(m)` for HLL)
+  - Relative standard error: approximately `0.70 / sqrt(m)` (vs `1.04 / sqrt(m)` for HLL),
+    measured empirically over repeated trials against this implementation
 
   | p  | Registers | Memory  | ~Error (ULL) | ~Error (HLL) |
   |----|-----------|---------|--------------|--------------|
-  | 10 | 1,024     | ~1 KiB  | 2.61%        | 3.25%        |
-  | 12 | 4,096     | ~4 KiB  | 1.30%        | 1.63%        |
-  | 14 | 16,384    | ~16 KiB | 0.65%        | 0.81%        |
-  | 16 | 65,536    | ~64 KiB | 0.33%        | 0.41%        |
+  | 10 | 1,024     | ~1 KiB  | 2.17%        | 3.25%        |
+  | 12 | 4,096     | ~4 KiB  | 1.09%        | 1.63%        |
+  | 14 | 16,384    | ~16 KiB | 0.55%        | 0.81%        |
+  | 16 | 65,536    | ~64 KiB | 0.27%        | 0.41%        |
+
+  ## Estimation Strategy
+
+  Every register byte is classified into one of two regimes:
+
+  1. **Small/large-range registers** (values near the encoding's boundaries):
+     pooled into closed-form quadratic-root correction terms
+     (`smallRangeEstimate`/`largeRangeEstimate` from Ertl 2023), analogous to
+     HyperLogLog's linear-counting correction but generalized to this
+     encoding's extra sub-bucket bits.
+  2. **Normal-range registers**: each contributes a precomputed value from a
+     236-entry lookup table indexed by its distance from a precision-dependent
+     offset.
+
+  The contributions are summed and combined via
+  `estimation_factor[p] * sum^(-1/tau)` (`tau ≈ 0.819`), a single smooth
+  formula that scales continuously from small to large cardinalities --
+  unlike HLL/the pre-v0.10.2 ULL implementation, there is no separate
+  linear-counting branch or explicit large-range correction.
+
+  ## Recommended Precision
+
+  - `p >= 10` is recommended for production use; the measured RSE bound
+    (`~0.70/sqrt(m)`) is tight across the full cardinality range at this
+    precision and above.
+
+  ## Precision Range (4..26)
+
+  Unlike `ExDataSketch.HLL` (whose `p <= 26` is a practical ceiling with no
+  algorithmic basis -- see its moduledoc), ULL's `p <= 26` is a **hard
+  limit**: the `estimation_factor[p]` lookup table
+  (`ESTIMATION_FACTORS` in the reference implementation) has exactly 24
+  entries, indexed by `p - 3`, giving a valid range of `p` in `3..26`. This
+  library additionally requires `p >= 4` (one higher than the table's own
+  floor) purely for consistency with HLL's own floor, not because `p = 3`
+  is unsafe for ULL. Raising the ceiling past 26 would require Ertl 2023's
+  authors (or a from-scratch derivation) to publish additional table
+  entries -- it cannot be done by simply changing a constant, unlike HLL.
 
   ## Binary State Layout (ULL1)
 
@@ -28,17 +70,27 @@ defmodule ExDataSketch.ULL do
       Offset  Size    Field
       ------  ------  -----
       0       4       Magic bytes: "ULL1"
-      4       1       Version (u8, currently 1)
+      4       1       Version (u8, currently 2)
       5       1       Precision p (u8, 4..26)
       6       2       Reserved flags (u16 little-endian, must be 0)
       8       m       Registers (m = 2^p bytes, one u8 per register)
 
   Total: 8 + 2^p bytes.
 
+  Version 2 (v0.10.2+) replaced the register encoding and estimator used in
+  version 1, which was an HLL-derived approximation rather than the real
+  UltraLogLog algorithm and produced significantly overestimated cardinality
+  once every register had been touched at least once. Version-1 binaries are
+  rejected on decode with a clear error rather than silently
+  misinterpreted -- see `deserialize/1`.
+
   ## Options
 
   - `:p` - precision parameter, integer 4..26 (default: 14)
   - `:backend` - backend module (default: `ExDataSketch.Backend.Pure`)
+  - `:update_many_chunk_size` - chunk size for `update_many/2` internal
+    batching (default: 10000). Must be set at creation time; cannot be
+    overridden on a per-call basis.
 
   ## Merge Properties
 
@@ -47,7 +99,7 @@ defmodule ExDataSketch.ULL do
   same result, making ULL safe for parallel and distributed aggregation.
   """
 
-  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash}
+  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash, Telemetry}
   alias ExDataSketch.Errors.DeserializationError
 
   @type t :: %__MODULE__{
@@ -57,6 +109,8 @@ defmodule ExDataSketch.ULL do
         }
 
   defstruct [:state, :opts, :backend]
+
+  @behaviour ExDataSketch.Sketch
 
   @default_p 14
   @min_p 4
@@ -95,7 +149,11 @@ defmodule ExDataSketch.ULL do
     clean_opts =
       [p: p, hash_strategy: hash_strategy] ++
         if(hash_fn, do: [hash_fn: hash_fn], else: []) ++
-        if(seed, do: [seed: seed], else: [])
+        if(seed, do: [seed: seed], else: []) ++
+        if(Keyword.has_key?(opts, :update_many_chunk_size),
+          do: [update_many_chunk_size: Keyword.fetch!(opts, :update_many_chunk_size)],
+          else: []
+        )
 
     state = backend.ull_new(clean_opts)
     %__MODULE__{state: state, opts: clean_opts, backend: backend}
@@ -127,6 +185,9 @@ defmodule ExDataSketch.ULL do
   More efficient than calling `update/2` repeatedly because it minimizes
   intermediate binary allocations.
 
+  The internal batch size is controlled by `:update_many_chunk_size`,
+  which must be set at `new/1` time and cannot be changed per call.
+
   ## Examples
 
       iex> sketch = ExDataSketch.ULL.new(p: 10) |> ExDataSketch.ULL.update_many(["a", "b", "c"])
@@ -134,14 +195,16 @@ defmodule ExDataSketch.ULL do
       true
 
   """
-  @update_many_chunk_size 10_000
+  @default_update_many_chunk_size 10_000
 
   @spec update_many(t(), Enumerable.t()) :: t()
   def update_many(%__MODULE__{opts: opts, backend: backend} = sketch, items)
       when backend == Backend.Pure do
+    chunk_size = Keyword.get(opts, :update_many_chunk_size, @default_update_many_chunk_size)
+
     new_state =
       items
-      |> Stream.chunk_every(@update_many_chunk_size)
+      |> Stream.chunk_every(chunk_size)
       |> Enum.reduce(sketch.state, fn chunk, state_acc ->
         hashes = Enum.map(chunk, &hash_item(&1, opts))
         backend.ull_update_many(state_acc, hashes, opts)
@@ -151,13 +214,15 @@ defmodule ExDataSketch.ULL do
   end
 
   def update_many(%__MODULE__{opts: opts, backend: backend} = sketch, items) do
+    chunk_size = Keyword.get(opts, :update_many_chunk_size, @default_update_many_chunk_size)
+
     use_raw =
       backend == Backend.Rust and Keyword.get(opts, :hash_fn) == nil and
         Keyword.get(opts, :hash_strategy) != :phash2
 
     new_state =
       items
-      |> Stream.chunk_every(@update_many_chunk_size)
+      |> Stream.chunk_every(chunk_size)
       |> Enum.reduce(sketch.state, fn chunk, state_acc ->
         if use_raw do
           Backend.Rust.ull_update_many_raw(state_acc, chunk, opts)
@@ -255,6 +320,12 @@ defmodule ExDataSketch.ULL do
   The serialized binary includes magic bytes, version, sketch type,
   parameters, and state. See `ExDataSketch.Codec` for format details.
 
+  ## Options
+
+  - `:format` - serialization format: `:v2` (default, EXSK v2 with CRC32C)
+    or `:v1` (legacy EXSK v1, compatible with v0.7.x readers). The v1
+    format is only valid for sketches using `:phash2` hash strategy.
+
   ## Examples
 
       iex> sketch = ExDataSketch.ULL.new(p: 10)
@@ -263,17 +334,49 @@ defmodule ExDataSketch.ULL do
       iex> byte_size(binary) > 0
       true
 
-  """
-  @spec serialize(t()) :: binary()
-  def serialize(%__MODULE__{state: state, opts: opts}) do
-    p = Keyword.fetch!(opts, :p)
-    hs = hash_strategy_byte(opts)
-    params_bin = <<p::unsigned-8, hs::unsigned-8>>
+      iex> sketch = ExDataSketch.ULL.new(p: 10, hash_strategy: :phash2)
+      iex> binary = ExDataSketch.ULL.serialize(sketch, format: :v1)
+      iex> <<"EXSK", 1, 15, _rest::binary>> = binary
 
-    Binary.encode(
-      Binary.metadata_from_opts(Codec.sketch_id_ull(), 1, opts),
-      Binary.build_payload(params_bin, state)
-    )
+  """
+  @spec serialize(t(), keyword()) :: binary()
+  def serialize(%__MODULE__{state: state, opts: opts}, serialize_opts \\ []) do
+    format = Keyword.get(serialize_opts, :format, :v2)
+    start_time = System.monotonic_time()
+
+    binary =
+      case format do
+        :v2 ->
+          p = Keyword.fetch!(opts, :p)
+          hs = hash_strategy_byte(opts)
+          params_bin = <<p::unsigned-8, hs::unsigned-8>>
+
+          Binary.encode(
+            Binary.metadata_from_opts(Codec.sketch_id_ull(), 1, opts),
+            Binary.build_payload(params_bin, state)
+          )
+
+        :v1 ->
+          unless Keyword.get(opts, :hash_strategy, :phash2) == :phash2 do
+            raise ArgumentError,
+                  "v1 serialization requires :phash2 hash strategy, " <>
+                    "got: #{inspect(Keyword.get(opts, :hash_strategy))}"
+          end
+
+          p = Keyword.fetch!(opts, :p)
+          params_bin = <<p::unsigned-8>>
+          Codec.encode(Codec.sketch_id_ull(), 1, params_bin, state)
+      end
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:sketch, :serialize),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: :ull},
+        :sketch
+      )
+
+    binary
   end
 
   @doc """
@@ -289,19 +392,32 @@ defmodule ExDataSketch.ULL do
   """
   @spec deserialize(binary()) :: {:ok, t()} | {:error, Exception.t()}
   def deserialize(binary) when is_binary(binary) do
-    with {:ok, decoded} <- Binary.decode(binary),
-         :ok <- validate_sketch_id(decoded.sketch_id),
-         {:ok, opts} <- decode_params(decoded.params),
-         :ok <- validate_state(decoded.state, opts) do
-      backend = Backend.default()
+    start_time = System.monotonic_time()
 
-      {:ok,
-       %__MODULE__{
-         state: decoded.state,
-         opts: opts,
-         backend: backend
-       }}
-    end
+    result =
+      with {:ok, decoded} <- Binary.decode(binary),
+           :ok <- validate_sketch_id(decoded.sketch_id),
+           {:ok, opts} <- decode_params(decoded.params),
+           :ok <- validate_state(decoded.state, opts) do
+        backend = Backend.default()
+
+        {:ok,
+         %__MODULE__{
+           state: decoded.state,
+           opts: opts,
+           backend: backend
+         }}
+      end
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:sketch, :deserialize),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: :ull},
+        :sketch
+      )
+
+    result
   end
 
   @doc """
@@ -322,7 +438,14 @@ defmodule ExDataSketch.ULL do
   """
   @spec from_enumerable(Enumerable.t(), keyword()) :: t()
   def from_enumerable(enumerable, opts \\ []) do
-    new(opts) |> update_many(enumerable)
+    Telemetry.span_with_result(
+      Telemetry.event_name(:sketch, :ingest),
+      %{},
+      %{sketch_type: :ull},
+      :sketch,
+      fn -> new(opts) |> update_many(enumerable) end,
+      fn sketch -> %{size_bytes: size_bytes(sketch)} end
+    )
   end
 
   @doc """
@@ -341,7 +464,15 @@ defmodule ExDataSketch.ULL do
   """
   @spec merge_many(Enumerable.t()) :: t()
   def merge_many(sketches) do
-    Enum.reduce(sketches, fn sketch, acc -> merge(acc, sketch) end)
+    sketches_list = Enum.to_list(sketches)
+
+    Telemetry.span(
+      Telemetry.event_name(:sketch, :merge),
+      %{merge_count: length(sketches_list)},
+      %{sketch_type: :ull},
+      :sketch,
+      fn -> Enum.reduce(sketches_list, fn sketch, acc -> merge(acc, sketch) end) end
+    )
   end
 
   @doc """
@@ -374,6 +505,36 @@ defmodule ExDataSketch.ULL do
   @spec merger(keyword()) :: (t(), t() -> t())
   def merger(_opts \\ []) do
     fn a, b -> merge(a, b) end
+  end
+
+  @doc """
+  Returns the set of operation names supported by `ExDataSketch.ULL`.
+
+  See `ExDataSketch.Sketch` for the shared capability vocabulary.
+
+  ## Examples
+
+      iex> ExDataSketch.ULL.capabilities() |> MapSet.member?(:estimate)
+      true
+
+      iex> ExDataSketch.ULL.capabilities() |> MapSet.member?(:no_such_operation)
+      false
+
+  """
+  @spec capabilities() :: ExDataSketch.Sketch.capabilities()
+  @dialyzer {:no_opaque, capabilities: 0}
+  def capabilities do
+    MapSet.new([
+      :new,
+      :update,
+      :update_many,
+      :merge,
+      :merge_many,
+      :estimate,
+      :count,
+      :serialize,
+      :deserialize
+    ])
   end
 
   # -- Private --
@@ -467,10 +628,10 @@ defmodule ExDataSketch.ULL do
     expected_size = 8 + Bitwise.bsl(1, p)
 
     cond do
-      version != 1 ->
+      version != 2 ->
         {:error,
          DeserializationError.exception(
-           reason: "unsupported ULL state version #{version}, expected 1"
+           reason: "unsupported ULL state version #{version}, expected 2"
          )}
 
       flags != 0 ->
