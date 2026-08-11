@@ -16,43 +16,51 @@ Three layers of observability:
 2. **OpenTelemetry spans** -- optional bridge to distributed tracing
 3. **Storage metrics** -- persistence-layer instrumentation (ETS, DETS, etc.)
 
+## Telemetry.Metrics
+
+`ExDataSketch.Telemetry.Metrics.all/1` returns a ready-made
+`Telemetry.Metrics` definition -- a `summary` for every numeric
+measurement and a `counter` for occurrence-only events -- for every event
+`ExDataSketch.Telemetry.all_event_names/0` lists, so wiring the library
+into any `:telemetry_metrics`-based reporter (Prometheus, StatsD,
+`Telemetry.Metrics.ConsoleReporter`, or Phoenix LiveDashboard's own
+metrics page) is one call instead of hand-writing a metric per event:
+
+    # In your application's telemetry.ex:
+    def metrics do
+      ExDataSketch.Telemetry.Metrics.all() ++ [
+        # ... your application's own metrics
+      ]
+    end
+
+Pass `prefix:` if you're running more than one ExDataSketch-backed
+component and need distinct metric namespaces in a shared reporter:
+
+    ExDataSketch.Telemetry.Metrics.all(prefix: "my_app")
+
+See `ExDataSketch.Telemetry.Metrics`'s moduledoc for what is deliberately
+left out (high-cardinality metadata like `batch_size`, measurements that
+aren't in the `:telemetry.execute/3` measurements map) and why.
+
 ## LiveDashboard
 
-ExDataSketch telemetry events integrate directly with Phoenix LiveDashboard.
-When LiveDashboard is configured, you can see real-time sketch ingest rates,
-merge latencies, and persistence operation durations.
+`ExDataSketch.LiveDashboard.Page` (requires the optional
+`phoenix_live_dashboard` dependency) adds a page listing every
+ExDataSketch telemetry event alongside the `Telemetry.Metrics` name(s)
+`ExDataSketch.Telemetry.Metrics.all/1` derives from it -- a static reference for
+wiring up a reporter, not a live view of any particular running sketch
+(it has no way to know which `ExDataSketch.Server`/`ExDataSketch.Sketches`
+instances your application started):
 
-### Attaching a LiveDashboard Handler
+    live_dashboard "/dashboard",
+      additional_pages: [
+        sketches: ExDataSketch.LiveDashboard.Page
+      ]
 
-    # In your application supervisor
-    :telemetry.attach(
-      "exds-live_dashboard-handler",
-      [:ex_data_sketch, :sketch, :ingest],
-      fn _name, measurements, metadata, _config ->
-        Phoenix.LiveDashboard.push_event("ex_data_sketch_ingest", %{
-          sketch_type: metadata.sketch_type,
-          duration_ms: System.convert_time_unit(measurements.duration, :native, :millisecond)
-        })
-      end,
-      nil
-    )
-
-## Grafana Dashboards
-
-ExDataSketch events can be forwarded to Grafana via the
-`telemetry_metrics` ecosystem:
-
-    # In your application's `start/2`:
-    Telemetry.Metrics.summary("ex_data_sketch.sketch.ingest.duration",
-      description: "Sketch ingestion duration",
-      unit: {:native, :millisecond},
-      tags: [:sketch_type]
-    )
-
-    Telemetry.Metrics.last_value("ex_data_sketch.persistence.save.size_bytes",
-      description: "Serialized sketch size",
-      tags: [:sketch_type, :backend]
-    )
+For live per-instance estimates (not just event/metric reference), build
+an application-specific LiveDashboard page or LiveView that calls
+`ExDataSketch.Server.estimate/2` on the instances your application
+actually runs -- see `guides/supervised_sketches.md`.
 
 ## Production Checklist
 

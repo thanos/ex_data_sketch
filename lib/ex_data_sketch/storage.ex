@@ -128,10 +128,11 @@ defmodule ExDataSketch.Storage do
 
   If no value exists at `key`, this is equivalent to `save/3`. Backends
   that support atomic merge (`ExDataSketch.Storage.Mnesia`,
-  `ExDataSketch.Storage.Ecto`) do so via a transaction; others
-  (`ExDataSketch.Storage.ETS`, `ExDataSketch.Storage.DETS`,
-  `ExDataSketch.Storage.CubDB`) perform a read-modify-write cycle -- see each
-  backend's own `merge/3` documentation for its concurrency guarantees.
+  `ExDataSketch.Storage.Ecto`, `ExDataSketch.Storage.CubDB`, the last via
+  `CubDB.transaction/2`) do so via a transaction; others
+  (`ExDataSketch.Storage.ETS`, `ExDataSketch.Storage.DETS`) perform a
+  non-atomic read-modify-write cycle -- see each backend's own `merge/3`
+  documentation for its concurrency guarantees.
   """
   @callback merge(sketch :: struct(), ref(), key()) :: :ok | {:error, term()}
 
@@ -144,9 +145,16 @@ defmodule ExDataSketch.Storage do
 
   @doc """
   Returns a supervisor child spec for backends whose ref must be started and
-  supervised (for example, a `CubDB` process). Backends with no process to
-  supervise (`ETS`, `DETS`, `Mnesia`, `Ecto`, whose repo is supervised by the
-  host application) do not implement this optional callback.
+  supervised (for example, a `CubDB` process).
+
+  This optional callback exists for custom `@behaviour ExDataSketch.Storage`
+  implementations to adopt; none of the five shipped backends implement it
+  today. `ExDataSketch.Storage.CubDB` -- the one shipped backend with an
+  actual process to supervise -- instead documents starting and supervising
+  `CubDB.start_link/1` directly in the host application's own supervision
+  tree (see its moduledoc); `ETS`, `DETS`, and `Mnesia` have no process of
+  their own, and `Ecto`'s repo is supervised by the host application the
+  ordinary `Ecto.Repo` way, outside this behaviour entirely.
   """
   @callback child_spec(keyword()) :: Supervisor.child_spec() | {module(), term()} | module()
 
@@ -290,11 +298,29 @@ defmodule ExDataSketch.Storage do
   end
 
   @spec resolve_backend(backend_ref()) :: {module(), ref()}
-  defp resolve_backend({module, ref}) when is_atom(module) do
-    {module, ref}
+  defp resolve_backend({module, _ref} = candidate) when is_atom(module) do
+    # Disambiguating "explicit {backend_module, ref} pair" from "a bare ref
+    # that happens to be a 2-tuple with an atom first element" by shape
+    # alone would misinterpret the latter (e.g. a custom backend's own ref
+    # type, such as {:primary, conn} for a pooled connection) as the
+    # former. Checking that `module` actually implements this behaviour
+    # (not just that it's *a* registered shipped backend, which would
+    # wrongly reject legitimate custom backends -- see this module's
+    # "Backend Ref Resolution" docs) disambiguates correctly for both the
+    # 5 shipped backends and any custom @behaviour implementation. If it
+    # doesn't, the *whole* candidate tuple (not just its second element)
+    # is resolved as a bare ref against the configured default backend --
+    # it was never actually an explicit {module, ref} pair to begin with.
+    if Code.ensure_loaded?(module) and function_exported?(module, :save, 3) do
+      candidate
+    else
+      resolve_backend_from_default(candidate)
+    end
   end
 
-  defp resolve_backend(ref) do
+  defp resolve_backend(ref), do: resolve_backend_from_default(ref)
+
+  defp resolve_backend_from_default(ref) do
     case Application.get_env(:ex_data_sketch, :storage, [])[:backend] do
       module when is_atom(module) and not is_nil(module) ->
         {module, ref}
@@ -302,10 +328,12 @@ defmodule ExDataSketch.Storage do
       _none ->
         raise Errors.InvalidOptionError,
           option: :backend,
-          value: nil,
+          value: ref,
           message:
-            "no backend module given and no default configured; " <>
-              "pass {backend_module, ref} or set config :ex_data_sketch, :storage, backend: SomeModule"
+            "no default backend is configured, and #{inspect(ref)} was not resolved as an " <>
+              "explicit {backend_module, ref} pair (its first element, if any, is not a " <>
+              "module implementing ExDataSketch.Storage's save/3); pass an explicit " <>
+              "{backend_module, ref} or set config :ex_data_sketch, :storage, backend: SomeModule"
     end
   end
 end

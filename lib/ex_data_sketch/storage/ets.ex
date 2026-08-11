@@ -168,8 +168,10 @@ defmodule ExDataSketch.Storage.ETS do
 
   ## Returns
 
-  `:ok` always. Unlike other storage backends, ETS operations do not produce
-  errors from `insert/2`.
+  - `:ok` on success.
+  - `{:error, %DeserializationError{}}` (or another deserialization error) if
+    the stored binary is corrupted or was written by an incompatible sketch
+    version -- matching `load/3`'s behavior rather than raising.
 
   ## Examples
 
@@ -186,7 +188,7 @@ defmodule ExDataSketch.Storage.ETS do
       :true
 
   """
-  @spec merge(struct(), atom(), ExDataSketch.Storage.key()) :: :ok
+  @spec merge(struct(), atom(), ExDataSketch.Storage.key()) :: :ok | {:error, term()}
   def merge(sketch, table, key) do
     start_time = System.monotonic_time()
     sketch_module = sketch.__struct__
@@ -194,11 +196,16 @@ defmodule ExDataSketch.Storage.ETS do
     result =
       case :ets.lookup(table, key) do
         [{^key, binary}] ->
-          {:ok, existing} = sketch_module.deserialize(binary)
-          merged = sketch_module.merge(existing, sketch)
-          merged_binary = sketch_module.serialize(merged)
-          :ets.insert(table, {key, merged_binary})
-          :ok
+          case sketch_module.deserialize(binary) do
+            {:ok, existing} ->
+              merged = sketch_module.merge(existing, sketch)
+              merged_binary = sketch_module.serialize(merged)
+              :ets.insert(table, {key, merged_binary})
+              :ok
+
+            {:error, _reason} = error ->
+              error
+          end
 
         [] ->
           save(sketch, table, key)

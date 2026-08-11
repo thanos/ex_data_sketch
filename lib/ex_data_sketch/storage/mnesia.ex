@@ -253,10 +253,18 @@ defmodule ExDataSketch.Storage.Mnesia do
   defp do_merge(sketch, sketch_module, table, key) do
     case :mnesia.read(table, key) do
       [{^table, ^key, binary}] ->
-        {:ok, existing} = sketch_module.deserialize(binary)
-        merged = sketch_module.merge(existing, sketch)
-        merged_binary = sketch_module.serialize(merged)
-        :mnesia.write({table, key, merged_binary})
+        case sketch_module.deserialize(binary) do
+          {:ok, existing} ->
+            merged = sketch_module.merge(existing, sketch)
+            merged_binary = sketch_module.serialize(merged)
+            :mnesia.write({table, key, merged_binary})
+
+          {:error, reason} ->
+            # :mnesia.abort/1 makes the transaction return {:aborted, reason}
+            # with exactly this reason -- not the {:badmatch, ...} tuple an
+            # uncaught pattern-match failure would have wrapped it in.
+            :mnesia.abort(reason)
+        end
 
       [] ->
         binary = sketch_module.serialize(sketch)

@@ -4,7 +4,7 @@ defmodule ExDataSketch.MisraGries do
 
   The Misra-Gries algorithm maintains at most `k` counters to track frequent
   items in a data stream. It provides a deterministic guarantee: any item
-  whose true frequency exceeds `n/k` (where `n` is the total count) is
+  whose true frequency exceeds `n/(k+1)` (where `n` is the total count) is
   guaranteed to be tracked.
 
   ## Algorithm
@@ -13,18 +13,66 @@ defmodule ExDataSketch.MisraGries do
     than k entries, insert x with count 1. Otherwise, decrement all counters
     by 1 and remove any that reach zero.
 
-  - **Guarantee**: If an item appears more than `n/k` times, it will be in the
-    counter set when queried. The estimated count is a lower bound on the
-    true count, with error at most `n/k`.
+  - **Guarantee**: If an item appears more than `n/(k+1)` times, it will be in
+    the counter set when queried. The estimated count is a lower bound on the
+    true count, with error at most `n/(k+1)`.
 
   ## Comparison with FrequentItems (SpaceSaving)
 
   | Feature | MisraGries | FrequentItems |
   |---------|-----------|---------------|
   | Algorithm | Decrement-all | SpaceSaving (min-replacement) |
-  | Guarantee | Deterministic: freq > n/k always tracked | Probabilistic with error bounds |
+  | Guarantee | Deterministic: freq > n/(k+1) always tracked | Probabilistic with error bounds |
   | Counter count | At most k | Exactly k |
   | Estimate | Lower bound | Estimate with overcount error |
+
+  **In practice, the two do not "just broadly agree" beyond the guaranteed
+  item(s).** Decrement-all discards *every* counter on a miss, including
+  ones for items that are genuinely frequent but fall below the `n/(k+1)`
+  guarantee threshold; against a workload with many moderately-frequent
+  items and a `k` too small to cover them, those items get evicted by
+  churn just as readily as truly rare ones. SpaceSaving only ever evicts
+  the single *minimum* counter, so items that are frequent-but-unguaranteed
+  tend to survive and entrench themselves in practice, even without a
+  guarantee covering them. Measured example: 1,000,000 power-law-distributed
+  events, 5,000 distinct items, `k = 20` (`n/(k+1) ~ 47,619`, cleared only by
+  the single most frequent item) -- `MisraGries.top_k(sketch, 3)` returned
+  `["query_1", "query_1144", "query_1209"]` (the latter two essentially
+  arbitrary low-count survivors), while `FrequentItems.top_k/1` on the same
+  data returned `["query_1", "query_9", "query_8"]`, much closer to the true
+  ranking. See "Choosing k" below for how to size `k` so this doesn't happen.
+
+  ## Choosing k
+
+  - **Guarantee-driven sizing**: pick `k` so `n/(k+1)` sits comfortably below
+    the smallest true frequency you need reliably retained. For a top-N
+    query, that means every one of the true top N items must individually
+    clear `n/(k+1)` -- there is no guarantee for items below it, and with a
+    "thick middle" of many moderately-frequent items and a `k` too small to
+    cover them, they are routinely evicted in practice (see above). In one
+    measured example (same data as above), `k = 100` reliably recovered the
+    true top 3 but not top 4-5; `k = 200` (`n/(k+1) ~ 4,975`) recovered the
+    exact true top 5.
+  - **Memory cost of `k` is small and predictable**: state size scales with
+    the number of *retained* entries (bounded by `k`), at roughly 21-22
+    bytes/entry for typical string keys (`4-byte key_len + key bytes +
+    8-byte count`, see "Binary State Layout" below). `k = 200` costs on the
+    order of a few KB; even `k = 5000` (tracking every distinct item in a
+    5,000-item universe) was ~109 KB in the same measurement.
+  - **CPU cost of `k` is real but far gentler than the `O(k)`-per-miss
+    "decrement all" step suggests in isolation.** As `k` grows, a larger
+    share of incoming items are already tracked (cheap O(1) increment)
+    instead of triggering a full decrement-all, so the two effects partly
+    offset. Measured example: increasing `k` 250x (20 -> 5000) increased
+    `update_many/2` wall time only ~4x for the workload above -- but this
+    ratio is workload-dependent; a stream whose cardinality vastly exceeds
+    `k` (so most items are permanent misses) will scale closer to the naive
+    `O(n*k)` case.
+  - **No NIF acceleration is available for this family.** Unlike most other
+    `ExDataSketch` sketches, `ExDataSketch.Backend.Rust`'s `mg_*` functions
+    are a thin pass-through to `ExDataSketch.Backend.Pure` -- there is no
+    compiled fast path to fall back on, so `k` (and workload shape) are the
+    only real levers over `update_many/2` cost for this family.
 
   ## Binary State Layout (MG01)
 

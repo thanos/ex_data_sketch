@@ -112,6 +112,7 @@ defmodule ExDataSketch.Cuckoo do
     max_kicks = Keyword.get(opts, :max_kicks, @default_max_kicks)
     seed = Keyword.get(opts, :seed, @default_seed)
     hash_fn = Keyword.get(opts, :hash_fn)
+    hash_strategy = Hash.resolve_strategy(opts)
 
     validate_capacity!(capacity)
     validate_fingerprint_size!(fp_size)
@@ -129,7 +130,8 @@ defmodule ExDataSketch.Cuckoo do
         bucket_size: bucket_size,
         bucket_count: bucket_count,
         max_kicks: max_kicks,
-        seed: seed
+        seed: seed,
+        hash_strategy: hash_strategy
       ] ++ if(hash_fn, do: [hash_fn: hash_fn], else: [])
 
     state = backend.cuckoo_new(clean_opts)
@@ -175,7 +177,7 @@ defmodule ExDataSketch.Cuckoo do
   def put!(cuckoo, item) do
     case put(cuckoo, item) do
       {:ok, updated} -> updated
-      {:error, :full} -> raise "Cuckoo filter is full"
+      {:error, :full} -> raise Errors.FilterFullError, structure: "Cuckoo filter"
     end
   end
 
@@ -253,7 +255,7 @@ defmodule ExDataSketch.Cuckoo do
   def update_many(%__MODULE__{} = cuckoo, items) do
     case put_many(cuckoo, items) do
       {:ok, updated} -> updated
-      {:error, :full, _partial} -> raise "Cuckoo filter is full"
+      {:error, :full, _partial} -> raise Errors.FilterFullError, structure: "Cuckoo filter"
     end
   end
 
@@ -394,6 +396,7 @@ defmodule ExDataSketch.Cuckoo do
          {:ok, opts} <- decode_params(decoded.params),
          :ok <- validate_state_header(decoded.state, opts) do
       backend = Backend.default()
+      opts = restore_hash_strategy(opts, decoded.metadata)
 
       {:ok,
        %__MODULE__{
@@ -441,6 +444,8 @@ defmodule ExDataSketch.Cuckoo do
       :new,
       :put,
       :put_many,
+      :update,
+      :update_many,
       :member?,
       :delete,
       :count,
@@ -511,7 +516,8 @@ defmodule ExDataSketch.Cuckoo do
     case Keyword.get(opts, :hash_fn) do
       nil ->
         seed = Keyword.get(opts, :seed, @default_seed)
-        Hash.hash64(item, seed: seed)
+        strategy = Keyword.get(opts, :hash_strategy)
+        Hash.hash64(item, seed: seed, hash_strategy: strategy)
 
       hash_fn ->
         Hash.hash64(item, hash_fn: hash_fn)
@@ -602,6 +608,15 @@ defmodule ExDataSketch.Cuckoo do
   defp decode_params(_other) do
     {:error, Errors.DeserializationError.exception(reason: "invalid Cuckoo params binary")}
   end
+
+  # v1 frames carry no metadata block and are phash2-only by construction
+  # (see the :v1 branch of serialize/2); v2 frames record the algorithm
+  # actually used at build time, which must be restored so `hash_item/2`
+  # queries with the same algorithm the filter's buckets were set with.
+  defp restore_hash_strategy(opts, nil), do: Keyword.put(opts, :hash_strategy, :phash2)
+
+  defp restore_hash_strategy(opts, metadata),
+    do: Keyword.put(opts, :hash_strategy, metadata.algorithm)
 
   defp validate_state_header(
          <<"CKO1", 1::unsigned-8, _fp_bits::unsigned-8, _bs::unsigned-8, _flags::unsigned-8,

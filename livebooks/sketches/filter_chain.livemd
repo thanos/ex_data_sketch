@@ -1,0 +1,159 @@
+# FilterChain Tutorial
+
+```elixir
+Mix.install([
+  {:ex_data_sketch, "~> 0.10"}
+])
+```
+
+## Introduction
+
+`ExDataSketch.FilterChain` composes multiple membership filters into a
+single query pipeline -- a cheap, larger first-pass filter to reject most
+non-members fast, backed by a smaller, more precise second-pass filter
+for the items that survive the first check. It's not a new sketch
+algorithm; it's a capability-aware wrapper around the filters covered in
+the other tutorials here (`Bloom`, `Cuckoo`, `Quotient`, `CQF`,
+`XorFilter`) plus `IBLT` as a non-queryable "adjunct."
+
+`member?/2` short-circuits on the first stage that says "definitely not,"
+`put/2` fans an insert out to every stage that supports writes (skipping
+static `XorFilter` stages), and `delete/2` requires *every* stage to
+support deletion or it raises.
+
+## Sample data (cached locally)
+
+```elixir
+cache_path = Path.join(System.tmp_dir!(), "ex_data_sketch_livebook_cache/filter_chain_sample.bin")
+
+{inserted, novel} =
+  if File.exists?(cache_path) do
+    IO.puts("Loading cached sample data from #{cache_path}")
+    cache_path |> File.read!() |> :erlang.binary_to_term()
+  else
+    IO.puts("Generating sample data (this takes a few seconds)...")
+    inserted = for i <- 1..500_000, do: "user_#{i}"
+    novel = for i <- 500_001..1_000_000, do: "user_#{i}"
+    File.mkdir_p!(Path.dirname(cache_path))
+    File.write!(cache_path, :erlang.term_to_binary({inserted, novel}))
+    {inserted, novel}
+  end
+
+IO.puts("#{length(inserted)} inserted, #{length(novel)} novel users")
+```
+
+## Building a chain
+
+```elixir
+alias ExDataSketch.{Bloom, Cuckoo, FilterChain}
+
+chain =
+  FilterChain.new()
+  |> FilterChain.add_stage(Bloom.new(capacity: 500_000, false_positive_rate: 0.05))
+  |> FilterChain.add_stage(Cuckoo.new(capacity: 500_000))
+
+FilterChain.stages(chain) |> Enum.map(& &1.__struct__)
+```
+
+## Inserting: fans out to every writable stage
+
+```elixir
+{:ok, chain} = FilterChain.put(chain, "hello")
+FilterChain.member?(chain, "hello")
+```
+
+`update_many/2` (its `Sketch`-behaviour-compatible name) for a batch:
+
+```elixir
+chain = FilterChain.update_many(chain, inserted)
+IO.puts("Both stages now contain the inserted set")
+```
+
+## Querying: short-circuit AND across stages
+
+`member?/2` only reports "yes" if *every* stage agrees -- it stops at
+the first "no." A false positive requires every stage to independently
+false-positive on the same item, which is far less likely than any one
+filter false-positiving alone -- the compounding accuracy gain is the
+whole point of chaining:
+
+```elixir
+false_positives = Enum.count(novel, &FilterChain.member?(chain, &1))
+observed_fpr = false_positives / length(novel)
+IO.puts("Chain false positives: #{false_positives} / #{length(novel)} (#{Float.round(observed_fpr * 100, 5)}%)")
+
+# Compare against the first stage (Bloom, configured at a loose 5% FPR) alone:
+bloom_only = Bloom.new(capacity: 500_000, false_positive_rate: 0.05) |> Bloom.put_many(inserted)
+bloom_fps = Enum.count(Enum.take(novel, 100_000), &Bloom.member?(bloom_only, &1))
+IO.puts("Bloom stage alone (5% target): #{Float.round(bloom_fps / 100_000 * 100, 2)}% observed")
+```
+
+## Deletion requires every stage to support it
+
+This chain has a `Bloom` stage, and Bloom has no `delete/2` -- calling
+`FilterChain.delete/2` on it raises:
+
+```elixir
+try do
+  FilterChain.delete(chain, "hello")
+rescue
+  e in ExDataSketch.Errors.UnsupportedOperationError -> IO.puts("Raised as expected: #{Exception.message(e)}")
+end
+```
+
+A chain built entirely from delete-capable stages (`Cuckoo`, `Quotient`,
+`CQF`) supports it:
+
+```elixir
+alias ExDataSketch.Quotient
+
+deletable_chain =
+  FilterChain.new()
+  |> FilterChain.add_stage(Cuckoo.new(capacity: 1000))
+  |> FilterChain.add_stage(Quotient.new(q: 12, r: 8))
+
+{:ok, deletable_chain} = FilterChain.put(deletable_chain, "temp_item")
+IO.puts("Before delete: #{FilterChain.member?(deletable_chain, "temp_item")}")
+
+deletable_chain = FilterChain.delete(deletable_chain, "temp_item")
+IO.puts("After delete: #{FilterChain.member?(deletable_chain, "temp_item")}")
+```
+
+## A static terminal stage: XorFilter
+
+`XorFilter` can only be the *last* query stage (no incremental `put/2`
+after construction) -- useful as a precise, space-efficient final check
+behind a mutable first pass that absorbs new writes:
+
+```elixir
+alias ExDataSketch.XorFilter
+
+{:ok, xor} = XorFilter.build(Enum.take(inserted, 100_000))
+
+hybrid_chain =
+  FilterChain.new()
+  |> FilterChain.add_stage(Cuckoo.new(capacity: 500_000))
+  |> FilterChain.add_stage(xor)
+
+# put/2 skips the static XorFilter stage automatically -- only the
+# Cuckoo stage actually receives new writes.
+{:ok, hybrid_chain} = FilterChain.put(hybrid_chain, "newly_seen_item")
+IO.puts("New item found (via Cuckoo stage): #{FilterChain.member?(hybrid_chain, "newly_seen_item")}")
+```
+
+## Serialization
+
+```elixir
+binary = FilterChain.serialize(chain)
+{:ok, restored} = FilterChain.deserialize(binary)
+IO.puts("Round-tripped membership check: #{FilterChain.member?(restored, hd(inserted))}")
+```
+
+## See also
+
+- `ExDataSketch.FilterChain` module documentation -- full API reference,
+  including `IBLT` adjunct stages for reconciliation alongside a query
+  chain.
+- `livebooks/sketches/bloom.livemd`, `cuckoo.livemd`, `quotient.livemd`,
+  `cqf.livemd`, `xor_filter.livemd` -- the individual filter families
+  this module composes.

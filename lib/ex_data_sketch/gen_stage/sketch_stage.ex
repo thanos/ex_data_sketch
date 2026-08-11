@@ -50,6 +50,8 @@ if Code.ensure_loaded?(GenStage) do
 
     use GenStage
 
+    alias ExDataSketch.Integration
+
     @type state :: %{
             sketch_module: module(),
             sketch_opts: keyword(),
@@ -131,6 +133,7 @@ if Code.ensure_loaded?(GenStage) do
 
     @impl true
     def init(opts) do
+      Integration.require_gen_stage!()
       sketch_module = Keyword.fetch!(opts, :sketch_module)
       sketch_opts = Keyword.get(opts, :sketch_opts, [])
       key_fn = Keyword.get(opts, :key_fn, fn event -> event end)

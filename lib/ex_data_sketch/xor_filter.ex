@@ -93,6 +93,7 @@ defmodule ExDataSketch.XorFilter do
     fp_bits = Keyword.get(opts, :fingerprint_bits, @default_fingerprint_bits)
     seed = Keyword.get(opts, :seed, @default_seed)
     hash_fn = Keyword.get(opts, :hash_fn)
+    hash_strategy = Hash.resolve_strategy(opts)
 
     validate_fingerprint_bits!(fp_bits)
 
@@ -101,12 +102,13 @@ defmodule ExDataSketch.XorFilter do
     clean_opts =
       [
         fingerprint_bits: fp_bits,
-        seed: seed
+        seed: seed,
+        hash_strategy: hash_strategy
       ] ++ if(hash_fn, do: [hash_fn: hash_fn], else: [])
 
     use_raw =
       backend == Backend.Rust and hash_fn == nil and
-        Keyword.get(opts, :hash_strategy) != :phash2
+        hash_strategy != :phash2
 
     result =
       if use_raw do
@@ -229,6 +231,7 @@ defmodule ExDataSketch.XorFilter do
          {:ok, opts} <- decode_params(decoded.params),
          :ok <- validate_state_header(decoded.state) do
       backend = Backend.default()
+      opts = restore_hash_strategy(opts, decoded.metadata)
 
       {:ok,
        %__MODULE__{
@@ -291,7 +294,8 @@ defmodule ExDataSketch.XorFilter do
     case Keyword.get(opts, :hash_fn) do
       nil ->
         seed = Keyword.get(opts, :seed, @default_seed)
-        Hash.hash64(item, seed: seed)
+        strategy = Keyword.get(opts, :hash_strategy)
+        Hash.hash64(item, seed: seed, hash_strategy: strategy)
 
       hash_fn ->
         Hash.hash64(item, hash_fn: hash_fn)
@@ -326,6 +330,15 @@ defmodule ExDataSketch.XorFilter do
   defp decode_params(_other) do
     {:error, Errors.DeserializationError.exception(reason: "invalid XorFilter params binary")}
   end
+
+  # v1 frames carry no metadata block and are phash2-only by construction
+  # (see the :v1 branch of serialize/2); v2 frames record the algorithm
+  # actually used at build time, which must be restored so `hash_item/2`
+  # queries with the same algorithm the filter's fingerprints were built with.
+  defp restore_hash_strategy(opts, nil), do: Keyword.put(opts, :hash_strategy, :phash2)
+
+  defp restore_hash_strategy(opts, metadata),
+    do: Keyword.put(opts, :hash_strategy, metadata.algorithm)
 
   defp validate_state_header(<<"XOR1", 1::unsigned-8, _rest::binary>>), do: :ok
 

@@ -330,18 +330,33 @@ defmodule ExDataSketch.WindowTest do
   end
 
   describe "[:ex_data_sketch, :window, :roll] telemetry" do
-    test "emits when a slot is dropped, with slot_count, dropped_count, and oldest_age_ms" do
-      test_pid = self()
+    # :telemetry handlers are process-global: :telemetry.execute/3 invokes
+    # every attached handler synchronously, but critically it does so IN
+    # THE CALLING PROCESS. Since these tests run async, a sibling test
+    # module (e.g. the window properties tests) can trigger real :roll
+    # events concurrently, and without a filter this test's handler would
+    # receive those too, causing spurious assert_receive/refute_receive
+    # failures unrelated to any real bug. Filtering on `self() == test_pid`
+    # inside the handler -- which is genuinely the emitting test's own pid,
+    # precisely because :telemetry runs handlers in the caller's process --
+    # scopes each test to only the events it itself triggered.
+    defp attach_roll_handler(test_pid) do
       handler_id = "window-roll-test-#{System.unique_integer([:positive])}"
 
       :telemetry.attach(
         handler_id,
         Telemetry.event_name(:window, :roll),
         fn _event, measurements, metadata, _config ->
-          send(test_pid, {:roll, measurements, metadata})
+          if self() == test_pid, do: send(test_pid, {:roll, measurements, metadata})
         end,
         nil
       )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+    end
+
+    test "emits when a slot is dropped, with slot_count, dropped_count, and oldest_age_ms" do
+      attach_roll_handler(self())
 
       window = Window.new(HLL, [p: 10], every: 1000, keep: 1)
       window = Window.update(window, "a", 0)
@@ -352,43 +367,19 @@ defmodule ExDataSketch.WindowTest do
       assert measurements.slot_count == 1
       assert metadata.sketch_type == :hll
       assert metadata.oldest_age_ms == 0
-
-      :telemetry.detach(handler_id)
     end
 
     test "does not emit when no slot is dropped" do
-      test_pid = self()
-      handler_id = "window-roll-test-#{System.unique_integer([:positive])}"
-
-      :telemetry.attach(
-        handler_id,
-        Telemetry.event_name(:window, :roll),
-        fn _event, measurements, metadata, _config ->
-          send(test_pid, {:roll, measurements, metadata})
-        end,
-        nil
-      )
+      attach_roll_handler(self())
 
       window = Window.new(HLL, [p: 10], every: 1000, keep: 3)
       Window.update(window, "a", 0)
 
       refute_receive {:roll, _, _}, 50
-
-      :telemetry.detach(handler_id)
     end
 
     test "estimate/1 and merged/1 do not emit :roll (transient read, no mutation)" do
-      test_pid = self()
-      handler_id = "window-roll-test-#{System.unique_integer([:positive])}"
-
-      :telemetry.attach(
-        handler_id,
-        Telemetry.event_name(:window, :roll),
-        fn _event, measurements, metadata, _config ->
-          send(test_pid, {:roll, measurements, metadata})
-        end,
-        nil
-      )
+      attach_roll_handler(self())
 
       window = Window.new(HLL, [p: 10], every: 1000, keep: 1, time_fn: fn -> 5000 end)
       window = %{window | slots: %{0 => HLL.new(p: 10)}}
@@ -398,8 +389,6 @@ defmodule ExDataSketch.WindowTest do
       Window.slots(window)
 
       refute_receive {:roll, _, _}, 50
-
-      :telemetry.detach(handler_id)
     end
   end
 end

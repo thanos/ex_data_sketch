@@ -1,14 +1,14 @@
 defmodule ExDataSketch.MixProject do
   use Mix.Project
 
-  @version "0.10.0"
+  @version "0.10.1"
   @source_url "https://github.com/thanos/ex_data_sketch"
 
   def project do
     [
       app: :ex_data_sketch,
       version: @version,
-      elixir: "~> 1.15",
+      elixir: "~> 1.18",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       deps: deps(),
@@ -126,35 +126,150 @@ defmodule ExDataSketch.MixProject do
     [
       main: "ExDataSketch",
       extras: [
+        # -- Getting Started --
         "guides/quick_start.md",
         "guides/usage_guide.md",
         "guides/integrations.md",
-        "guides/streaming_sketches.md",
-        "guides/broadway_integration.md",
-        "guides/genstage_integration.md",
-        "guides/flow_integration.md",
+        "guides/livebooks.md",
+
+        # -- Sketch Family Tutorials (grouped by task below) --
+        {"livebooks/sketches/hll.livemd", [filename: "livebook_hll"]},
+        {"livebooks/sketches/ull.livemd", [filename: "livebook_ull"]},
+        {"livebooks/sketches/cms.livemd", [filename: "livebook_cms"]},
+        {"livebooks/sketches/frequent_items.livemd", [filename: "livebook_frequent_items"]},
+        {"livebooks/sketches/misra_gries.livemd", [filename: "livebook_misra_gries"]},
+        {"livebooks/sketches/kll.livemd", [filename: "livebook_kll"]},
+        {"livebooks/sketches/ddsketch.livemd", [filename: "livebook_ddsketch"]},
+        {"livebooks/sketches/req.livemd", [filename: "livebook_req"]},
+        {"livebooks/sketches/theta.livemd", [filename: "livebook_theta"]},
+        {"livebooks/sketches/bloom.livemd", [filename: "livebook_bloom"]},
+        {"livebooks/sketches/cuckoo.livemd", [filename: "livebook_cuckoo"]},
+        {"livebooks/sketches/quotient.livemd", [filename: "livebook_quotient"]},
+        {"livebooks/sketches/cqf.livemd", [filename: "livebook_cqf"]},
+        {"livebooks/sketches/xor_filter.livemd", [filename: "livebook_xor_filter"]},
+        {"livebooks/sketches/filter_chain.livemd", [filename: "livebook_filter_chain"]},
+        {"livebooks/sketches/iblt.livemd", [filename: "livebook_iblt"]},
+
+        # -- Core Concepts --
+        "guides/aggregation_wall.md",
+        "guides/distributed_merge_semantics.md",
+        "guides/hash_strategies.md",
+
+        # -- Production & Operations --
         "guides/persistence.md",
+        {"livebooks/persistence_snapshots.livemd", [filename: "livebook_persistence_snapshots"]},
         "guides/windowing.md",
         "guides/supervised_sketches.md",
         "guides/telemetry.md",
         "guides/observability.md",
-        "guides/aggregation_wall.md",
-        "guides/distributed_merge_semantics.md",
-        "guides/livebooks.md",
-        "guides/hash_strategies.md",
+        "guides/precompiled_nifs.md",
+
+        # -- Framework Integrations (guide + matching livebook, paired) --
+        "guides/streaming_sketches.md",
+        {"livebooks/streaming_cardinality.livemd", [filename: "livebook_streaming_cardinality"]},
+        "guides/broadway_integration.md",
+        {"livebooks/broadway_integration.livemd",
+         [filename: "livebook_broadway_integration", title: "Broadway Integration (Livebook)"]},
+        "guides/genstage_integration.md",
+        {"livebooks/genstage_aggregation.livemd", [filename: "livebook_genstage_aggregation"]},
+        "guides/flow_integration.md",
+        {"livebooks/distributed_merges.livemd", [filename: "livebook_distributed_merges"]},
+
+        # -- Case Studies --
+        {"livebooks/ai_token_analytics.livemd", [filename: "livebook_ai_token_analytics"]},
+        {"livebooks/sketching_one_billion_rows.livemd",
+         [filename: "livebook_sketching_one_billion_rows"]},
+
+        # -- Interop & Compatibility --
+        "guides/apache_interop.md",
+        "guides/serialization_compatibility.md",
+        "docs/frequent_items_format.md",
+
+        # -- Project History & Internals --
         "guides/hll_performance.md",
         "guides/filter_performance.md",
-        "guides/apache_interop.md",
-        "guides/precompiled_nifs.md",
-        "guides/serialization_compatibility.md",
-        "guides/v0.8.0_migration_notes.md",
         "guides/v0.8.0_architecture.md",
+        "guides/v0.8.0_migration_notes.md",
         "guides/roadmap.md",
-        "docs/frequent_items_format.md",
+
+        # -- Changelog (kept ungrouped, prominent) --
         "CHANGELOG.md"
       ],
       groups_for_extras: [
-        Guides: ~r/guides\/.*/
+        "Getting Started": [
+          "guides/quick_start.md",
+          "guides/usage_guide.md",
+          "guides/integrations.md",
+          "guides/livebooks.md"
+        ],
+        "Tutorials: Cardinality": [
+          "livebooks/sketches/hll.livemd",
+          "livebooks/sketches/ull.livemd"
+        ],
+        "Tutorials: Frequency & Heavy Hitters": [
+          "livebooks/sketches/cms.livemd",
+          "livebooks/sketches/frequent_items.livemd",
+          "livebooks/sketches/misra_gries.livemd"
+        ],
+        "Tutorials: Quantiles": [
+          "livebooks/sketches/kll.livemd",
+          "livebooks/sketches/ddsketch.livemd",
+          "livebooks/sketches/req.livemd"
+        ],
+        "Tutorials: Set Operations": [
+          "livebooks/sketches/theta.livemd"
+        ],
+        "Tutorials: Membership Filters": [
+          "livebooks/sketches/bloom.livemd",
+          "livebooks/sketches/cuckoo.livemd",
+          "livebooks/sketches/quotient.livemd",
+          "livebooks/sketches/cqf.livemd",
+          "livebooks/sketches/xor_filter.livemd",
+          "livebooks/sketches/filter_chain.livemd"
+        ],
+        "Tutorials: Set Reconciliation": [
+          "livebooks/sketches/iblt.livemd"
+        ],
+        "Core Concepts": [
+          "guides/aggregation_wall.md",
+          "guides/distributed_merge_semantics.md",
+          "guides/hash_strategies.md"
+        ],
+        "Production & Operations": [
+          "guides/persistence.md",
+          "livebooks/persistence_snapshots.livemd",
+          "guides/windowing.md",
+          "guides/supervised_sketches.md",
+          "guides/telemetry.md",
+          "guides/observability.md",
+          "guides/precompiled_nifs.md"
+        ],
+        "Framework Integrations": [
+          "guides/streaming_sketches.md",
+          "livebooks/streaming_cardinality.livemd",
+          "guides/broadway_integration.md",
+          "livebooks/broadway_integration.livemd",
+          "guides/genstage_integration.md",
+          "livebooks/genstage_aggregation.livemd",
+          "guides/flow_integration.md",
+          "livebooks/distributed_merges.livemd"
+        ],
+        "Case Studies": [
+          "livebooks/ai_token_analytics.livemd",
+          "livebooks/sketching_one_billion_rows.livemd"
+        ],
+        "Interop & Compatibility": [
+          "guides/apache_interop.md",
+          "guides/serialization_compatibility.md",
+          "docs/frequent_items_format.md"
+        ],
+        "Project History & Internals": [
+          "guides/hll_performance.md",
+          "guides/filter_performance.md",
+          "guides/v0.8.0_architecture.md",
+          "guides/v0.8.0_migration_notes.md",
+          "guides/roadmap.md"
+        ]
       ],
       groups_for_modules: [
         "Sketch Algorithms": [

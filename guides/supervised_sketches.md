@@ -49,6 +49,15 @@ that threshold, emitting `[:ex_data_sketch, :server, :drop]` (see
 at the cost of the data loss `update/2` already implies under overload --
 `update_sync/2` is never subject to `:max_queue`.
 
+`:max_queue` is checked when each cast is *processed*, not when it is
+sent. Casts are asynchronous, so a sudden burst can enqueue far more
+messages than `:max_queue` before the server drains even one of them --
+the threshold bounds the steady-state backlog the server will keep
+applying before it starts dropping, not the peak mailbox size any single
+burst can reach. If bounding peak memory during bursts specifically
+matters, rate-limit or batch on the producer side rather than relying on
+`:max_queue` alone.
+
 ## Windowing
 
 Pass `:window` (the same options `ExDataSketch.Window.new/3` accepts) to
@@ -117,6 +126,22 @@ On start, the server attempts to load from the same location first (crash
 recovery); if nothing is found, or loading fails for any other reason, it
 starts from a fresh sketch either way -- `[:ex_data_sketch, :server, :restore]`
 fires regardless, with `found` in its metadata saying which happened.
+
+The periodic snapshot is triggered by a timer message that shares the
+server's single mailbox with every `update/2`/`update_many/2` cast -- a
+GenServer processes its mailbox strictly in arrival order, so under a
+sustained cast backlog the snapshot timer message can sit queued behind
+it. `:every` is therefore a best-effort *minimum* interval between
+snapshots, not a hard deadline: a server saturated with updates snapshots
+less often than configured until the backlog drains (or `:max_queue`
+starts shedding load). This does not affect the graceful-shutdown
+snapshot below, which always runs on termination regardless of backlog.
+
+If a backend save fails during a periodic or shutdown snapshot, the
+server logs `[:ex_data_sketch, :server, :snapshot_failed]` (see
+`guides/telemetry.md`) and keeps running with its current in-memory
+state rather than crashing -- the failure is not otherwise surfaced, so
+monitor this event if snapshot durability matters to you.
 
 Worst-case data loss from an ordinary (non-`:kill`) process termination is
 bounded by `:every` -- a graceful stop or supervisor-initiated shutdown

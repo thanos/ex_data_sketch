@@ -518,13 +518,19 @@ defmodule ExDataSketch.CMS do
   Returns the set of operation names supported by `ExDataSketch.CMS`.
 
   See `ExDataSketch.Sketch` for the shared capability vocabulary.
+  Deliberately excludes `:estimate`: CMS has no single-value cardinality
+  reading (unlike HLL/Theta/ULL) -- `CMS.estimate/2` is a per-item
+  frequency query with a different arity and shape, and the generic
+  `ExDataSketch.estimate/1` facade raises `UnsupportedOperationError` for
+  every CMS sketch. Advertising `:estimate` here would be a lie to any
+  capability-gated caller.
 
   ## Examples
 
-      iex> ExDataSketch.CMS.capabilities() |> MapSet.member?(:estimate)
+      iex> ExDataSketch.CMS.capabilities() |> MapSet.member?(:update)
       true
 
-      iex> ExDataSketch.CMS.capabilities() |> MapSet.member?(:no_such_operation)
+      iex> ExDataSketch.CMS.capabilities() |> MapSet.member?(:estimate)
       false
 
   """
@@ -537,7 +543,6 @@ defmodule ExDataSketch.CMS do
       :update_many,
       :merge,
       :merge_many,
-      :estimate,
       :serialize,
       :deserialize
     ])

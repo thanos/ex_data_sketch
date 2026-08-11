@@ -41,6 +41,15 @@ defmodule ExDataSketch.Server do
   loss `update/2` already implies under overload -- `update_sync/2` is never
   subject to `:max_queue`.
 
+  `:max_queue` is checked when each cast is *processed*, not when it is
+  sent -- casts are asynchronous, so a sudden burst can enqueue far more
+  messages than `:max_queue` before the server drains even one of them.
+  The threshold bounds the server's steady-state backlog (how many queued
+  updates it will keep applying before it starts dropping instead), not
+  the peak mailbox size any single burst can reach. If bounding peak
+  memory during bursts specifically matters, rate-limit or batch on the
+  producer side rather than relying on `:max_queue` alone.
+
   ## Windowing
 
   Pass `:window` (the same options `ExDataSketch.Window.new/3` accepts:
@@ -78,10 +87,25 @@ defmodule ExDataSketch.Server do
   `[:ex_data_sketch, :server, :restore]` fires either way, with `found` in
   its metadata saying which happened.
 
+  The periodic snapshot itself is triggered by a timer message that shares
+  the server's single mailbox with every `update/2`/`update_many/2` cast --
+  a GenServer processes its mailbox strictly in arrival order, so under a
+  sustained cast backlog the snapshot timer message can sit queued behind
+  it. `:every` is therefore a best-effort *minimum* interval between
+  snapshots, not a hard deadline: a server saturated with updates snapshots
+  less often than configured until the backlog drains (or `:max_queue`
+  starts shedding load). This does not affect the graceful-shutdown
+  snapshot below, which runs from `terminate/2` regardless of backlog.
+
   Worst-case data loss from an ordinary (non-`:kill`) process termination
   is bounded by `:every` -- a graceful stop or supervisor-initiated shutdown
   additionally snapshots on `terminate/2` before exiting, so that case loses
-  nothing. An untrappable `Process.exit(pid, :kill)` never runs
+  nothing. This relies on the server trapping exits (it does, unconditionally,
+  from `init/1` on); if your storage backend can be slow (e.g. a networked
+  Ecto repo under load), consider overriding the default 5-second shutdown
+  timeout via `Supervisor.child_spec(ExDataSketch.Server, shutdown: 10_000)`
+  so the supervisor doesn't escalate to a hard kill before the snapshot
+  write completes. An untrappable `Process.exit(pid, :kill)` never runs
   `terminate/2` at all (this is a BEAM guarantee, not something any
   process can opt out of), so in that specific case the periodic `:every`
   interval is the only protection -- this is the "kill" scenario the
@@ -342,6 +366,15 @@ defmodule ExDataSketch.Server do
 
   @impl true
   def init(opts) do
+    # Without this, terminate/2 (and therefore the snapshot it takes) never
+    # runs on a real supervisor-initiated shutdown -- a process that hasn't
+    # trapped exits is killed immediately by the incoming :shutdown exit
+    # signal, before any Elixir code (including terminate/2) gets to run.
+    # GenServer.stop/2 uses a different, synchronous in-process protocol and
+    # would trigger terminate/2 either way, which is why this was easy to
+    # miss in tests that only used GenServer.stop/2.
+    Process.flag(:trap_exit, true)
+
     module = resolve_module(Keyword.fetch!(opts, :sketch))
     sketch_opts = Keyword.get(opts, :sketch_opts, [])
     max_queue = Keyword.get(opts, :max_queue, :infinity)
@@ -627,7 +660,19 @@ defmodule ExDataSketch.Server do
     start_time = System.monotonic_time()
     data = state.current
 
-    case Storage.save(data, {backend_module, ref}, key) do
+    # A backend that raises (e.g. an ETS table deleted out from under it)
+    # must not be allowed to crash the server -- that would destroy all
+    # in-memory state, which is strictly worse than just failing to
+    # snapshot it. Storage.save/3 already returns {:error, _} for the
+    # failure modes it anticipates; this catches the ones it doesn't.
+    result =
+      try do
+        Storage.save(data, {backend_module, ref}, key)
+      rescue
+        e -> {:error, e}
+      end
+
+    case result do
       :ok ->
         Telemetry.execute(
           Telemetry.event_name(:server, :snapshot),
@@ -643,8 +688,18 @@ defmodule ExDataSketch.Server do
           :server
         )
 
-      {:error, _reason} ->
-        :ok
+      {:error, reason} ->
+        Telemetry.execute(
+          Telemetry.event_name(:server, :snapshot_failed),
+          %{duration: System.monotonic_time() - start_time},
+          %{
+            sketch_type: Telemetry.sketch_type_from_module(state.module),
+            backend: backend_module,
+            key: key,
+            reason: inspect(reason)
+          },
+          :server
+        )
     end
 
     state

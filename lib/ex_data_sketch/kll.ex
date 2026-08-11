@@ -18,6 +18,21 @@ defmodule ExDataSketch.KLL do
   | 200 | 0.83%       |
   | 500 | 0.33%       |
 
+  This is a **rank** error bound, not a value error bound -- it caps how far
+  off the estimated *rank* of a query can be, not how far off the returned
+  *value* is. Those are the same thing almost everywhere, but they diverge
+  sharply at a distributional discontinuity: if the true CDF jumps steeply
+  over a small rank range (a dense cluster ending and a sparse region or
+  distinct cluster beginning right after it), a small, well-within-bound
+  rank error can land on a value far from the query's true value, simply
+  because few samples exist in that rank neighborhood to bound the value
+  gap. This is inherent to every rank-approximate quantile sketch (KLL,
+  t-digest, GK, ...), not specific to this implementation -- querying
+  `quantile/2` exactly at such a cliff can show much larger *value* error
+  than the rank-error table above would suggest, even with a correct
+  implementation. See `livebooks/sketches/kll.livemd`'s "Accuracy" section
+  for a concrete, reproducible example.
+
   ## Binary State Layout (v1)
 
   All multi-byte fields are little-endian.

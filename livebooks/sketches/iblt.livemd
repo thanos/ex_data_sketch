@@ -1,0 +1,160 @@
+# IBLT (Invertible Bloom Lookup Table) Tutorial
+
+```elixir
+Mix.install([
+  {:ex_data_sketch, "~> 0.10"}
+])
+```
+
+## Introduction
+
+`ExDataSketch.IBLT` answers a different question than the other filters
+here: not "is this item in the set," but **"what's different between two
+sets"** -- without transferring either set. Two parties each build an
+IBLT of their own (potentially huge) set, exchange just the IBLT (small,
+proportional to `cell_count`, not to the set size), `subtract/2` them,
+and `list_entries/1` the result to recover exactly the items that differ.
+This is the classic use case for syncing two replicas, or diffing two
+nodes' key sets, when most of the data already matches.
+
+The catch: `cell_count` must be sized to the **expected difference**, not
+the total set size -- an IBLT with too few cells for the actual diff
+fails to decode (`{:error, :decode_failed}`) rather than silently giving
+a wrong answer. That's the whole point demonstrated below.
+
+## Sample data (cached locally)
+
+```elixir
+cache_path = Path.join(System.tmp_dir!(), "ex_data_sketch_livebook_cache/iblt_sample.bin")
+
+{server_a_keys, server_b_keys, only_in_a, only_in_b} =
+  if File.exists?(cache_path) do
+    IO.puts("Loading cached sample data from #{cache_path}")
+    cache_path |> File.read!() |> :erlang.binary_to_term()
+  else
+    IO.puts("Generating sample data (this takes a few seconds)...")
+
+    # Two servers' key sets, 200,000 keys in common, each with a handful
+    # of keys the other doesn't have -- realistic for "two replicas that
+    # mostly agree, but drifted slightly."
+    shared = for i <- 1..200_000, do: "key_#{i}"
+    only_in_a = for i <- 1..7, do: "server_a_only_#{i}"
+    only_in_b = for i <- 1..5, do: "server_b_only_#{i}"
+
+    server_a_keys = shared ++ only_in_a
+    server_b_keys = shared ++ only_in_b
+
+    File.mkdir_p!(Path.dirname(cache_path))
+    File.write!(cache_path, :erlang.term_to_binary({server_a_keys, server_b_keys, only_in_a, only_in_b}))
+    {server_a_keys, server_b_keys, only_in_a, only_in_b}
+  end
+
+IO.puts("Server A: #{length(server_a_keys)} keys, Server B: #{length(server_b_keys)} keys")
+IO.puts("True diff: #{length(only_in_a)} keys only in A, #{length(only_in_b)} keys only in B")
+```
+
+## Basic usage
+
+```elixir
+alias ExDataSketch.IBLT
+
+iblt = IBLT.new() |> IBLT.put("hello")
+IBLT.member?(iblt, "hello")
+```
+
+## Reconciling two large, mostly-overlapping sets
+
+Both servers build an IBLT sized for the *expected* diff (a handful of
+items), not their full 200,000+-key sets:
+
+```elixir
+cell_count = 100
+
+iblt_a = IBLT.new(cell_count: cell_count) |> IBLT.put_many(server_a_keys)
+iblt_b = IBLT.new(cell_count: cell_count) |> IBLT.put_many(server_b_keys)
+
+IO.puts("Each IBLT: #{IBLT.size_bytes(iblt_a)} bytes, regardless of the 200,000+ keys inside")
+
+diff = IBLT.subtract(iblt_a, iblt_b)
+{:ok, entries} = IBLT.list_entries(diff)
+
+IO.puts("Recovered #{length(entries.positive)} positive and #{length(entries.negative)} negative entries")
+```
+
+`list_entries/1` returns `{key_hash, value_hash}` pairs, not the original
+strings (an IBLT stores hashes, not the items themselves) -- positive
+entries are in A but not B, negative are in B but not A. To turn a hash
+back into a known candidate item, hash your own candidates with the same
+function IBLT itself uses and match:
+
+```elixir
+positive_hashes = MapSet.new(entries.positive, fn {key_hash, _value_hash} -> key_hash end)
+negative_hashes = MapSet.new(entries.negative, fn {key_hash, _value_hash} -> key_hash end)
+
+recovered_only_in_a =
+  Enum.filter(only_in_a, fn key ->
+    MapSet.member?(positive_hashes, ExDataSketch.Hash.hash64(key, seed: 0))
+  end)
+
+recovered_only_in_b =
+  Enum.filter(only_in_b, fn key ->
+    MapSet.member?(negative_hashes, ExDataSketch.Hash.hash64(key, seed: 0))
+  end)
+
+IO.puts("Correctly recovered #{length(recovered_only_in_a)}/#{length(only_in_a)} A-only keys")
+IO.puts("Correctly recovered #{length(recovered_only_in_b)}/#{length(only_in_b)} B-only keys")
+```
+
+In a real reconciliation, you already know your own full key set on each
+side, so "which of my candidates does this hash belong to" is exactly
+the natural query -- IBLT tells you which of your local keys the other
+side is missing (or vice versa) without either side ever sending its
+full set.
+
+## What happens when the diff exceeds capacity
+
+Undersize `cell_count` relative to the actual difference and decoding
+fails cleanly instead of returning a wrong answer:
+
+```elixir
+undersized_a = IBLT.new(cell_count: 4) |> IBLT.put_many(server_a_keys)
+undersized_b = IBLT.new(cell_count: 4) |> IBLT.put_many(server_b_keys)
+
+undersized_diff = IBLT.subtract(undersized_a, undersized_b)
+IBLT.list_entries(undersized_diff)
+```
+
+## Merging (set mode)
+
+`put_many/2` builds from a batch directly; `merge/2` combines two
+already-built IBLTs (both must share the same `cell_count`/`hash_count`/
+`seed`) -- useful for the same distributed-worker pattern as the other
+mergeable sketches:
+
+```elixir
+half = div(length(server_a_keys), 2)
+{first_half, second_half} = Enum.split(server_a_keys, half)
+
+worker_a = IBLT.new(cell_count: cell_count) |> IBLT.put_many(first_half)
+worker_b = IBLT.new(cell_count: cell_count) |> IBLT.put_many(second_half)
+
+merged = IBLT.merge(worker_a, worker_b)
+IO.puts("Merged contains a first-half key: #{IBLT.member?(merged, hd(first_half))}")
+```
+
+## Serialization
+
+```elixir
+binary = IBLT.serialize(iblt_a)
+{:ok, restored} = IBLT.deserialize(binary)
+IO.puts("Round-tripped count: #{IBLT.count(restored)}")
+```
+
+## See also
+
+- `ExDataSketch.IBLT` module documentation -- full API reference,
+  including key-value mode (`put/3`, `delete/3`) for reconciling
+  key-value pairs, not just bare keys.
+- `ExDataSketch.Bloom`/`ExDataSketch.Cuckoo` -- if you only need "is this
+  item present," not "what's different," a plain membership filter is
+  cheaper; see `livebooks/sketches/bloom.livemd`.

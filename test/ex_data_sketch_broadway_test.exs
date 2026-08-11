@@ -93,6 +93,60 @@ defmodule ExDataSketch.BroadwayTest do
       assert Broadway.PeriodicAggregator.estimate(agg) == 0.0
     end
 
+    # Regression test: this event's scope narrowed from v0.9.0 (where it
+    # fired on both the manual and automatic flush paths) to v0.10.0
+    # (automatic only) -- see CHANGELOG.md's periodic_flush correction.
+    test "manual flush/1 does not emit periodic_flush telemetry" do
+      test_pid = self()
+
+      :telemetry.attach(
+        "periodic-flush-manual-test",
+        [:ex_data_sketch, :pipeline, :periodic_flush],
+        fn _name, _meas, _meta, _config -> send(test_pid, :periodic_flush_fired) end,
+        nil
+      )
+
+      {:ok, agg} =
+        Broadway.PeriodicAggregator.start_link(
+          sketch_module: ExDataSketch.HLL,
+          sketch_opts: [p: 10],
+          flush_interval: :infinity
+        )
+
+      partial = ExDataSketch.HLL.from_enumerable(["a"], p: 10)
+      :ok = Broadway.PeriodicAggregator.merge(agg, partial)
+      _flushed = Broadway.PeriodicAggregator.flush(agg)
+
+      refute_receive :periodic_flush_fired, 100
+
+      :telemetry.detach("periodic-flush-manual-test")
+    end
+
+    test "the automatic timer-driven flush does emit periodic_flush" do
+      test_pid = self()
+
+      :telemetry.attach(
+        "periodic-flush-auto-test",
+        [:ex_data_sketch, :pipeline, :periodic_flush],
+        fn _name, _meas, _meta, _config -> send(test_pid, :periodic_flush_fired) end,
+        nil
+      )
+
+      {:ok, agg} =
+        Broadway.PeriodicAggregator.start_link(
+          sketch_module: ExDataSketch.HLL,
+          sketch_opts: [p: 10],
+          flush_interval: 20
+        )
+
+      partial = ExDataSketch.HLL.from_enumerable(["a"], p: 10)
+      :ok = Broadway.PeriodicAggregator.merge(agg, partial)
+
+      assert_receive :periodic_flush_fired, 500
+
+      :telemetry.detach("periodic-flush-auto-test")
+    end
+
     test "get returns current without resetting" do
       {:ok, agg} =
         Broadway.PeriodicAggregator.start_link(

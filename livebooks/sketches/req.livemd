@@ -1,0 +1,134 @@
+# REQ (Relative Error Quantiles) Tutorial
+
+```elixir
+Mix.install([
+  {:ex_data_sketch, "~> 0.10"}
+])
+```
+
+## Introduction
+
+`ExDataSketch.REQ` is a quantile sketch purpose-built for **tail
+accuracy** -- p99, p99.9 -- at the cost of accuracy elsewhere. It has an
+asymmetric accuracy mode: **HRA** (High Rank Accuracy, the default)
+biases its retained data toward high quantiles, ideal for SLO/tail-latency
+monitoring where "how bad is our worst 1%" matters more than the median;
+**LRA** (Low Rank Accuracy) does the opposite.
+
+## Sample data (cached locally)
+
+```elixir
+cache_path = Path.join(System.tmp_dir!(), "ex_data_sketch_livebook_cache/req_sample.bin")
+
+latencies =
+  if File.exists?(cache_path) do
+    IO.puts("Loading cached sample data from #{cache_path}")
+    cache_path |> File.read!() |> :erlang.binary_to_term()
+  else
+    IO.puts("Generating sample data (this takes a few seconds)...")
+
+    # 1,000,000 latencies (ms): tight and boring in the bulk (10-30ms),
+    # with a long, important tail (a few requests taking seconds) --
+    # exactly the shape where p99.9 accuracy matters more than p50 accuracy.
+    latencies =
+      for _ <- 1..1_000_000 do
+        if :rand.uniform(1000) == 1 do
+          500 + :rand.uniform(4500) * 1.0
+        else
+          10 + :rand.uniform(20) * 1.0
+        end
+      end
+
+    File.mkdir_p!(Path.dirname(cache_path))
+    File.write!(cache_path, :erlang.term_to_binary(latencies))
+    latencies
+  end
+
+sorted = Enum.sort(latencies)
+IO.puts("#{length(latencies)} latency samples ready")
+```
+
+## Basic usage (HRA mode, the default)
+
+```elixir
+alias ExDataSketch.REQ
+
+sketch = REQ.new(k: 12, hra: true) |> REQ.update_many(latencies)
+
+REQ.quantiles(sketch, [0.5, 0.9, 0.99, 0.999])
+```
+
+## HRA vs LRA: where the accuracy budget goes
+
+Build the same data into both modes and compare error at a *low* quantile
+(p10) against a *high* one (p99.9) -- HRA should be visibly more accurate
+at p99.9 and less accurate at p10; LRA the reverse:
+
+```elixir
+exact_percentile = fn p ->
+  idx = min(round(p * length(sorted)), length(sorted) - 1)
+  Enum.at(sorted, idx)
+end
+
+hra_sketch = REQ.new(k: 12, hra: true) |> REQ.update_many(latencies)
+lra_sketch = REQ.new(k: 12, hra: false) |> REQ.update_many(latencies)
+
+for {label, s} <- [{"HRA", hra_sketch}, {"LRA", lra_sketch}] do
+  IO.puts("== #{label} ==")
+
+  for p <- [0.1, 0.999] do
+    exact = exact_percentile.(p)
+    estimate = REQ.quantile(s, p)
+    error_pct = abs(estimate - exact) / exact * 100
+    IO.puts("  p#{p}: exact=#{Float.round(exact, 2)}, estimate=#{Float.round(estimate, 2)}, error=#{Float.round(error_pct, 1)}%")
+  end
+end
+```
+
+## rank/2, cdf/2, pmf/2
+
+```elixir
+rank_at_1s = REQ.rank(sketch, 1000.0)
+IO.puts("#{Float.round(rank_at_1s * 100, 2)}% of requests were under 1 second")
+
+REQ.cdf(sketch, [50.0, 500.0, 2000.0])
+```
+
+## count, min, max
+
+```elixir
+IO.puts("Count: #{REQ.count(sketch)}")
+IO.puts("Min: #{Float.round(REQ.min_value(sketch), 2)}ms")
+IO.puts("Max: #{Float.round(REQ.max_value(sketch), 0)}ms")
+```
+
+## Merging
+
+Both sketches being merged must share the same `:hra` mode:
+
+```elixir
+half = div(length(latencies), 2)
+{first_half, second_half} = Enum.split(latencies, half)
+
+worker_a = REQ.new(k: 12, hra: true) |> REQ.update_many(first_half)
+worker_b = REQ.new(k: 12, hra: true) |> REQ.update_many(second_half)
+
+merged = REQ.merge(worker_a, worker_b)
+IO.puts("Merged p99.9: #{Float.round(REQ.quantile(merged, 0.999), 1)}ms")
+```
+
+## Serialization
+
+```elixir
+binary = REQ.serialize(sketch)
+{:ok, restored} = REQ.deserialize(binary)
+IO.puts("Round-tripped p99: #{Float.round(REQ.quantile(restored, 0.99), 1)}ms")
+```
+
+## See also
+
+- `ExDataSketch.REQ` module documentation -- full API reference.
+- `ExDataSketch.KLL` -- uniform accuracy across all ranks instead of
+  biased toward one tail; see `livebooks/sketches/kll.livemd`.
+- `ExDataSketch.DDSketch` -- value-relative (not rank-biased) accuracy;
+  see `livebooks/sketches/ddsketch.livemd`.

@@ -2,7 +2,7 @@
 
 ```elixir
 Mix.install([
-  {:ex_data_sketch, path: "/Users/thanos/work/ex_data_sketch"}
+  {:ex_data_sketch, "~> 0.10"}
 ])
 ```
 

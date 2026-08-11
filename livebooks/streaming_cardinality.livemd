@@ -1,10 +1,8 @@
-<!-- livebook:{"app_settings":{"auto_dependency_loading":true}} -->
-
 # Streaming Cardinality Estimation
 
 ```elixir
 Mix.install([
-  {:ex_data_sketch, "~> 0.9.0"}
+  {:ex_data_sketch, "~> 0.10"}
 ])
 ```
 
@@ -94,7 +92,7 @@ end
 
 ## Section 5: ULL vs HLL
 
-ULL (UltraLogLog) provides ~20% better accuracy than HLL at the same memory:
+ULL (UltraLogLog) provides ~30% better accuracy than HLL at the same memory:
 
 ```elixir
 items = for i <- 1..100_000, do: "item_#{i}"
@@ -116,12 +114,14 @@ IO.puts("Both use #{ExDataSketch.HLL.size_bytes(hll)} bytes")
 At `p=10`, 1000 sketches = 1MB.
 
 **Recommended precision**:
-- `p=10`: High-volume dashboards, approximate counts
-- `p=12`: General analytics
-- `p=14`: Production monitoring (recommended default)
-- `p=16`: Financial/compliance use cases
+
+* `p=10`: High-volume dashboards, approximate counts
+* `p=12`: General analytics
+* `p=14`: Production monitoring (recommended default)
+* `p=16`: Financial/compliance use cases
 
 **When NOT to use sketches**:
-- Exact answers required (audit, compliance)
-- Very low cardinality (<100 distinct values)
-- You need to enumerate the distinct values (use `MapSet`)
+
+* Exact answers required (audit, compliance)
+* Very low cardinality (<100 distinct values)
+* You need to enumerate the distinct values (use `MapSet`)

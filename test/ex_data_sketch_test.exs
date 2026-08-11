@@ -11,6 +11,7 @@ defmodule ExDataSketchTest do
     HLL,
     KLL,
     Theta,
+    Window,
     XorFilter
   }
 
@@ -151,6 +152,15 @@ defmodule ExDataSketchTest do
       assert {:error, %Errors.IncompatibleSketchesError{}} =
                ExDataSketch.merge(HLL.new(p: 10), CMS.new())
     end
+
+    test "raises UnsupportedOperationError for Window, not a raw UndefinedFunctionError" do
+      a = Window.new(:hll, [p: 10], every: 60_000, keep: 5)
+      b = Window.new(:hll, [p: 10], every: 60_000, keep: 5)
+
+      assert_raise Errors.UnsupportedOperationError, ~r/Window/, fn ->
+        ExDataSketch.merge(a, b)
+      end
+    end
   end
 
   describe "merge_many/1" do
@@ -163,6 +173,12 @@ defmodule ExDataSketchTest do
 
       merged = ExDataSketch.merge_many(sketches)
       assert HLL.estimate(merged) > 0.0
+    end
+
+    test "raises InvalidOptionError for an empty list, not a raw FunctionClauseError" do
+      assert_raise Errors.InvalidOptionError, ~r/non-empty/, fn ->
+        ExDataSketch.merge_many([])
+      end
     end
   end
 

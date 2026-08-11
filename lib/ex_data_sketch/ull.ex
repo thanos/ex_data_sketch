@@ -3,63 +3,65 @@ defmodule ExDataSketch.ULL do
   UltraLogLog (ULL) sketch for cardinality estimation.
 
   ULL (Ertl, 2023) provides approximately 20% better accuracy than HLL at the
-  same memory footprint. It uses the same `2^p` register array but stores a
-  different value per register that encodes both the geometric rank and an extra
-  sub-bucket bit, then applies the FGRA estimator (sigma/tau convergence from
-  Ertl 2017) instead of HLL's harmonic mean.
+  same memory footprint. It uses the same `2^p` register array as HLL, but
+  each register byte stores a compressed 3-bit window of a per-bucket
+  accumulator: the position of the highest bit ever recorded for that bucket
+  (the geometric rank, via a `pack`/`unpack` encoding) plus the two bits just
+  below it as a sub-bucket refinement. Estimation uses the OptimalFGRAEstimator
+  from Ertl 2023: closed-form small-range and large-range correction terms
+  plus a per-register contribution lookup table for the bulk of the range.
 
   ## Memory and Accuracy
 
   - Register count: `m = 2^p`
   - Memory: `8 + m` bytes (8-byte header + one byte per register)
-  - Relative standard error: approximately `0.835 / sqrt(m)` (vs `1.04 / sqrt(m)` for HLL)
+  - Relative standard error: approximately `0.70 / sqrt(m)` (vs `1.04 / sqrt(m)` for HLL),
+    measured empirically over repeated trials against this implementation
 
   | p  | Registers | Memory  | ~Error (ULL) | ~Error (HLL) |
   |----|-----------|---------|--------------|--------------|
-  | 10 | 1,024     | ~1 KiB  | 2.61%        | 3.25%        |
-  | 12 | 4,096     | ~4 KiB  | 1.30%        | 1.63%        |
-  | 14 | 16,384    | ~16 KiB | 0.65%        | 0.81%        |
-  | 16 | 65,536    | ~64 KiB | 0.33%        | 0.41%        |
+  | 10 | 1,024     | ~1 KiB  | 2.17%        | 3.25%        |
+  | 12 | 4,096     | ~4 KiB  | 1.09%        | 1.63%        |
+  | 14 | 16,384    | ~16 KiB | 0.55%        | 0.81%        |
+  | 16 | 65,536    | ~64 KiB | 0.27%        | 0.41%        |
 
   ## Estimation Strategy
 
-  The ULL estimator selects between two estimators based on whether any
-  register is still empty:
+  Every register byte is classified into one of two regimes:
 
-  1. **Linear counting** (`zeros > 0`): when at least one register is empty,
-     the formula `m * ln(m / zeros)` is used. Linear counting is the
-     maximum-likelihood estimator in this regime and is the dominant
-     estimator for realistic workloads (any cardinality where the load
-     factor leaves empty registers, roughly `n < m * ln(m)`). It also
-     significantly outperforms the FGRA estimator at low precision
-     (`p < 12`), where FGRA carries non-trivial bias for moderate
-     `n / m`. The FGRA Horner loop is skipped on this branch.
+  1. **Small/large-range registers** (values near the encoding's boundaries):
+     pooled into closed-form quadratic-root correction terms
+     (`smallRangeEstimate`/`largeRangeEstimate` from Ertl 2023), analogous to
+     HyperLogLog's linear-counting correction but generalized to this
+     encoding's extra sub-bucket bits.
+  2. **Normal-range registers**: each contributes a precomputed value from a
+     236-entry lookup table indexed by its distance from a precision-dependent
+     offset.
 
-  2. **FGRA estimator** (`zeros == 0`): when every register is occupied,
-     the Flajolet-style geometric rank aggregation with sigma/tau
-     convergence from Algorithm 4 of Ertl 2017 is used. This is the
-     large-cardinality regime, and the published relative standard error
-     `~0.835 / sqrt(m)` applies here.
-
-  3. **Large range correction**: applied on top of FGRA when the raw
-     estimate exceeds `2^56 / 30`. The hash-space bias correction
-     `-2^64 * ln(1 - raw_estimate / 2^64)` is used. This branch is
-     effectively unreachable with 64-bit hashes.
-
-  Note that for typical workloads (where cardinality is comparable to or
-  smaller than `m * ln(m)`) the linear counting branch is taken; the FGRA
-  branch is exercised primarily in the very-large-`n` regime.
+  The contributions are summed and combined via
+  `estimation_factor[p] * sum^(-1/tau)` (`tau ≈ 0.819`), a single smooth
+  formula that scales continuously from small to large cardinalities --
+  unlike HLL/the pre-v0.10.2 ULL implementation, there is no separate
+  linear-counting branch or explicit large-range correction.
 
   ## Recommended Precision
 
-  - `p >= 12` is recommended for production use. Below `p = 12`, the
-    transition between linear counting and FGRA (at `zeros = 0`) can
-    exhibit increased relative error because FGRA's small-`p` bias is
-    significant and linear counting at very few empty registers
-    (`zeros < ~m * e^(-5)`) has high variance.
-  - When `p >= 12`, linear counting provides reliable estimates across
-    the entire small-to-moderate cardinality range, and FGRA's RSE
-    bound is tight when it engages.
+  - `p >= 10` is recommended for production use; the measured RSE bound
+    (`~0.70/sqrt(m)`) is tight across the full cardinality range at this
+    precision and above.
+
+  ## Precision Range (4..26)
+
+  Unlike `ExDataSketch.HLL` (whose `p <= 26` is a practical ceiling with no
+  algorithmic basis -- see its moduledoc), ULL's `p <= 26` is a **hard
+  limit**: the `estimation_factor[p]` lookup table
+  (`ESTIMATION_FACTORS` in the reference implementation) has exactly 24
+  entries, indexed by `p - 3`, giving a valid range of `p` in `3..26`. This
+  library additionally requires `p >= 4` (one higher than the table's own
+  floor) purely for consistency with HLL's own floor, not because `p = 3`
+  is unsafe for ULL. Raising the ceiling past 26 would require Ertl 2023's
+  authors (or a from-scratch derivation) to publish additional table
+  entries -- it cannot be done by simply changing a constant, unlike HLL.
 
   ## Binary State Layout (ULL1)
 
@@ -68,12 +70,19 @@ defmodule ExDataSketch.ULL do
       Offset  Size    Field
       ------  ------  -----
       0       4       Magic bytes: "ULL1"
-      4       1       Version (u8, currently 1)
+      4       1       Version (u8, currently 2)
       5       1       Precision p (u8, 4..26)
       6       2       Reserved flags (u16 little-endian, must be 0)
       8       m       Registers (m = 2^p bytes, one u8 per register)
 
   Total: 8 + 2^p bytes.
+
+  Version 2 (v0.10.2+) replaced the register encoding and estimator used in
+  version 1, which was an HLL-derived approximation rather than the real
+  UltraLogLog algorithm and produced significantly overestimated cardinality
+  once every register had been touched at least once. Version-1 binaries are
+  rejected on decode with a clear error rather than silently
+  misinterpreted -- see `deserialize/1`.
 
   ## Options
 
@@ -619,10 +628,10 @@ defmodule ExDataSketch.ULL do
     expected_size = 8 + Bitwise.bsl(1, p)
 
     cond do
-      version != 1 ->
+      version != 2 ->
         {:error,
          DeserializationError.exception(
-           reason: "unsupported ULL state version #{version}, expected 1"
+           reason: "unsupported ULL state version #{version}, expected 2"
          )}
 
       flags != 0 ->

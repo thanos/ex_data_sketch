@@ -177,6 +177,42 @@ defmodule ExDataSketch.ServerTest do
     end
   end
 
+  describe "snapshot: backend failure" do
+    test "a backend that raises during snapshot does not crash the server, and emits :snapshot_failed" do
+      table = :"server_snapshot_backend_raise_test_#{System.unique_integer([:positive])}"
+      :ets.new(table, [:set, :public, :named_table])
+
+      opts = [
+        sketch: :hll,
+        sketch_opts: [p: 10],
+        snapshot: [to: {Storage.ETS, table, "k"}, every: :infinity]
+      ]
+
+      {:ok, pid} = Server.start_link(opts)
+      :ok = Server.update_sync(pid, "a")
+
+      test_pid = self()
+
+      :telemetry.attach(
+        "server-snapshot-failed-test",
+        [:ex_data_sketch, :server, :snapshot_failed],
+        fn _name, _meas, meta, _config -> send(test_pid, {:snapshot_failed, meta}) end,
+        nil
+      )
+
+      # Simulate the backend becoming unavailable mid-flight.
+      :ets.delete(table)
+      send(pid, :snapshot_tick)
+
+      assert_receive {:snapshot_failed, meta}, 200
+      assert meta.backend == Storage.ETS
+      assert Process.alive?(pid)
+      assert_in_delta Server.estimate(pid), 1.0, 0.5
+
+      :telemetry.detach("server-snapshot-failed-test")
+    end
+  end
+
   describe "snapshot: crash recovery" do
     test "restores from the last snapshot after a restart" do
       table = :"server_snapshot_test_#{System.unique_integer([:positive])}"
@@ -192,6 +228,39 @@ defmodule ExDataSketch.ServerTest do
       :ok = Server.update_sync(pid1, "a")
       :ok = Server.update_sync(pid1, "b")
       :ok = GenServer.stop(pid1, :normal)
+
+      {:ok, pid2} = Server.start_link(opts)
+      assert_in_delta Server.estimate(pid2), 2.0, 0.5
+
+      :ets.delete(table)
+    end
+
+    test "snapshots on a real supervisor-initiated shutdown, not just GenServer.stop/2" do
+      # Regression test for a real bug: a process that hasn't trapped exits
+      # is killed immediately by the :shutdown exit signal a Supervisor
+      # sends, before terminate/2 (and therefore the snapshot) ever runs.
+      # GenServer.stop/2 (used by every other test in this describe block)
+      # works through a different, synchronous in-process protocol and
+      # would pass even without the fix -- this test must go through a
+      # real Supervisor to actually exercise the fixed code path.
+      table = :"server_snapshot_supervisor_stop_test_#{System.unique_integer([:positive])}"
+      :ets.new(table, [:set, :public, :named_table])
+
+      opts = [
+        sketch: :hll,
+        sketch_opts: [p: 10],
+        snapshot: [to: {Storage.ETS, table, "counter"}, every: :infinity]
+      ]
+
+      {:ok, sup} =
+        Supervisor.start_link([Supervisor.child_spec({Server, opts}, id: :srv)],
+          strategy: :one_for_one
+        )
+
+      [{_, pid, _, _}] = Supervisor.which_children(sup)
+      :ok = Server.update_sync(pid, "a")
+      :ok = Server.update_sync(pid, "b")
+      :ok = Supervisor.stop(sup, :normal)
 
       {:ok, pid2} = Server.start_link(opts)
       assert_in_delta Server.estimate(pid2), 2.0, 0.5

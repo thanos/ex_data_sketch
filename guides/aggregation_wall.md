@@ -178,7 +178,7 @@ Sketches are inappropriate when:
 | How many times did item X appear?             | CMS              |
 | Is item X a member of the set?                | Bloom or Cuckoo  |
 | What's the median/value at percentile P?      | KLL or DDSketch  |
-| How many unique items, 20% better accuracy?    | ULL (vs HLL)    |
+| How many unique items, 30% better accuracy?    | ULL (vs HLL)    |
 | Approximate set membership with deletions?    | Quotient or CQF  |
 
 ## Further Reading

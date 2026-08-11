@@ -55,12 +55,19 @@ defmodule ExDataSketch.V1CompatTest do
     end
   end
 
-  for algorithm <- ["hll", "cms", "theta", "kll", "ddsketch", "frequent_items", "ull"] do
+  # ULL is deliberately excluded here. Its v1 fixtures encode the pre-v0.10.2
+  # ULL1-state-version-1 register format (an HLL-derived approximation, not
+  # real UltraLogLog -- see CHANGELOG). That inner state format was replaced,
+  # not just wrapped in a new outer frame, so these historical binaries
+  # cannot be correctly reinterpreted; ULL.deserialize/1 must reject them
+  # with a clear error rather than silently misestimate. See the dedicated
+  # "ull v1-state rejection" describe block below.
+  for algorithm <- ["hll", "cms", "theta", "kll", "ddsketch", "frequent_items"] do
     describe "#{algorithm} v1 decode" do
       @algo algorithm
       @vec_dir Path.join(@v1_vectors_dir, algorithm)
 
-      if @algo in ["hll", "cms", "theta", "ull"] do
+      if @algo in ["hll", "cms", "theta"] do
         @tag :rust_nif
       end
 
@@ -76,6 +83,26 @@ defmodule ExDataSketch.V1CompatTest do
           assert {:ok, _sketch} = mod.deserialize(bin),
                  "#{@algo}.deserialize/1 rejected its own v1 vector #{filename}"
         end
+      end
+    end
+  end
+
+  describe "ull v1-state rejection" do
+    @tag :rust_nif
+    test "pre-v0.10.2 ULL1-state-version-1 fixtures are rejected with a clear error, not misestimated" do
+      vec_dir = Path.join(@v1_vectors_dir, "ull")
+      files = File.ls!(vec_dir) |> Enum.filter(&String.ends_with?(&1, ".json"))
+      assert files != [], "no v1 fixtures for ull"
+
+      for filename <- files do
+        json = vec_dir |> Path.join(filename) |> File.read!() |> Jason.decode!()
+        bin = Base.decode64!(json["expected"]["canonical_exsk_base64"])
+
+        assert {:error, %ExDataSketch.Errors.DeserializationError{message: message}} =
+                 ULL.deserialize(bin)
+
+        assert message =~ "unsupported ULL state version 1, expected 2",
+               "expected a clear version-rejection error for #{filename}, got: #{message}"
       end
     end
   end

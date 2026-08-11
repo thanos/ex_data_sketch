@@ -972,20 +972,38 @@ defmodule ExDataSketch.Backend.Pure do
     current_level = Enum.at(state.levels, level)
     sorted = Enum.sort(current_level)
 
+    # Clear-the-level compaction requires an even-length input: promoting
+    # exactly half the items (at double the weight) exactly preserves total
+    # weight only when the starting count is even. Level capacities are
+    # frequently odd (see kll_level_capacity/3), so an odd-length level here
+    # is the common case, not an edge case. Hold back one item -- leave it
+    # in place at the current level, unweighted, for a future compaction --
+    # so the actual compacted subset always has even length. Without this,
+    # every odd-length compaction silently gains or loses one item's worth
+    # of weight (2^level), and that error compounds across every subsequent
+    # compaction, corrupting the sum-of-retained-weights invariant (which
+    # must equal `n`) that quantile/rank queries depend on.
+    {to_compact, held_back} =
+      if rem(length(sorted), 2) == 1 do
+        [last | rest] = Enum.reverse(sorted)
+        {Enum.reverse(rest), [last]}
+      else
+        {sorted, []}
+      end
+
     # Get parity bit for this level
     parity = kll_get_parity(state.compaction_bits, level)
 
     # Clear-the-level compaction (original KLL paper):
     # Half the items are promoted to the next level, the rest are discarded.
-    # The current level is cleared.
-    promoted = kll_select_half(sorted, parity)
+    promoted = kll_select_half(to_compact, parity)
 
     # Flip parity bit
     new_compaction_bits = kll_flip_parity(state.compaction_bits, level)
 
-    # Clear current level
-    new_levels = List.replace_at(state.levels, level, [])
-    new_level_sizes = List.replace_at(state.level_sizes, level, 0)
+    # Current level keeps only the held-back item (if any).
+    new_levels = List.replace_at(state.levels, level, held_back)
+    new_level_sizes = List.replace_at(state.level_sizes, level, length(held_back))
 
     # Add promoted items to next level
     next_level = Enum.at(new_levels, level + 1)
@@ -4663,21 +4681,600 @@ defmodule ExDataSketch.Backend.Pure do
   # ULL (UltraLogLog) Implementation
   # ============================================================
   #
-  # UltraLogLog (Ertl, 2023) uses the same 2^p register array as HLL,
-  # but stores a different value per register that encodes both the
-  # geometric rank and a sub-bucket bit, then uses the FGRA estimator
-  # (sigma/tau from Ertl 2017) for ~20% better accuracy at same memory.
+  # Port of Ertl 2023's UltraLogLog, following the dynatrace-oss/hash4j
+  # reference implementation. Each register byte encodes a compressed
+  # 3-bit window of a per-bucket accumulator: the position of the
+  # highest bit ever OR-ed in (geometric rank, via `pack`/`unpack`)
+  # plus the two bits just below it (sub-bucket refinement). Estimation
+  # uses the OptimalFGRAEstimator: closed-form small-range/large-range
+  # correction terms plus a per-register contribution lookup table for
+  # the bulk of the range, combined via `sum^(-1/tau) * factor[p]`.
+  #
+  # Every helper below (`ull_pack/1`, `ull_bucket_and_bit/2`,
+  # `ull_sigma/1`, `ull_phi/2`, the small/large range estimators, and
+  # the full `ull_estimate/2` accumulation loop) is a direct line-by-line
+  # port of hash4j's `UltraLogLog.java` / `OptimalFGRAEstimator`, and has
+  # been numerically verified byte-for-byte (register state) and to
+  # within 1e-6 relative error (estimate) against a compiled Java
+  # reference across p in {10,12,14,16} and n up to 2,000,000, plus an
+  # insertion-order-independence check and a merge-vs-single-sketch
+  # equivalence check.
   #
   # State binary layout (ULL1):
   #   magic:     4 bytes  "ULL1"
-  #   version:   1 byte   (u8, 1)
+  #   version:   1 byte   (u8, 2)
   #   precision: 1 byte   (u8, 4..26)
   #   reserved:  2 bytes  (u16 LE, 0)
   #   registers: 2^p bytes (one u8 per register)
   # Total: 8 + 2^p bytes.
+  #
+  # Version 2 replaces the version-1 register encoding and estimator
+  # (which was an HLL-derived approximation, not real UltraLogLog) with
+  # this correct port. Version-1 binaries are rejected on decode rather
+  # than silently misinterpreted -- see `ULL.validate_state/2`.
 
   @ull_magic "ULL1"
   @ull_header_size 8
+  @ull_mask64 0xFFFFFFFFFFFFFFFF
+
+  # 256-entry table: unpack_table[register_byte] = unpack(register_byte) as
+  # an unsigned 64-bit "hash prefix" accumulator (hash4j's `unpack/1`,
+  # ground-truthed against the Java reference for all 256 byte values).
+  @ull_unpack_table {
+    0,
+    4_611_686_018_427_387_904,
+    9_223_372_036_854_775_808,
+    13_835_058_055_282_163_712,
+    0,
+    9_223_372_036_854_775_808,
+    0,
+    9_223_372_036_854_775_808,
+    4,
+    5,
+    6,
+    7,
+    8,
+    10,
+    12,
+    14,
+    16,
+    20,
+    24,
+    28,
+    32,
+    40,
+    48,
+    56,
+    64,
+    80,
+    96,
+    112,
+    128,
+    160,
+    192,
+    224,
+    256,
+    320,
+    384,
+    448,
+    512,
+    640,
+    768,
+    896,
+    1024,
+    1280,
+    1536,
+    1792,
+    2048,
+    2560,
+    3072,
+    3584,
+    4096,
+    5120,
+    6144,
+    7168,
+    8192,
+    10_240,
+    12_288,
+    14_336,
+    16_384,
+    20_480,
+    24_576,
+    28_672,
+    32_768,
+    40_960,
+    49_152,
+    57_344,
+    65_536,
+    81_920,
+    98_304,
+    114_688,
+    131_072,
+    163_840,
+    196_608,
+    229_376,
+    262_144,
+    327_680,
+    393_216,
+    458_752,
+    524_288,
+    655_360,
+    786_432,
+    917_504,
+    1_048_576,
+    1_310_720,
+    1_572_864,
+    1_835_008,
+    2_097_152,
+    2_621_440,
+    3_145_728,
+    3_670_016,
+    4_194_304,
+    5_242_880,
+    6_291_456,
+    7_340_032,
+    8_388_608,
+    10_485_760,
+    12_582_912,
+    14_680_064,
+    16_777_216,
+    20_971_520,
+    25_165_824,
+    29_360_128,
+    33_554_432,
+    41_943_040,
+    50_331_648,
+    58_720_256,
+    67_108_864,
+    83_886_080,
+    100_663_296,
+    117_440_512,
+    134_217_728,
+    167_772_160,
+    201_326_592,
+    234_881_024,
+    268_435_456,
+    335_544_320,
+    402_653_184,
+    469_762_048,
+    536_870_912,
+    671_088_640,
+    805_306_368,
+    939_524_096,
+    1_073_741_824,
+    1_342_177_280,
+    1_610_612_736,
+    1_879_048_192,
+    2_147_483_648,
+    2_684_354_560,
+    3_221_225_472,
+    3_758_096_384,
+    4_294_967_296,
+    5_368_709_120,
+    6_442_450_944,
+    7_516_192_768,
+    8_589_934_592,
+    10_737_418_240,
+    12_884_901_888,
+    15_032_385_536,
+    17_179_869_184,
+    21_474_836_480,
+    25_769_803_776,
+    30_064_771_072,
+    34_359_738_368,
+    42_949_672_960,
+    51_539_607_552,
+    60_129_542_144,
+    68_719_476_736,
+    85_899_345_920,
+    103_079_215_104,
+    120_259_084_288,
+    137_438_953_472,
+    171_798_691_840,
+    206_158_430_208,
+    240_518_168_576,
+    274_877_906_944,
+    343_597_383_680,
+    412_316_860_416,
+    481_036_337_152,
+    549_755_813_888,
+    687_194_767_360,
+    824_633_720_832,
+    962_072_674_304,
+    1_099_511_627_776,
+    1_374_389_534_720,
+    1_649_267_441_664,
+    1_924_145_348_608,
+    2_199_023_255_552,
+    2_748_779_069_440,
+    3_298_534_883_328,
+    3_848_290_697_216,
+    4_398_046_511_104,
+    5_497_558_138_880,
+    6_597_069_766_656,
+    7_696_581_394_432,
+    8_796_093_022_208,
+    10_995_116_277_760,
+    13_194_139_533_312,
+    15_393_162_788_864,
+    17_592_186_044_416,
+    21_990_232_555_520,
+    26_388_279_066_624,
+    30_786_325_577_728,
+    35_184_372_088_832,
+    43_980_465_111_040,
+    52_776_558_133_248,
+    61_572_651_155_456,
+    70_368_744_177_664,
+    87_960_930_222_080,
+    105_553_116_266_496,
+    123_145_302_310_912,
+    140_737_488_355_328,
+    175_921_860_444_160,
+    211_106_232_532_992,
+    246_290_604_621_824,
+    281_474_976_710_656,
+    351_843_720_888_320,
+    422_212_465_065_984,
+    492_581_209_243_648,
+    562_949_953_421_312,
+    703_687_441_776_640,
+    844_424_930_131_968,
+    985_162_418_487_296,
+    1_125_899_906_842_624,
+    1_407_374_883_553_280,
+    1_688_849_860_263_936,
+    1_970_324_836_974_592,
+    2_251_799_813_685_248,
+    2_814_749_767_106_560,
+    3_377_699_720_527_872,
+    3_940_649_673_949_184,
+    4_503_599_627_370_496,
+    5_629_499_534_213_120,
+    6_755_399_441_055_744,
+    7_881_299_347_898_368,
+    9_007_199_254_740_992,
+    11_258_999_068_426_240,
+    13_510_798_882_111_488,
+    15_762_598_695_796_736,
+    18_014_398_509_481_984,
+    22_517_998_136_852_480,
+    27_021_597_764_222_976,
+    31_525_197_391_593_472,
+    36_028_797_018_963_968,
+    45_035_996_273_704_960,
+    54_043_195_528_445_952,
+    63_050_394_783_186_944,
+    72_057_594_037_927_936,
+    90_071_992_547_409_920,
+    108_086_391_056_891_904,
+    126_100_789_566_373_888,
+    144_115_188_075_855_872,
+    180_143_985_094_819_840,
+    216_172_782_113_783_808,
+    252_201_579_132_747_776,
+    288_230_376_151_711_744,
+    360_287_970_189_639_680,
+    432_345_564_227_567_616,
+    504_403_158_265_495_552,
+    576_460_752_303_423_488,
+    720_575_940_379_279_360,
+    864_691_128_455_135_232,
+    1_008_806_316_530_991_104,
+    1_152_921_504_606_846_976,
+    1_441_151_880_758_558_720,
+    1_729_382_256_910_270_464,
+    2_017_612_633_061_982_208,
+    2_305_843_009_213_693_952,
+    2_882_303_761_517_117_440,
+    3_458_764_513_820_540_928,
+    4_035_225_266_123_964_416,
+    4_611_686_018_427_387_904,
+    5_764_607_523_034_234_880,
+    6_917_529_027_641_081_856,
+    8_070_450_532_247_928_832,
+    9_223_372_036_854_775_808,
+    11_529_215_046_068_469_760,
+    13_835_058_055_282_163_712,
+    16_140_901_064_495_857_664
+  }
+
+  # OptimalFGRAEstimator constants (Ertl 2023 / hash4j).
+  @ull_eta_0 4.663135422063788
+  @ull_eta_1 2.1378502137958524
+  @ull_eta_2 2.781144650979996
+  @ull_eta_3 0.9824082545153715
+  @ull_tau_const 0.8194911375910897
+
+  @ull_pow_2_tau :math.pow(2.0, @ull_tau_const)
+  @ull_pow_2_minus_tau :math.pow(2.0, -@ull_tau_const)
+  @ull_pow_4_minus_tau :math.pow(4.0, -@ull_tau_const)
+  @ull_minus_inv_tau -1.0 / @ull_tau_const
+  @ull_eta_x @ull_eta_0 - @ull_eta_1 - @ull_eta_2 + @ull_eta_3
+  @ull_eta23x (@ull_eta_2 - @ull_eta_3) / @ull_eta_x
+  @ull_eta13x (@ull_eta_1 - @ull_eta_3) / @ull_eta_x
+  @ull_eta3012xx (@ull_eta_3 * @ull_eta_0 - @ull_eta_1 * @ull_eta_2) / (@ull_eta_x * @ull_eta_x)
+  @ull_pow4mt_eta23 @ull_pow_4_minus_tau * (@ull_eta_2 - @ull_eta_3)
+  @ull_pow4mt_eta01 @ull_pow_4_minus_tau * (@ull_eta_0 - @ull_eta_1)
+  @ull_pow4mt_eta3 @ull_pow_4_minus_tau * @ull_eta_3
+  @ull_pow4mt_eta1 @ull_pow_4_minus_tau * @ull_eta_1
+  @ull_pow2mt_eta_x @ull_pow_2_minus_tau * @ull_eta_x
+  @ull_phi_1 @ull_eta_0 / (@ull_pow_2_tau * (2.0 * @ull_pow_2_tau - 1.0))
+  @ull_p_initial @ull_eta_x * (@ull_pow_4_minus_tau / (2.0 - @ull_pow_2_minus_tau))
+  @ull_pow2mt_eta02 @ull_pow_2_minus_tau * (@ull_eta_0 - @ull_eta_2)
+  @ull_pow2mt_eta13 @ull_pow_2_minus_tau * (@ull_eta_1 - @ull_eta_3)
+  @ull_pow2mt_eta2 @ull_pow_2_minus_tau * @ull_eta_2
+  @ull_pow2mt_eta3 @ull_pow_2_minus_tau * @ull_eta_3
+  @ull_min_p 3
+
+  # 236-entry table: REGISTER_CONTRIBUTIONS[r - off] for the "normal range"
+  # register values (ground-truthed against the Java reference).
+  @ull_register_contributions {
+    0.8484061093359406,
+    0.38895829052007685,
+    0.5059986252327467,
+    0.17873835725405993,
+    0.48074234060273024,
+    0.22040001471443574,
+    0.2867199572932749,
+    0.10128061935935387,
+    0.2724086914332655,
+    0.12488785473931466,
+    0.16246750447680292,
+    0.057389829555353204,
+    0.15435814343988866,
+    0.0707666752272979,
+    0.09206087452057209,
+    0.03251947467566813,
+    0.08746577181824695,
+    0.0400993542020493,
+    0.05216553700867983,
+    0.018426892732996067,
+    0.04956175987398336,
+    0.022721969094305374,
+    0.029559172293066274,
+    0.01044144713836362,
+    0.02808376340530896,
+    0.012875216815740723,
+    0.01674946174724118,
+    0.005916560101748389,
+    0.015913433441643893,
+    0.0072956356627506685,
+    0.009490944673308844,
+    0.0033525700962450116,
+    0.009017216113341773,
+    0.004134011914931561,
+    0.0053779657012946284,
+    0.0018997062578498703,
+    0.005109531310944485,
+    0.002342503834183061,
+    0.00304738001114257,
+    0.001076452918957914,
+    0.0028952738727082267,
+    0.0013273605219527246,
+    0.0017267728074345586,
+    6.09963188753462e-4,
+    0.0016405831157217021,
+    7.521379173550258e-4,
+    9.78461602292084e-4,
+    3.4563062172237723e-4,
+    9.2962292270938e-4,
+    4.2619276177576713e-4,
+    5.544372155028133e-4,
+    1.958487477192352e-4,
+    5.267631795945699e-4,
+    2.4149862146135835e-4,
+    3.141672858847145e-4,
+    1.1097608132071735e-4,
+    2.9848602115777116e-4,
+    1.3684320663902123e-4,
+    1.7802030736817869e-4,
+    6.288368329501905e-5,
+    1.6913464774658265e-4,
+    7.754107700464113e-5,
+    1.0087374230011362e-4,
+    3.563252169014952e-5,
+    9.583875639268212e-5,
+    4.393801322487549e-5,
+    5.715927601779108e-5,
+    2.0190875207520577e-5,
+    5.430624268457414e-5,
+    2.4897113642537945e-5,
+    3.2388833410757184e-5,
+    1.144099329232623e-5,
+    3.0772185549154786e-5,
+    1.4107744575453657e-5,
+    1.8352865935237916e-5,
+    6.482944704957522e-6,
+    1.7436805727319977e-5,
+    7.99403737572986e-6,
+    1.0399500462555932e-5,
+    3.67350727106242e-6,
+    9.880422483694849e-6,
+    4.529755498675165e-6,
+    5.892791363067244e-6,
+    2.081562667074589e-6,
+    5.5986600976661345e-6,
+    2.5667486794686803e-6,
+    3.339101736056405e-6,
+    1.1795003568090263e-6,
+    3.1724346748254955e-6,
+    1.4544270182973653e-6,
+    1.8920745223756656e-6,
+    6.683541714686068e-7,
+    1.7976340035771381e-6,
+    8.241391019206623e-7,
+    1.072128458850476e-6,
+    3.7871739159788393e-7,
+    1.0186145159929963e-6,
+    4.6699164053601817e-7,
+    6.075127690181302e-7,
+    2.1459709360913574e-7,
+    5.77189533646426e-7,
+    2.6461697039041317e-7,
+    3.442421115430427e-7,
+    1.2159967724530947e-7,
+    3.27059699739513e-7,
+    1.4994302882644454e-7,
+    1.9506195985170504e-7,
+    6.890345650764188e-8,
+    1.853256875916027e-7,
+    8.49639834530526e-8,
+    1.1053025444979778e-7,
+    3.904357664636507e-8,
+    1.0501327589016596e-7,
+    4.814414208323267e-8,
+    6.263105916717392e-8,
+    2.2123721430020238e-8,
+    5.9504908663745294e-8,
+    2.7280481949286693e-8,
+    3.548937430686624e-8,
+    1.2536224699555158e-8,
+    3.371796684815404e-8,
+    1.545826061452554e-8,
+    2.0109761920695445e-8,
+    7.103548569567803e-9,
+    1.910600846054063e-8,
+    8.759296176321385e-9,
+    1.139503111580109e-8,
+    4.0251673442004705e-9,
+    1.082626247715867e-8,
+    4.963383100969499e-9,
+    6.456900615837058e-9,
+    2.28082795382416e-9,
+    6.134612546958812e-9,
+    2.812460192131048e-9,
+    3.65874960227048e-9,
+    1.292412391857717e-9,
+    3.476127720042246e-9,
+    1.5936574250689536e-9,
+    2.0732003554895977e-9,
+    7.323348470132607e-10,
+    1.9697191686598677e-9,
+    9.030328662369446e-10,
+    1.1747619217600795e-9,
+    4.1497151491950363e-10,
+    1.1161251587553774e-9,
+    5.116961428952198e-10,
+    6.656691762391315e-10,
+    2.351401942661752e-10,
+    6.324431369849931e-10,
+    2.899484087937328e-10,
+    3.771959611450379e-10,
+    1.3324025619025952e-10,
+    3.5836869940773545e-10,
+    1.6429687995368037e-10,
+    2.1373498756237659e-10,
+    7.549949478033437e-11,
+    2.0306667462222755e-10,
+    9.309747508122088e-11,
+    1.2111117194789844e-10,
+    4.2781167456975155e-11,
+    1.1506606020637118e-10,
+    5.275291818652914e-11,
+    6.86266490006118e-11,
+    2.424159650745726e-11,
+    6.520123617549523e-11,
+    2.9892007004129765e-11,
+    3.888672595026375e-11,
+    1.3736301184893309e-11,
+    3.6945743959497274e-11,
+    1.693805979747882e-11,
+    2.2034843273746723e-11,
+    7.783562034953282e-12,
+    2.093500180037604e-11,
+    9.597812206565218e-12,
+    1.248586262365167e-11,
+    4.4104913787558985e-12,
+    1.186264650299681e-11,
+    5.4385213096368525e-12,
+    7.075011313669894e-12,
+    2.499168647301308e-12,
+    6.721871027139603e-12,
+    3.081693348317683e-12,
+    4.008996942969544e-12,
+    1.4161333491633975e-12,
+    3.808892905481426e-12,
+    1.7462161775917615e-12,
+    2.271665129027518e-12,
+    8.024403094117999e-13,
+    2.1582778227746425e-12,
+    9.89479027998621e-13,
+    1.2872203525845489e-12,
+    4.54696198313039e-13,
+    1.2229703685228866e-12,
+    5.606801491206791e-13,
+    7.293928206826874e-13,
+    2.5764985922987735e-13,
+    6.92986095905959e-13,
+    3.1770479284824887e-13,
+    4.1330443990824427e-13,
+    1.4599517261737423e-13,
+    3.926748688923721e-13,
+    1.8002480658009348e-13,
+    2.3419555992885186e-13,
+    8.272696321778206e-14,
+    2.225059832666067e-13,
+    1.0200957528418621e-13,
+    1.327049869160979e-13,
+    4.687655297461429e-14,
+    1.2608118449008524e-13,
+    5.780288643182276e-14,
+    7.519618885068399e-14,
+    2.656221301145837e-14,
+    7.144286571105751e-14,
+    3.2753529955811655e-14,
+    4.2609301647742677e-14,
+    1.5051259431302017e-14,
+    4.0482511975524363e-14,
+    1.8559518231526075e-14,
+    2.4144210160882415e-14,
+    8.528672304925501e-15,
+    2.293908229376684e-14,
+    1.0516598285774437e-14,
+    1.3681118012966618e-14,
+    4.832701981970378e-15,
+    1.2998242223663023e-14,
+    5.959143881034847e-15,
+    7.752292944665042e-15,
+    2.7384108113817744e-15,
+    7.365346997814574e-15,
+    3.376699844369893e-15,
+    4.392773006047039e-15,
+    1.5516979527951759e-15,
+    4.173513269314059e-15,
+    1.9133791810691354e-15,
+    2.4891286772044455e-15,
+    8.792568765435867e-16
+  }
+
+  # 24-entry table: ESTIMATION_FACTORS[p - MIN_P] for p in 3..26.
+  @ull_estimation_factors {
+    94.59941722950778,
+    455.6358404615186,
+    2159.476860400962,
+    10_149.51036338182,
+    47_499.52712820488,
+    221_818.76564766388,
+    1_034_754.6840013304,
+    4_824_374.384717942,
+    2.2_486_750_611_989_766e7,
+    1.0_479_810_199_493_326e8,
+    4.8_837_185_623_048_025e8,
+    2.275_794_725_435_168e9,
+    1.0_604_938_814_719_946e10,
+    4.9_417_362_104_242_645e10,
+    2.30_276_227_770_117e11,
+    1.0_730_444_972_228_585e12,
+    5.0_001_829_613_164e12,
+    2.329_988_778_511_272e13,
+    1.0_857_295_240_912_981e14,
+    5.059_288_069_986_326e14,
+    2.3_575_295_235_667_005e15,
+    1.0_985_627_213_141_412e16,
+    5.119_087_674_515_589e16,
+    2.3_853_948_339_571_715e17
+  }
 
   @impl true
   @spec ull_new(keyword()) :: binary()
@@ -4685,7 +5282,7 @@ defmodule ExDataSketch.Backend.Pure do
     p = Keyword.fetch!(opts, :p)
     m = 1 <<< p
     registers = :binary.copy(<<0>>, m)
-    <<@ull_magic::binary, 1::unsigned-8, p::unsigned-8, 0::unsigned-little-16, registers::binary>>
+    <<@ull_magic::binary, 2::unsigned-8, p::unsigned-8, 0::unsigned-little-16, registers::binary>>
   end
 
   @impl true
@@ -4694,17 +5291,17 @@ defmodule ExDataSketch.Backend.Pure do
     p = Keyword.fetch!(opts, :p)
     m = 1 <<< p
 
-    bucket = hash64 >>> (64 - p)
-    reg_value = ull_register_value(hash64, p)
+    {bucket, bit} = ull_bucket_and_bit(hash64, p)
 
     <<header::binary-size(@ull_header_size), registers::binary-size(^m)>> = state_bin
-
     <<before::binary-size(^bucket), old_val::unsigned-8, after_bytes::binary>> = registers
 
-    if reg_value > old_val do
-      <<header::binary, before::binary, reg_value::unsigned-8, after_bytes::binary>>
-    else
+    new_val = ull_pack(bor(elem(@ull_unpack_table, old_val), bit))
+
+    if new_val == old_val do
       state_bin
+    else
+      <<header::binary, before::binary, new_val::unsigned-8, after_bytes::binary>>
     end
   end
 
@@ -4716,14 +5313,16 @@ defmodule ExDataSketch.Backend.Pure do
 
     <<header::binary-size(@ull_header_size), registers::binary-size(^m)>> = state_bin
 
-    # Pre-aggregate hashes into a map of {bucket => max_reg_value}.
-    # This avoids materializing the full register array as a tuple,
-    # which would OOM at high precision values (e.g. p=26 => 67M registers).
+    # Pre-aggregate hashes into a map of {bucket => [bit, ...]}. This avoids
+    # materializing the full register array as a tuple, which would OOM at
+    # high precision values (e.g. p=26 => 67M registers). Register updates
+    # accumulate bits via unpack/OR/pack, not a simple max, so every bit for
+    # a bucket is folded in sequence (order doesn't affect the result --
+    # verified empirically against the Java reference).
     updates =
       Enum.reduce(hashes, %{}, fn hash64, acc ->
-        bucket = hash64 >>> (64 - p)
-        reg_value = ull_register_value(hash64, p)
-        Map.update(acc, bucket, reg_value, &max(&1, reg_value))
+        {bucket, bit} = ull_bucket_and_bit(hash64, p)
+        Map.update(acc, bucket, [bit], &[bit | &1])
       end)
 
     sorted_updates = updates |> Map.to_list() |> List.keysort(0)
@@ -4733,11 +5332,16 @@ defmodule ExDataSketch.Backend.Pure do
 
   defp ull_splice_updates(registers, [], _offset, acc), do: Enum.reverse([registers | acc])
 
-  defp ull_splice_updates(registers, [{bucket, new_val} | tail], offset, acc) do
+  defp ull_splice_updates(registers, [{bucket, bits} | tail], offset, acc) do
     skip = bucket - offset
     <<before::binary-size(^skip), old_val::unsigned-8, after_bytes::binary>> = registers
-    val = max(old_val, new_val)
-    ull_splice_updates(after_bytes, tail, bucket + 1, [val, before | acc])
+
+    new_val =
+      Enum.reduce(bits, old_val, fn bit, byte ->
+        ull_pack(bor(elem(@ull_unpack_table, byte), bit))
+      end)
+
+    ull_splice_updates(after_bytes, tail, bucket + 1, [<<new_val::unsigned-8>>, before | acc])
   end
 
   @impl true
@@ -4749,11 +5353,27 @@ defmodule ExDataSketch.Backend.Pure do
     <<header_a::binary-size(@ull_header_size), regs_a::binary-size(^m)>> = a_bin
     <<_header_b::binary-size(@ull_header_size), regs_b::binary-size(^m)>> = b_bin
 
-    merged =
-      zip_max_binary(regs_a, regs_b)
-      |> IO.iodata_to_binary()
+    merged = ull_merge_registers(regs_a, regs_b, [])
+    <<header_a::binary, IO.iodata_to_binary(merged)::binary>>
+  end
 
-    <<header_a::binary, merged::binary>>
+  defp ull_merge_registers(<<>>, <<>>, acc), do: Enum.reverse(acc)
+
+  defp ull_merge_registers(
+         <<a::unsigned-8, rest_a::binary>>,
+         <<0::unsigned-8, rest_b::binary>>,
+         acc
+       ) do
+    ull_merge_registers(rest_a, rest_b, [<<a::unsigned-8>> | acc])
+  end
+
+  defp ull_merge_registers(
+         <<a::unsigned-8, rest_a::binary>>,
+         <<b::unsigned-8, rest_b::binary>>,
+         acc
+       ) do
+    merged_val = ull_pack(bor(elem(@ull_unpack_table, a), elem(@ull_unpack_table, b)))
+    ull_merge_registers(rest_a, rest_b, [<<merged_val::unsigned-8>> | acc])
   end
 
   @impl true
@@ -4764,181 +5384,210 @@ defmodule ExDataSketch.Backend.Pure do
 
     <<_header::binary-size(@ull_header_size), registers::binary-size(^m)>> = state_bin
 
-    # Count registers at each value level
-    # q_max = max register value
-    {counts, q_max} = ull_register_counts(registers, m)
+    off = (p <<< 2) + 4
 
-    if q_max == 0 do
-      # All registers are zero => no items inserted
+    {c0, c4, c8, c10, c4w0, c4w1, c4w2, c4w3, sum0} =
+      ull_accumulate(registers, off, {0, 0, 0, 0, 0, 0, 0, 0, 0.0})
+
+    sum =
+      sum0 +
+        ull_small_range_contribution(c0, c4, c8, c10, m) +
+        ull_large_range_contribution_total(c4w0, c4w1, c4w2, c4w3, m, p)
+
+    if sum <= 0.0 do
       0.0
     else
-      ull_fgra_estimate(counts, m, q_max)
+      elem(@ull_estimation_factors, p - @ull_min_p) * :math.pow(sum, @ull_minus_inv_tau)
     end
   end
 
   # -- ULL Helpers --
 
-  # Compute the ULL register value from a 64-bit hash and precision p.
-  # register_value = 2 * geometric_rank - sub_bit
-  # where sub_bit is the bit just after the leading zeros in the suffix.
-  defp ull_register_value(hash64, p) do
-    bits = 64 - p
-    remaining_mask = (1 <<< bits) - 1
-    remaining = hash64 &&& remaining_mask
+  defp ull_small_range_contribution(c0, c4, c8, c10, m) do
+    if c0 > 0 or c4 > 0 or c8 > 0 or c10 > 0 do
+      z = ull_small_range_estimate(c0, c4, c8, c10, m)
 
-    geometric_rank = count_leading_zeros(remaining, bits) + 1
-
-    # sub_bit: the bit at position (p + geometric_rank) in the original hash,
-    # which is the bit just after the leading zeros in the suffix.
-    # This is bit (bits - geometric_rank) in `remaining` (0-indexed from MSB of suffix).
-    # If geometric_rank > bits, all suffix bits are zero, sub_bit = 0.
-    sub_bit =
-      if geometric_rank > bits do
-        0
-      else
-        bit_pos = bits - geometric_rank
-        remaining >>> bit_pos &&& 1
-      end
-
-    value = 2 * geometric_rank - sub_bit
-    # Clamp to 0..255
-    min(value, 255)
-  end
-
-  # Count how many registers have each value 0..255.
-  # Returns {counters_ref, q_max} where counters_ref is a :counters reference
-  # with 256 slots (1-indexed; register value v is at slot v+1).
-  # Uses :counters for O(1) mutable increment, avoiding per-byte tuple copies.
-  defp ull_register_counts(registers, _m) do
-    counts = :counters.new(256, [:atomics])
-    q_max = ull_register_counts_loop(registers, counts, 0)
-    {counts, q_max}
-  end
-
-  defp ull_register_counts_loop(<<>>, _counts, q_max), do: q_max
-
-  defp ull_register_counts_loop(<<val::unsigned-8, rest::binary>>, counts, q_max) do
-    :counters.add(counts, val + 1, 1)
-    ull_register_counts_loop(rest, counts, max(q_max, val))
-  end
-
-  # ULL estimator with linear counting (small range) and FGRA (large range).
-  #
-  # Estimation strategy:
-  #
-  #   1. **Linear counting fast path** (`zeros > 0`): when at least one register
-  #      is empty, return `m * ln(m / zeros)`. The FGRA Horner loop is skipped
-  #      entirely on this branch. Linear counting is the maximum-likelihood
-  #      estimator in this regime and outperforms FGRA, especially at small
-  #      precision (`p < 12`) where the FGRA estimator carries non-trivial
-  #      bias for `n / m` in the moderate range. This is the dominant
-  #      estimator for realistic workloads where `n < m * ln(m)`.
-  #
-  #   2. **FGRA estimator** (`zeros == 0`): when every register is occupied,
-  #      compute the raw FGRA estimate via Algorithm 4 of Ertl 2017:
-  #        z = m * tau(1 - C[q]/m)
-  #        for k from q-1 down to 1: z = (z + C[k]) * 0.5
-  #        z += m * sigma(0)
-  #        raw_estimate = alpha_inf * m^2 / z   (alpha_inf = 1 / (2 * ln(2)))
-  #      The published RSE `~0.835 / sqrt(m)` applies in this regime.
-  #
-  #   3. **Large range correction**: when `raw_estimate > 2^56 / 30`, apply
-  #      the hash-space bias correction
-  #      `-2^64 * ln(1 - raw_estimate / 2^64)`. This branch is effectively
-  #      unreachable with 64-bit hashes.
-  defp ull_fgra_estimate(counts, m, q_max) do
-    m_f = m * 1.0
-    zeros = :counters.get(counts, 0 + 1) * 1.0
-
-    if zeros > 0.0 do
-      # Linear counting fast path: skip FGRA Horner loop entirely.
-      m_f * :math.log(m_f / zeros)
+      0.0
+      |> ull_add_if(c0 > 0, fn -> ull_contribution0(c0, z) end)
+      |> ull_add_if(c4 > 0, fn -> ull_contribution4(c4, z) end)
+      |> ull_add_if(c8 > 0, fn -> ull_contribution8(c8, z) end)
+      |> ull_add_if(c10 > 0, fn -> ull_contribution10(c10, z) end)
     else
-      ull_fgra_raw_estimate(counts, m_f, q_max)
+      0.0
     end
   end
 
-  defp ull_fgra_raw_estimate(counts, m_f, q_max) do
-    alpha_inf = 1.0 / (2.0 * :math.log(2.0))
-
-    c_q = :counters.get(counts, q_max + 1) * 1.0
-
-    # zeros is known to be 0 on this branch, so sigma(0) = 0 and the C[0] term
-    # contributes nothing. We still pass 0.0 explicitly to keep the Algorithm 4
-    # form intact.
-    z = m_f * ull_tau(1.0 - c_q / m_f)
-
-    z = ull_horner_loop(z, counts, q_max - 1)
-
-    z = z + m_f * ull_sigma(0.0)
-
-    raw_estimate =
-      if z == 0.0 do
-        0.0
-      else
-        alpha_inf * m_f * m_f / z
-      end
-
-    if raw_estimate > 0x100000000000000 / 30.0 do
-      # Large range correction (effectively unreachable with 64-bit hashes).
-      -0x10000000000000000 * :math.log(1.0 - raw_estimate / 0x10000000000000000)
+  defp ull_large_range_contribution_total(c4w0, c4w1, c4w2, c4w3, m, p) do
+    if c4w0 > 0 or c4w1 > 0 or c4w2 > 0 or c4w3 > 0 do
+      ull_large_range_contribution(c4w0, c4w1, c4w2, c4w3, m, 65 - p)
     else
-      raw_estimate
+      0.0
     end
   end
 
-  # Horner loop: for k from start down to 1, z = (z + C[k]) * 0.5
-  defp ull_horner_loop(z, _counts, k) when k < 1, do: z
+  defp ull_add_if(sum, false, _fun), do: sum
+  defp ull_add_if(sum, true, fun), do: sum + fun.()
 
-  defp ull_horner_loop(z, counts, k) do
-    c_k = :counters.get(counts, k + 1) * 1.0
-    z = (z + c_k) * 0.5
-    ull_horner_loop(z, counts, k - 1)
+  # Compute the (bucket, one_hot_bit) pair for a hash under precision p.
+  # Direct port of hash4j's `UltraLogLog.add/2`'s index/nlz derivation
+  # (verified byte-for-byte against the Java reference, including
+  # insertion-order independence).
+  defp ull_bucket_and_bit(hash64, p) do
+    q = 64 - p
+    bucket = hash64 >>> q
+    complement_hv = bnot(hash64) &&& @ull_mask64
+    shifted = complement_hv <<< p &&& @ull_mask64
+    complement2 = bnot(shifted) &&& @ull_mask64
+    nlz = count_leading_zeros(complement2, 64)
+    shift_amt = Integer.mod(nlz + p - 65, 64)
+    {bucket, 1 <<< shift_amt}
   end
 
-  # sigma(x) from Ertl 2017 reference implementation:
-  #   z = x, y = 1
-  #   loop: x = x^2, z += x*y, y *= 2
-  #   until convergence
-  defp ull_sigma(x) when x <= 0.0, do: 0.0
-
-  defp ull_sigma(x) do
-    ull_sigma_loop(x, x, 1.0)
+  # hash4j's `UltraLogLog.pack/1`. `hash_prefix` is an unsigned 64-bit
+  # accumulator; the low 8 bits of the result are the register byte.
+  defp ull_pack(hash_prefix) do
+    nlz = if hash_prefix == 0, do: 65, else: 65 - num_bits(hash_prefix)
+    shift_amt = rem(nlz, 64)
+    shifted = hash_prefix <<< shift_amt &&& @ull_mask64
+    low2 = shifted >>> 62
+    Integer.mod(-(nlz * 4) + low2, 256)
   end
 
-  defp ull_sigma_loop(x, z, y) do
-    x2 = x * x
-    z2 = z + x2 * y
-    y2 = y + y
+  # Single pass over all m register bytes, classifying each into the
+  # small-range counters (c0/c4/c8/c10, tuple slots 0..3), the large-range
+  # counters (c4w0..c4w3, slots 4..7), or accumulating its
+  # REGISTER_CONTRIBUTIONS entry directly into `sum` (slot 8) -- mirrors
+  # OptimalFGRAEstimator.estimate/2's loop.
+  defp ull_accumulate(<<>>, _off, acc), do: acc
 
-    if z2 == z do
-      z
-    else
-      ull_sigma_loop(x2, z2, y2)
+  defp ull_accumulate(<<r::unsigned-8, rest::binary>>, off, acc) do
+    ull_accumulate(rest, off, ull_apply_register(acc, r, off))
+  end
+
+  defp ull_apply_register(acc, r, off) do
+    r2 = r - off
+
+    cond do
+      r2 < -8 -> ull_bump(acc, 0)
+      r2 < 0 -> ull_apply_small_range(acc, r2)
+      r < 252 -> ull_bump_sum(acc, elem(@ull_register_contributions, r2))
+      true -> ull_apply_large_range(acc, r)
     end
   end
 
-  # tau(x) from Ertl 2017 reference implementation:
-  #   z = 1 - x, y = 1
-  #   loop: x = sqrt(x), y *= 0.5, z -= (1-x)^2 * y
-  #   until convergence
-  #   return z / 3
-  defp ull_tau(x) when x <= 0.0 or x >= 1.0, do: 0.0
-
-  defp ull_tau(x) do
-    ull_tau_loop(x, 1.0 - x, 1.0)
+  defp ull_apply_small_range(acc, r2) do
+    cond do
+      r2 == -8 -> ull_bump(acc, 1)
+      r2 == -4 -> ull_bump(acc, 2)
+      r2 == -2 -> ull_bump(acc, 3)
+      true -> acc
+    end
   end
 
-  defp ull_tau_loop(x, z, y) do
-    x2 = :math.sqrt(x)
-    y2 = y * 0.5
-    t = 1.0 - x2
-    z2 = z - t * t * y2
-
-    if z2 == z do
-      z / 3.0
-    else
-      ull_tau_loop(x2, z2, y2)
+  defp ull_apply_large_range(acc, r) do
+    case r do
+      252 -> ull_bump(acc, 4)
+      253 -> ull_bump(acc, 5)
+      254 -> ull_bump(acc, 6)
+      255 -> ull_bump(acc, 7)
     end
+  end
+
+  defp ull_bump(acc, index), do: put_elem(acc, index, elem(acc, index) + 1)
+  defp ull_bump_sum(acc, delta), do: put_elem(acc, 8, elem(acc, 8) + delta)
+
+  defp ull_small_range_estimate(c0, c4, c8, c10, m) do
+    alpha = m + 3 * (c0 + c4 + c8 + c10)
+    beta = m - c0 - c4
+    gamma = 4 * c0 + 2 * c4 + 3 * c8 + c10
+    quad_root_z = (:math.sqrt((beta * beta + 4 * alpha * gamma) * 1.0) - beta) / (2 * alpha)
+    root_z = quad_root_z * quad_root_z
+    root_z * root_z
+  end
+
+  defp ull_large_range_estimate(c4w0, c4w1, c4w2, c4w3, m) do
+    alpha = m + 3 * (c4w0 + c4w1 + c4w2 + c4w3)
+    beta = c4w0 + c4w1 + 2 * (c4w2 + c4w3)
+    gamma = m + 2 * c4w0 + c4w2 - c4w3
+    :math.sqrt((:math.sqrt((beta * beta + 4 * alpha * gamma) * 1.0) - beta) / (2 * alpha))
+  end
+
+  defp ull_psi_prime(z, z_square) do
+    (z + @ull_eta23x) * (z_square + @ull_eta13x) + @ull_eta3012xx
+  end
+
+  # sigma(z) from OptimalFGRAEstimator. The `z >= 1.0` branch is
+  # mathematically unreachable for any sketch built through ordinary
+  # add/merge -- `z` here is always a quadratic-root probability strictly
+  # less than 1 by construction -- but Erlang has no reachable float
+  # +Infinity via ordinary arithmetic (`:math.pow/2` and float overflow
+  # raise ArithmeticError instead of producing it, unlike Java). A large
+  # finite sentinel dominates the sum the same way Infinity would if this
+  # branch were ever hit on a corrupted/adversarial state.
+  defp ull_sigma(z) when z <= 0.0, do: @ull_eta_3
+  defp ull_sigma(z) when z >= 1.0, do: 1.0e300
+
+  defp ull_sigma(z) do
+    ull_sigma_loop(z, z * z, 0.0, @ull_eta_x, z)
+  end
+
+  defp ull_sigma_loop(pow_z, next_pow_z, s, pow_tau, z) do
+    next_next_pow_z = next_pow_z * next_pow_z
+    new_s = s + pow_tau * (pow_z - next_pow_z) * ull_psi_prime(next_pow_z, next_next_pow_z)
+
+    if new_s > s do
+      ull_sigma_loop(next_pow_z, next_next_pow_z, new_s, pow_tau * @ull_pow_2_tau, z)
+    else
+      new_s / z
+    end
+  end
+
+  defp ull_phi(z, _z_square) when z <= 0.0, do: 0.0
+  defp ull_phi(z, _z_square) when z >= 1.0, do: @ull_phi_1
+
+  defp ull_phi(z, z_square) do
+    next_pow_z = :math.sqrt(z)
+    p = @ull_p_initial / (1.0 + next_pow_z)
+    ps = ull_psi_prime(z, z_square)
+    s = next_pow_z * (ps + ps) * p
+    ull_phi_loop(z, next_pow_z, s, p, ps)
+  end
+
+  defp ull_phi_loop(pow_z, next_pow_z, s, p, ps) do
+    new_pow_z = next_pow_z
+    new_next_pow_z = :math.sqrt(new_pow_z)
+    new_ps = ull_psi_prime(new_pow_z, pow_z)
+    new_p = p * @ull_pow_2_minus_tau / (1.0 + new_next_pow_z)
+    new_s = s + new_next_pow_z * (2.0 * new_ps - (new_pow_z + new_next_pow_z) * ps) * new_p
+
+    if new_s > s do
+      ull_phi_loop(new_pow_z, new_next_pow_z, new_s, new_p, new_ps)
+    else
+      new_s
+    end
+  end
+
+  defp ull_contribution0(c0, z), do: c0 * ull_sigma(z)
+  defp ull_contribution4(c4, z), do: c4 * @ull_pow2mt_eta_x * ull_psi_prime(z, z * z)
+  defp ull_contribution8(c8, z), do: c8 * (z * @ull_pow4mt_eta01 + @ull_pow4mt_eta1)
+  defp ull_contribution10(c10, z), do: c10 * (z * @ull_pow4mt_eta23 + @ull_pow4mt_eta3)
+
+  defp ull_large_range_contribution(c4w0, c4w1, c4w2, c4w3, m, w) do
+    z = ull_large_range_estimate(c4w0, c4w1, c4w2, c4w3, m)
+    root_z = :math.sqrt(z)
+    s = ull_phi(root_z, z) * (c4w0 + c4w1 + c4w2 + c4w3)
+
+    s =
+      s +
+        z * (1.0 + root_z) *
+          (c4w0 * @ull_eta_0 + c4w1 * @ull_eta_1 + c4w2 * @ull_eta_2 + c4w3 * @ull_eta_3)
+
+    s =
+      s +
+        root_z *
+          ((c4w0 + c4w1) * (z * @ull_pow2mt_eta02 + @ull_pow2mt_eta2) +
+             (c4w2 + c4w3) * (z * @ull_pow2mt_eta13 + @ull_pow2mt_eta3))
+
+    s * :math.pow(@ull_pow_2_minus_tau, w) / ((1.0 + root_z) * (1.0 + z))
   end
 end

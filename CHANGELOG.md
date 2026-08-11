@@ -7,6 +7,236 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `livebooks/sketches/` -- one tutorial livebook per sketch family (16
+  total: `hll`, `ull`, `cms`, `theta`, `kll`, `ddsketch`, `req`,
+  `frequent_items`, `misra_gries`, `bloom`, `cuckoo`, `quotient`, `cqf`,
+  `xor_filter`, `iblt`, `filter_chain`). Each generates its own sample
+  data and caches it under `System.tmp_dir!()`, regenerating only if the
+  cache file is missing, so re-running a livebook (or all 16 in sequence)
+  after the first pass is fast.
+- `phoenix_demo/` -- a minimal, real, runnable Phoenix app demonstrating
+  `ExDataSketch.LiveDashboard.Page` and `ExDataSketch.Telemetry.Metrics.all/1`
+  wired into an actual `router.ex`/`telemetry.ex`, plus a live homepage
+  backed by two supervised `ExDataSketch.Server` instances and a
+  background traffic simulator. See `phoenix_demo/README.md`.
+- `guides/telemetry.md`: a "Window Events" and a "Server Events" section
+  (`[:ex_data_sketch, :window, :roll]` and the five `:server` events),
+  missing since those categories shipped -- the guide previously only
+  documented `:sketch`/`:persistence`/`:stream`/`:pipeline`. Also adds a
+  `:window, :roll` handler example (migrated from the now-removed
+  `rolling_telemetry.livemd`).
+
+### Fixed
+
+- **`ExDataSketch.KLL`'s compaction violated its own weight-preservation
+  invariant, corrupting quantile/rank accuracy for any sketch that ever
+  compacted an odd-length level.** `kll_compact_level` (both the Pure
+  Elixir and Rust NIF backends) cleared an *entire* level and promoted
+  only half its items regardless of parity; for an odd-length level, that
+  either promotes `ceil(len/2)` or `floor(len/2)` items, and neither
+  equals `len/2` exactly -- so the "half the items at double the weight"
+  step that's supposed to exactly preserve total weight instead silently
+  gains or loses one item's worth of weight (`2^level`) every time. Level
+  capacities (`max(2, floor(k * (2/3)^depth) + 1)`) are frequently odd, so
+  this was the common case, not an edge case: the sum of retained sample
+  weights (which `quantile/2`/`rank/2` divide by to compute a target rank)
+  drifted further from the true item count `n` with every such
+  compaction -- confirmed to reach >10% relative drift by 1,000,000
+  inserts in one measurement. The result was wildly incorrect, and
+  non-monotonic in `k`, on any distribution with a sharp density change
+  near the queried rank (uniform data was largely unaffected; a synthetic
+  99%-base/1%-tail mixture queried at p99 showed errors from tens to
+  hundreds of percent, inconsistently across `k`). Fixed by holding back
+  one item (leaving it at the current level, unweighted, for a future
+  compaction) whenever a level has an odd length, so the actually-compacted
+  subset always has even length and total weight is preserved exactly --
+  verified by checking `sum(retained_weight) == n` holds exactly across
+  `n` from 1,000 to 1,000,000 (previously off by up to +104,235 at
+  `n=1,000,000`), and by confirming Pure and Rust backends now produce
+  identical quantile estimates. No binary format change -- old serialized
+  sketches still decode and work, they just carry forward whatever
+  inaccuracy was baked in at serialization time; newly-built sketches are
+  correct going forward. See `ExDataSketch.KLL`'s moduledoc for why *value*
+  error (as opposed to the documented *rank* error bound) can still be
+  large when querying exactly at a distribution's density cliff -- that
+  part is inherent to rank-approximate sketches generally, not this bug.
+
+- **`ExDataSketch.ULL` implemented the wrong algorithm.** Both backends'
+  register update/merge/estimate were an HLL-derived approximation (a
+  single sub-bucket bit plus Ertl 2017's HLL sigma/tau estimator), not
+  Ertl 2023's actual UltraLogLog. It matched real UltraLogLog closely at
+  low cardinalities (where every prior test and property check exercised
+  it, up to `n=10,000` at `p=14`) but diverged sharply once every register
+  had been touched at least once (`zeros == 0`, the FGRA branch) --
+  overestimating by orders of magnitude at moderate-to-large `n` relative
+  to `m`, at every precision. Both backends are now a direct, numerically
+  verified port of hash4j's `UltraLogLog.java` (the reference Ertl 2023
+  implementation): the real pack/unpack register encoding (a compressed
+  3-bit window per byte: geometric rank plus a 2-bit sub-bucket
+  refinement) and the real `OptimalFGRAEstimator` (closed-form
+  small-range/large-range correction terms plus a 236-entry per-register
+  contribution table, combined via `sum^(-1/tau) * factor[p]`). Verified
+  byte-for-byte (register state) and to within `1e-6` relative error
+  (estimate) against a compiled Java reference across `p` in
+  `{10,12,14,16}` and `n` up to 2,000,000, plus insertion-order
+  independence and merge-vs-single-sketch equivalence checks. Measured
+  accuracy is now `~0.70/sqrt(m)` RSE (previously documented as
+  `~0.835/sqrt(m)`, a number derived from the wrong estimator) -- about
+  30% better than HLL's `~1.04/sqrt(m)`, not the previously claimed ~20%.
+  The `ULL1` state binary format version is bumped 1 -> 2; version-1
+  binaries are rejected on decode with a clear error (see Migration).
+
+- `ExDataSketch.Telemetry.Metrics.all/1`'s two `counter` metrics
+  (`sketch.ingest.count`, `stream.reduce.count`) never actually fired in
+  any real `Telemetry.Metrics` reporter (Phoenix LiveDashboard included).
+  `event_counter/4` relied on `Telemetry.Metrics.counter/2`'s implicit
+  `:measurement` default (the metric name's own last segment, `:count`),
+  but no `ExDataSketch` event carries a `:count` key in its measurements
+  (`sketch.ingest`'s are `:duration`/`:size_bytes`; `stream.reduce` has
+  none at all) -- per `counter/2`'s own docs, "the measurement must still
+  be available in the event, otherwise the event is not accounted for."
+  Both counters now use an explicit constant `:measurement` function so
+  they actually count every occurrence, regardless of that event's real
+  measurement keys.
+
+### Removed
+
+- `livebooks/livedashboard_integration.livemd` and
+  `livebooks/phoenix_observability.livemd`, superseded by `phoenix_demo/`
+  -- both consisted mostly of commented-out router/application pseudocode
+  where `phoenix_demo` has working code.
+- `livebooks/rolling_telemetry.livemd` -- its `ExDataSketch.Window` content
+  (basic usage, deterministic testing, persistence) was already covered
+  in more depth by `guides/windowing.md`; its telemetry section moved to
+  `guides/telemetry.md`; its live-dashboard demonstration is superseded
+  by `phoenix_demo/`.
+
+### Changed
+
+- **`ExDataSketch.HLL`'s maximum precision raised from `p=16` to `p=26`**,
+  matching `ExDataSketch.ULL`'s range. Investigation found no algorithmic
+  reason for the old `p<=16` ceiling: registers are a plain byte each (no
+  bit-packing to overflow), and the `alpha(m)` bias-correction constant's
+  general formula (`0.7213 / (1 + 1.079/m)`) is valid for any `m >= 128`
+  -- it was simply never raised. `p>=4` remains a hard floor: `alpha(m)`
+  only has defined cases for `m = 2^p in {16, 32, 64}` plus the general
+  formula for `m >= 128`, which together cover `p >= 4` exactly. See
+  `ExDataSketch.HLL`'s new "Precision Range" moduledoc section (and
+  `ExDataSketch.ULL`'s, added for contrast -- ULL's own `p<=26` ceiling
+  *is* a hard limit, bounded by a 24-entry estimator lookup table).
+- `lib/ex_data_sketch/telemetry.ex`'s own moduledoc claimed `:ingest`'s
+  `size_bytes` measurement was "HLL only" -- wrong in both directions: 13
+  of the 14 families that emit `:ingest` report it (all but `Cuckoo`,
+  whose `put_many/2` returns a tagged tuple rather than a bare sketch),
+  and `XorFilter`/`FilterChain` don't emit `:ingest` at all. Corrected to
+  describe actual per-family coverage.
+
+### Migration
+
+- **`ExDataSketch.ULL` binary format bump (v1 -> v2).** Sketches
+  serialized by prior releases will fail to decode with
+  `"unsupported ULL state version 1, expected 2"` rather than silently
+  producing the old, significantly overestimated cardinality. This is
+  intentional: the register encoding itself changed (not just a wrapper),
+  so there is no way to reinterpret old state correctly. If you have
+  persisted ULL sketches (snapshots, ETS/DETS/CubDB/Ecto storage
+  backends, `ExDataSketch.Server` snapshot files), rebuild them from
+  source data after upgrading. HLL and every other family are unaffected
+  -- this is a `ULL`-only, algorithm-only fix.
+- **ULL estimates will change** for any existing sketch once rebuilt --
+  they are now correct rather than overestimated once a sketch's
+  registers fill up (`n` comparable to or larger than `m`). If you assert
+  specific numeric ULL estimates in tests, expect them to shift toward
+  the true cardinality.
+
+## [0.10.1] - 2026-08-07
+
+Post-release fixes from a full code review of the v0.10.0 diff
+(`baoulo/reviews/0.10.0_code_review.md`), covering both catalogued
+findings and one bug the review's own scope surfaced during the fix pass.
+
+### Fixed
+
+- **Critical:** `ExDataSketch.Server` now traps exits, so a supervisor-
+  initiated shutdown (not just an explicit `GenServer.stop/2`) snapshots
+  before terminating, per its documented graceful-shutdown guarantee.
+- **Critical:** the `opencode` GitHub Actions workflow no longer runs
+  untrusted PR-comment triggers with base-repo secrets against an
+  unpinned third-party action; trigger is now restricted to
+  owner/member/collaborator comments and the action is pinned to a commit
+  SHA.
+- `Storage.merge/3` (ETS, DETS, CubDB, Mnesia, Ecto) returns `{:error,
+  _}` instead of crashing when the stored binary is corrupted or from an
+  incompatible sketch version.
+- `ExDataSketch.Server` no longer crashes if a snapshot backend raises;
+  the failure is caught and reported via the new
+  `[:ex_data_sketch, :server, :snapshot_failed]` telemetry event instead.
+- `ExDataSketch.CMS.capabilities/0` no longer falsely claims `:estimate`
+  (CMS only supports point queries via `CMS.estimate/2`, not the generic
+  single-value `estimate/1`).
+- GenStage integration modules (`SketchConsumer`, `SketchProducer`,
+  `SketchStage`) now honor `config :ex_data_sketch, :integrations,
+  gen_stage: false` instead of silently ignoring it.
+- **`:hash_strategy` was silently dropped by `new/1`/`build/2` across all
+  six membership-filter families (`Bloom`, `Cuckoo`, `Quotient`, `CQF`,
+  `IBLT`, `XorFilter`)**, making the option a no-op: hashing always fell
+  back to the NIF-availability default regardless of what was requested,
+  and the `:v1`-format "requires `:phash2`" guard always passed
+  trivially as a result. `:hash_strategy` (including `:murmur3`, used for
+  Apache DataSketches interop) is now resolved via
+  `ExDataSketch.Hash.resolve_strategy/1` at build time and actually
+  honored, matching `ExDataSketch.HLL`'s existing behavior.
+- The same six filter families now restore `:hash_strategy` from the EXSK
+  v2 metadata block on `deserialize/1` (previously it was discarded, so a
+  filter built with a non-default hash strategy and round-tripped through
+  serialize/deserialize would silently query membership with the wrong
+  algorithm afterward).
+- `ExDataSketch.merge/2` on an `ExDataSketch.Window` and
+  `ExDataSketch.merge_many/1` on an empty list now raise the library's
+  own typed errors instead of a raw `UndefinedFunctionError`/
+  `FunctionClauseError`.
+- The Apache DataSketches KLL decoder (`deserialize_datasketches/2`) now
+  validates that `n` is not smaller than the reconstructed retained-item
+  count, and that level boundaries are monotonically non-decreasing,
+  rejecting corrupted input with a `DeserializationError` instead of
+  crashing or silently misreading it.
+- `ExDataSketch.Cuckoo.put!/2`/`update_many/2` and
+  `ExDataSketch.FilterChain.update/2` now raise
+  `ExDataSketch.Errors.FilterFullError` instead of a bare `RuntimeError`
+  when the underlying filter is full.
+- Fixed a `Storage.resolve_backend/1` ambiguity: a bare 2-tuple ref whose
+  first element isn't an atom implementing the `Storage` behaviour is now
+  resolved as a whole against the configured default backend, instead of
+  being misread as an explicit `{backend_module, ref}` pair.
+
+### Changed
+
+- Raised the minimum supported Elixir version from `~> 1.15` to `~> 1.18`
+  to match what CI actually tests (the 1.15-1.17 floor was never
+  exercised by any CI leg).
+- Corrected `ExDataSketch.Storage.DETS`'s documentation, which previously
+  overstated `merge/3`'s atomicity under concurrent writers; it performs
+  the same non-atomic read-modify-write cycle as
+  `ExDataSketch.Storage.ETS`.
+- Corrected the `ExDataSketch.Window` and `guides/windowing.md`
+  explanation of tumbling-window history bounds, which had the
+  start-of-slot/end-of-slot cases inverted.
+- `guides/observability.md` now documents
+  `ExDataSketch.Telemetry.Metrics.all/1` and
+  `ExDataSketch.LiveDashboard.Page` (added in the v0.10.0 Phase 5 work)
+  instead of the hand-written `:telemetry.attach`/`Telemetry.Metrics`
+  snippets they were built to replace.
+- Minor documentation corrections: `ExDataSketch.Sketch`'s claim about
+  how `SketchConsumer` dispatches, `Storage`'s `merge/3` callback doc
+  (which grouped `ExDataSketch.Storage.CubDB` with the non-atomic
+  backends even though its own `merge/3` uses a `CubDB.transaction/2`),
+  `Storage`'s `child_spec/1` callback doc (implied `CubDB` implements it;
+  none of the five shipped backends do), and the bare-ref resolution
+  error message (previously said "no backend module given" even when a
+  structurally plausible but invalid one was given).
+
 ## [0.10.0] - 2026-08-07
 
 Release theme: **Production Ergonomics.** Closes the gap between "here is a
@@ -210,8 +440,17 @@ sketch family.
 - `ExDataSketch.Broadway.PeriodicAggregator` is now a thin wrapper around a
   `:flush`-configured `ExDataSketch.Server`, delegating every call. Its
   public API (`start_link/1`, `merge/2`, `flush/1`, `get/1`, `estimate/1`)
-  and the `[:ex_data_sketch, :pipeline, :periodic_flush]` telemetry event
-  (fired on the automatic, timer-driven flush) are unchanged.
+  is unchanged. **Correction (originally published as "unchanged," which
+  was wrong):** the `[:ex_data_sketch, :pipeline, :periodic_flush]`
+  telemetry event's scope narrowed. In v0.9.0 it fired on every call to
+  `flush/1`, manual or automatic. In v0.10.0 it fires only on the
+  automatic, timer-driven path -- `Server.flush/1`'s manual call does not
+  invoke the `:flush` callback that emits it (see `ExDataSketch.Server`'s
+  moduledoc, which already documented this correctly; only this
+  CHANGELOG entry had the wrong claim). If you relied on this event
+  firing from a manual `PeriodicAggregator.flush/1` call, it no longer
+  will; use the `[:ex_data_sketch, :server, :flush]` event instead, which
+  fires on both paths.
 
 - `ExDataSketch.update_many/2` now dispatches generically via the `Sketch`
   behaviour instead of 13 hand-written struct clauses, extending coverage

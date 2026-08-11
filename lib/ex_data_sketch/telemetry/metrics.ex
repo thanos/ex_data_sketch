@@ -143,6 +143,7 @@ defmodule ExDataSketch.Telemetry.Metrics do
     [
       duration_summary(prefix, :server, :snapshot, [:sketch_type, :backend]),
       size_bytes_summary(prefix, :server, :snapshot, [:sketch_type, :backend]),
+      duration_summary(prefix, :server, :snapshot_failed, [:sketch_type, :backend]),
       duration_summary(prefix, :server, :restore, [:sketch_type, :backend, :found]),
       duration_summary(prefix, :server, :flush, [:sketch_type]),
       value_summary(prefix, :server, :drop, :queue_len, [:sketch_type])
@@ -178,6 +179,16 @@ defmodule ExDataSketch.Telemetry.Metrics do
   defp event_counter(prefix, category, action, tags) do
     counter(metric_name(prefix, category, action, :count),
       event_name: event_name(category, action),
+      # `Telemetry.Metrics.counter/2`'s always-increment-by-1 value is
+      # independent of any particular measurement, but per its own docs
+      # "the measurement must still be available in the event, otherwise
+      # the event is not accounted for" -- omitting :measurement defaults
+      # it to the metric name's own last segment (:count here), which no
+      # event actually carries as a measurement key (`:sketch, :ingest`'s
+      # are `:duration`/`:size_bytes`; `:stream, :reduce` has none at
+      # all), silently making the counter never fire. A constant function
+      # sidesteps that gate entirely.
+      measurement: fn _measurements -> 1 end,
       tags: tags
     )
   end

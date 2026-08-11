@@ -96,6 +96,7 @@ defmodule ExDataSketch.Quotient do
     r = Keyword.get(opts, :r, @default_r)
     seed = Keyword.get(opts, :seed, @default_seed)
     hash_fn = Keyword.get(opts, :hash_fn)
+    hash_strategy = Hash.resolve_strategy(opts)
 
     validate_q!(q)
     validate_r!(r)
@@ -109,7 +110,8 @@ defmodule ExDataSketch.Quotient do
         q: q,
         r: r,
         slot_count: slot_count,
-        seed: seed
+        seed: seed,
+        hash_strategy: hash_strategy
       ] ++ if(hash_fn, do: [hash_fn: hash_fn], else: [])
 
     state = backend.quotient_new(clean_opts)
@@ -385,6 +387,7 @@ defmodule ExDataSketch.Quotient do
            {:ok, opts} <- decode_params(decoded.params),
            :ok <- validate_state_header(decoded.state) do
         backend = Backend.default()
+        opts = restore_hash_strategy(opts, decoded.metadata)
 
         {:ok,
          %__MODULE__{
@@ -429,6 +432,8 @@ defmodule ExDataSketch.Quotient do
       :new,
       :put,
       :put_many,
+      :update,
+      :update_many,
       :member?,
       :delete,
       :merge,
@@ -511,7 +516,8 @@ defmodule ExDataSketch.Quotient do
     case Keyword.get(opts, :hash_fn) do
       nil ->
         seed = Keyword.get(opts, :seed, @default_seed)
-        Hash.hash64(item, seed: seed)
+        strategy = Keyword.get(opts, :hash_strategy)
+        Hash.hash64(item, seed: seed, hash_strategy: strategy)
 
       hash_fn ->
         Hash.hash64(item, hash_fn: hash_fn)
@@ -588,6 +594,15 @@ defmodule ExDataSketch.Quotient do
   defp decode_params(_other) do
     {:error, Errors.DeserializationError.exception(reason: "invalid Quotient params binary")}
   end
+
+  # v1 frames carry no metadata block and are phash2-only by construction
+  # (see the :v1 branch of serialize/2); v2 frames record the algorithm
+  # actually used at build time, which must be restored so `hash_item/2`
+  # queries with the same algorithm the filter's slots were set with.
+  defp restore_hash_strategy(opts, nil), do: Keyword.put(opts, :hash_strategy, :phash2)
+
+  defp restore_hash_strategy(opts, metadata),
+    do: Keyword.put(opts, :hash_strategy, metadata.algorithm)
 
   defp validate_state_header(<<"QOT1", 1::unsigned-8, _rest::binary>>), do: :ok
 

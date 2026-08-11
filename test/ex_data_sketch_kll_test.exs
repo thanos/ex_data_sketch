@@ -501,11 +501,51 @@ defmodule ExDataSketch.KLLTest do
       assert msg =~ "truncated"
     end
 
-    test "wrong :variant on decode is caught by size validation (odd item count)" do
-      # An odd item count guarantees the item-width arithmetic can't line up
-      # under the wrong :variant -- see the moduledoc's "usually (not
-      # always)" caveat for why this isn't true of every item count.
-      items = for i <- 1..501, do: i * 1.0
+    test "rejects n smaller than the retained item count" do
+      sketch = KLL.new(k: 200) |> KLL.update_many(1..500 |> Enum.map(&(&1 * 1.0)))
+      binary = KLL.serialize_datasketches(sketch)
+
+      <<pre::binary-size(8), _n::unsigned-little-64, rest::binary>> = binary
+      corrupted = <<pre::binary, 0::unsigned-little-64, rest::binary>>
+
+      assert {:error, %DeserializationError{message: msg}} =
+               KLL.deserialize_datasketches(corrupted)
+
+      assert msg =~ "retained item count"
+    end
+
+    test "rejects non-monotonic level boundaries" do
+      sketch = KLL.new(k: 200) |> KLL.update_many(1..5000 |> Enum.map(&(&1 * 1.0)))
+      binary = KLL.serialize_datasketches(sketch)
+
+      <<head::binary-size(18), num_levels::unsigned-8, unused::unsigned-8, rest::binary>> =
+        binary
+
+      assert num_levels >= 2, "test needs a multi-level sketch to corrupt boundaries"
+
+      levels_bytes = num_levels * 4
+      <<levels_bin::binary-size(^levels_bytes), tail::binary>> = rest
+      <<b0::signed-little-32, b1::signed-little-32, level_rest::binary>> = levels_bin
+      assert b0 != b1, "test needs distinct adjacent boundaries to corrupt"
+
+      corrupted =
+        <<head::binary, num_levels::unsigned-8, unused::unsigned-8, b1::signed-little-32,
+          b0::signed-little-32, level_rest::binary, tail::binary>>
+
+      assert {:error, %DeserializationError{message: msg}} =
+               KLL.deserialize_datasketches(corrupted)
+
+      assert msg =~ "monotonic"
+    end
+
+    test "wrong :variant on decode is caught by size validation (odd retained-sample count)" do
+      # The check this test exercises fires when the *retained sample*
+      # count (sum of level sizes after compaction) is odd -- not when the
+      # insert count `n` is odd; those are unrelated, since compaction
+      # discards most inserted items. n=500/k=200 happens to retain an odd
+      # count under this implementation; see the moduledoc's "usually (not
+      # always)" caveat for why this isn't guaranteed for every n/k.
+      items = for i <- 1..500, do: i * 1.0
       sketch = KLL.new(k: 200) |> KLL.update_many(items)
       binary = KLL.serialize_datasketches(sketch, variant: :float)
 

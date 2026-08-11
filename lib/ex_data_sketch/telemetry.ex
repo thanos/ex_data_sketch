@@ -35,16 +35,20 @@ defmodule ExDataSketch.Telemetry do
 
   | Event | Measurements | Metadata |
   |-------|-------------|----------|
-  | `[:ex_data_sketch, :sketch, :ingest]` | `duration`, `size_bytes` (HLL only) | `sketch_type` |
+  | `[:ex_data_sketch, :sketch, :ingest]` | `duration`, `size_bytes` | `sketch_type` |
   | `[:ex_data_sketch, :sketch, :merge]` | `duration`, `merge_count` | `sketch_type` |
   | `[:ex_data_sketch, :sketch, :serialize]` | `duration`, `size_bytes` | `sketch_type` |
   | `[:ex_data_sketch, :sketch, :deserialize]` | `duration`, `size_bytes` | `sketch_type` |
 
-  > **Note on `:ingest` measurements:** All sketch types emit `duration`.
-  > Only HLL emits the additional `size_bytes` measurement via its result
-  > callback. Other sketch types emit `%{duration}` only. This is because
-  > `from_enumerable/2` consumes a lazy stream and the item count is not
-  > available without forcing evaluation.
+  > **Note on `:ingest` coverage:** Emitted from `from_enumerable/2`, which
+  > `ExDataSketch.XorFilter` (built via `build/2`, a one-shot immutable
+  > construction with no telemetry wrapper) and `ExDataSketch.FilterChain`
+  > (no `from_enumerable/2` of its own -- it wraps already-built
+  > sub-sketches) do not have, so neither ever emits this event. Of the 14
+  > families that do, all report `size_bytes` alongside `duration` except
+  > `ExDataSketch.Cuckoo` (its `put_many/2` returns `{:ok, sketch} |
+  > {:error, :full, sketch}`, not a bare sketch, so its `:ingest` wrapper
+  > only reports `duration`).
 
   ### Persistence Events
 
@@ -98,6 +102,7 @@ defmodule ExDataSketch.Telemetry do
   | Event | Measurements | Metadata |
   |-------|-------------|----------|
   | `[:ex_data_sketch, :server, :snapshot]` | `duration`, `size_bytes` | `sketch_type`, `backend`, `key` |
+  | `[:ex_data_sketch, :server, :snapshot_failed]` | `duration` | `sketch_type`, `backend`, `key`, `reason` |
   | `[:ex_data_sketch, :server, :restore]` | `duration` | `sketch_type`, `backend`, `key`, `found` |
   | `[:ex_data_sketch, :server, :flush]` | `duration` | `sketch_type` |
   | `[:ex_data_sketch, :server, :drop]` | `queue_len` | `sketch_type` |
@@ -406,7 +411,7 @@ defmodule ExDataSketch.Telemetry do
       end
 
     server_events =
-      for action <- [:snapshot, :restore, :flush, :drop] do
+      for action <- [:snapshot, :snapshot_failed, :restore, :flush, :drop] do
         event_name(:server, action)
       end
 

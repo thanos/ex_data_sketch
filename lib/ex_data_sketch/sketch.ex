@@ -4,9 +4,17 @@ defmodule ExDataSketch.Sketch do
 
   This is the unified contract referenced by `ExDataSketch.sketches/0` and by
   the top-level facade in `ExDataSketch` (`new/2`, `update/2`, `merge/2`, and
-  so on). Implementing it lets generic code -- `ExDataSketch.GenStage.SketchConsumer`,
-  `ExDataSketch.FilterChain`, the facade itself -- dispatch on the behaviour
-  instead of probing with `function_exported?/3`.
+  so on). Elixir's `@behaviour` has no runtime dispatch machinery of its own --
+  `implemented?/1` below is the only place this module actually calls
+  `function_exported?/3`, to verify a candidate module's conformance (used by
+  the `sketches/0` registry test). Everywhere else -- the facade, and
+  `ExDataSketch.GenStage.SketchConsumer`'s direct `sketch_module.merge/2`/
+  `update_many/2` calls -- calls the concrete module's function directly,
+  relying on the behaviour purely as a compile-time-checked contract that
+  the call will succeed, not as something with its own dispatch behavior.
+  `ExDataSketch.FilterChain` additionally implements this behaviour itself
+  (`@behaviour ExDataSketch.Sketch`) so the facade and `ExDataSketch.Server`
+  can dispatch on it the same way they do for any other sketch module.
 
   ## Which functions are required
 

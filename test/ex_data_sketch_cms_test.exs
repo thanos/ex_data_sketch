@@ -492,6 +492,47 @@ defmodule ExDataSketch.CMSTest do
     end
   end
 
+  describe "capabilities/0" do
+    test "does not claim :estimate -- CMS has no single-value cardinality reading" do
+      refute MapSet.member?(CMS.capabilities(), :estimate)
+    end
+
+    test "every claimed capability actually works via the top-level facade" do
+      sketch = CMS.new(width: 100, depth: 3) |> CMS.update("a")
+
+      for capability <- CMS.capabilities() do
+        case capability do
+          :new ->
+            assert %CMS{} = ExDataSketch.new(:cms, width: 100, depth: 3)
+
+          :update ->
+            assert %CMS{} = ExDataSketch.update(sketch, "b")
+
+          :update_many ->
+            assert %CMS{} = ExDataSketch.update_many(sketch, ["b", "c"])
+
+          :merge ->
+            assert %CMS{} = ExDataSketch.merge(sketch, sketch)
+
+          :merge_many ->
+            assert %CMS{} = ExDataSketch.merge_many([sketch, sketch])
+
+          :serialize ->
+            assert is_binary(ExDataSketch.serialize(sketch))
+
+          :deserialize ->
+            assert {:ok, %CMS{}} = ExDataSketch.deserialize(CMS.serialize(sketch), :cms)
+        end
+      end
+
+      # And the one operation deliberately NOT claimed really is unsupported
+      # via the facade, confirming the capability set and the facade agree.
+      assert_raise ExDataSketch.Errors.UnsupportedOperationError, fn ->
+        ExDataSketch.estimate(sketch)
+      end
+    end
+  end
+
   describe "struct" do
     test "has expected fields" do
       sketch = %CMS{state: <<>>, opts: [], backend: nil}

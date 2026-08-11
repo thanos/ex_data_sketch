@@ -48,7 +48,7 @@ defmodule ExDataSketch.ULLTest do
       <<"ULL1", version::unsigned-8, p::unsigned-8, flags::unsigned-little-16,
         _registers::binary>> = sketch.state
 
-      assert version == 1
+      assert version == 2
       assert p == 12
       assert flags == 0
     end

@@ -326,6 +326,18 @@ defmodule ExDataSketch.ParityTest do
 
       assert Bloom.serialize(pure) == Bloom.serialize(rust)
     end
+
+    test ":hash_strategy: :murmur3 takes the raw NIF murmur3 path and still matches Pure" do
+      pure =
+        Bloom.new(capacity: 1000, hash_strategy: :murmur3, backend: Pure)
+        |> Bloom.put_many(@items_1000)
+
+      rust =
+        Bloom.new(capacity: 1000, hash_strategy: :murmur3, backend: Rust)
+        |> Bloom.put_many(@items_1000)
+
+      assert Bloom.serialize(pure) == Bloom.serialize(rust)
+    end
   end
 
   describe "Cuckoo parity" do
@@ -361,6 +373,18 @@ defmodule ExDataSketch.ParityTest do
 
       {:ok, rust} =
         Cuckoo.new(capacity: 512, hash_fn: hash_fn, backend: Rust)
+        |> Cuckoo.put_many(@cuckoo_items)
+
+      assert Cuckoo.serialize(pure) == Cuckoo.serialize(rust)
+    end
+
+    test ":hash_strategy: :murmur3 takes the raw NIF murmur3 path and still matches Pure" do
+      {:ok, pure} =
+        Cuckoo.new(capacity: 512, hash_strategy: :murmur3, backend: Pure)
+        |> Cuckoo.put_many(@cuckoo_items)
+
+      {:ok, rust} =
+        Cuckoo.new(capacity: 512, hash_strategy: :murmur3, backend: Rust)
         |> Cuckoo.put_many(@cuckoo_items)
 
       assert Cuckoo.serialize(pure) == Cuckoo.serialize(rust)
@@ -411,6 +435,18 @@ defmodule ExDataSketch.ParityTest do
 
       rust =
         Quotient.new(q: 8, r: 5, hash_fn: hash_fn, backend: Rust) |> Quotient.put_many(@qot_items)
+
+      assert Quotient.serialize(pure) == Quotient.serialize(rust)
+    end
+
+    test ":hash_strategy: :murmur3 takes the raw NIF murmur3 path and still matches Pure" do
+      pure =
+        Quotient.new(q: 8, r: 5, hash_strategy: :murmur3, backend: Pure)
+        |> Quotient.put_many(@qot_items)
+
+      rust =
+        Quotient.new(q: 8, r: 5, hash_strategy: :murmur3, backend: Rust)
+        |> Quotient.put_many(@qot_items)
 
       assert Quotient.serialize(pure) == Quotient.serialize(rust)
     end
@@ -468,6 +504,17 @@ defmodule ExDataSketch.ParityTest do
         CQF.new(q: 8, r: 5, hash_fn: hash_fn, backend: Rust) |> CQF.put_many(@cqf_dupes)
 
       assert CQF.serialize(pure) == CQF.serialize(rust)
+    end
+
+    test ":hash_strategy: :murmur3 takes the raw NIF murmur3 path and still matches Pure" do
+      pure =
+        CQF.new(q: 8, r: 5, hash_strategy: :murmur3, backend: Pure) |> CQF.put_many(@cqf_dupes)
+
+      rust =
+        CQF.new(q: 8, r: 5, hash_strategy: :murmur3, backend: Rust) |> CQF.put_many(@cqf_dupes)
+
+      assert CQF.serialize(pure) == CQF.serialize(rust)
+      assert CQF.count(pure) == CQF.count(rust)
     end
   end
 
@@ -531,6 +578,13 @@ defmodule ExDataSketch.ParityTest do
 
       assert XorFilter.serialize(pure) == XorFilter.serialize(rust)
     end
+
+    test ":hash_strategy: :murmur3 takes the raw NIF murmur3 path and still matches Pure" do
+      {:ok, pure} = XorFilter.build(@xor_items, hash_strategy: :murmur3, backend: Pure)
+      {:ok, rust} = XorFilter.build(@xor_items, hash_strategy: :murmur3, backend: Rust)
+
+      assert XorFilter.serialize(pure) == XorFilter.serialize(rust)
+    end
   end
 
   describe "IBLT parity" do
@@ -581,6 +635,19 @@ defmodule ExDataSketch.ParityTest do
         IBLT.new(cell_count: 256, hash_fn: hash_fn, backend: Rust) |> IBLT.put_many(@iblt_items)
 
       assert IBLT.serialize(pure) == IBLT.serialize(rust)
+    end
+
+    test ":hash_strategy: :murmur3 takes the raw NIF murmur3 path and still matches Pure" do
+      pure =
+        IBLT.new(cell_count: 256, hash_strategy: :murmur3, backend: Pure)
+        |> IBLT.put_many(@iblt_items)
+
+      rust =
+        IBLT.new(cell_count: 256, hash_strategy: :murmur3, backend: Rust)
+        |> IBLT.put_many(@iblt_items)
+
+      assert IBLT.serialize(pure) == IBLT.serialize(rust)
+      assert IBLT.count(pure) == IBLT.count(rust)
     end
   end
 

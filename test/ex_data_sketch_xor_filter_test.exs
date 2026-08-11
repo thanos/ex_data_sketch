@@ -121,6 +121,17 @@ defmodule ExDataSketch.XorFilterTest do
       assert <<"EXSK", _::binary>> = binary
     end
 
+    test "a non-default :hash_strategy is honored at build time and survives round-trip" do
+      items = Enum.map(1..50, &"item_#{&1}")
+      {:ok, filter} = XorFilter.build(items, hash_strategy: :murmur3)
+
+      assert filter.opts[:hash_strategy] == :murmur3
+
+      {:ok, recovered} = XorFilter.deserialize(XorFilter.serialize(filter))
+      assert recovered.opts[:hash_strategy] == :murmur3
+      assert Enum.all?(items, &XorFilter.member?(recovered, &1))
+    end
+
     test "XOR1 state starts with magic bytes" do
       {:ok, filter} = XorFilter.build(["a"])
       assert <<"XOR1", _::binary>> = filter.state

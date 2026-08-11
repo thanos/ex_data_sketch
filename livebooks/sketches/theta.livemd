@@ -1,0 +1,129 @@
+# Theta Sketch Tutorial
+
+```elixir
+Mix.install([
+  {:ex_data_sketch, "~> 0.10"}
+])
+```
+
+## Introduction
+
+`ExDataSketch.Theta` estimates cardinality like `HLL`/`ULL`, but its real
+distinguishing feature is that it supports **set operations** -- union,
+intersection, and difference between two sketches -- so you can answer
+"how many users used *both* feature A and feature B" or "how many users
+are in set A but not set B" without ever materializing either full set.
+
+Only `merge/2` (union) is a dedicated function; intersection and
+difference are derived by combining `estimate/1` calls via the
+inclusion-exclusion principle, which is exact math on the *estimates*
+(not the sets themselves) -- shown below.
+
+## Sample data (cached locally)
+
+```elixir
+cache_path = Path.join(System.tmp_dir!(), "ex_data_sketch_livebook_cache/theta_sample.bin")
+
+{users_a, users_b} =
+  if File.exists?(cache_path) do
+    IO.puts("Loading cached sample data from #{cache_path}")
+    cache_path |> File.read!() |> :erlang.binary_to_term()
+  else
+    IO.puts("Generating sample data (this takes a few seconds)...")
+
+    # Set A: users 1..600,000 (600K users).
+    # Set B: users 400,001..1,000,000 (600K users).
+    # True intersection: users 400,001..600,000 (200K users).
+    # True union: users 1..1,000,000 (1,000,000 users).
+    users_a = for i <- 1..600_000, do: "user_#{i}"
+    users_b = for i <- 400_001..1_000_000, do: "user_#{i}"
+
+    File.mkdir_p!(Path.dirname(cache_path))
+    File.write!(cache_path, :erlang.term_to_binary({users_a, users_b}))
+    {users_a, users_b}
+  end
+
+IO.puts("Set A: #{length(users_a)} users, Set B: #{length(users_b)} users")
+IO.puts("True union: 1,000,000; true intersection: 200,000")
+```
+
+## Basic usage
+
+```elixir
+alias ExDataSketch.Theta
+
+sketch_a = Theta.from_enumerable(users_a, k: 16_384)
+sketch_b = Theta.from_enumerable(users_b, k: 16_384)
+
+IO.puts("|A| estimate: #{Float.round(Theta.estimate(sketch_a), 0)} (true: 600,000)")
+IO.puts("|B| estimate: #{Float.round(Theta.estimate(sketch_b), 0)} (true: 600,000)")
+```
+
+## Set operations via inclusion-exclusion
+
+`merge/2` gives you the union directly. Intersection and difference come
+from combining the union estimate with the two individual estimates:
+
+```
+|A ∪ B| = |A| + |B| - |A ∩ B|      =>  |A ∩ B| = |A| + |B| - |A ∪ B|
+|A \ B| = |A| - |A ∩ B|
+```
+
+```elixir
+union_sketch = Theta.merge(sketch_a, sketch_b)
+union_estimate = Theta.estimate(union_sketch)
+
+a_estimate = Theta.estimate(sketch_a)
+b_estimate = Theta.estimate(sketch_b)
+
+intersection_estimate = a_estimate + b_estimate - union_estimate
+a_not_b_estimate = a_estimate - intersection_estimate
+
+IO.puts("Union estimate: #{Float.round(union_estimate, 0)} (true: 1,000,000)")
+IO.puts("Intersection estimate: #{Float.round(intersection_estimate, 0)} (true: 200,000)")
+IO.puts("A \\ B estimate: #{Float.round(a_not_b_estimate, 0)} (true: 400,000)")
+```
+
+This is approximate in both directions -- `union_estimate` already carries
+HLL-style estimation error, and the subtraction can amplify it (especially
+when the intersection is small relative to either set). It's still far
+cheaper than computing an exact `MapSet.intersection/2` on two potentially
+enormous sets.
+
+## Precision (`k`) and accuracy
+
+Like HLL's `p`, Theta's `k` trades memory for accuracy -- larger `k` means
+more retained entries and a tighter estimate:
+
+```elixir
+for k <- [1024, 4096, 16_384] do
+  s = Theta.from_enumerable(users_a, k: k)
+  error_pct = abs(Theta.estimate(s) - 600_000) / 600_000 * 100
+  IO.puts("k=#{k} (#{Theta.size_bytes(s)} bytes): error=#{Float.round(error_pct, 2)}%")
+end
+```
+
+## Serialization
+
+```elixir
+binary = Theta.serialize(sketch_a)
+{:ok, restored} = Theta.deserialize(binary)
+IO.puts("Round-tripped estimate: #{Float.round(Theta.estimate(restored), 0)}")
+```
+
+Theta also has a `compact/1` step and Apache DataSketches interop
+(`serialize_datasketches/2`) -- see `guides/apache_interop.md` for reading
+sketches produced by the Java/C++/Python DataSketches library and vice
+versa.
+
+## See also
+
+- `ExDataSketch.Theta` module documentation -- full API reference.
+- `ExDataSketch.HLL`/`ExDataSketch.ULL` -- cardinality-only estimators
+  with no set-operation support; use these instead when you only need a
+  single count and want the ~30% better accuracy ULL offers at the same
+  memory. See `livebooks/sketches/hll.livemd` and
+  `livebooks/sketches/ull.livemd`.
+- `guides/distributed_merge_semantics.md`,
+  `livebooks/distributed_merges.livemd` -- associativity/commutativity
+  properties merge relies on.

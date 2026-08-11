@@ -14,8 +14,12 @@ defmodule ExDataSketch.Storage.DETS do
 
   ## Concurrency
 
-  - DETS uses file-level locking. Concurrent writes are serialized.
-  - `merge/3` performs a read-modify-write cycle while holding the table lock.
+  - Individual `:dets.insert/2`/`:dets.lookup/2` calls are each atomic.
+  - `merge/3`'s read-modify-write cycle is **not** atomic across concurrent
+    writers -- nothing holds a lock across the read and the write, so two
+    concurrent `merge/3` calls on the same key can race and lose one merge,
+    identically to `ExDataSketch.Storage.ETS`. See `merge/3`'s own
+    documentation for the empirically-verified detail.
 
   ## Examples
 
@@ -146,10 +150,15 @@ defmodule ExDataSketch.Storage.DETS do
   If no sketch exists at the key, this is equivalent to `save/3`. Otherwise,
   the persisted sketch is loaded, merged with the given sketch, and saved back.
 
-  The read-modify-write cycle occurs while the DETS table lock is held. This
-  provides atomicity for single-node writers. DETS file-level locking does
-  not extend across distributed nodes; for distributed atomicity, use
-  `ExDataSketch.Storage.Mnesia`.
+  **Warning:** like `ExDataSketch.Storage.ETS`, this is not atomic under
+  concurrent writers -- `:dets.lookup/2` and `:dets.insert/2` are each
+  atomic individually, but nothing holds a lock across the read and the
+  write, so two processes calling `merge/3` on the same key concurrently
+  can still race and lose one merge (empirically verified: 50 concurrent
+  merges of distinct elements into one key undercounted identically to
+  ETS). For atomic merge guarantees, use `ExDataSketch.Storage.Mnesia`,
+  `ExDataSketch.Storage.CubDB`, or `ExDataSketch.Storage.Ecto`, all of
+  which wrap the read-modify-write cycle in a real transaction.
 
   ## Arguments
 
@@ -185,10 +194,15 @@ defmodule ExDataSketch.Storage.DETS do
     result =
       case :dets.lookup(table, key) do
         [{^key, binary}] ->
-          {:ok, existing} = sketch_module.deserialize(binary)
-          merged = sketch_module.merge(existing, sketch)
-          merged_binary = sketch_module.serialize(merged)
-          :dets.insert(table, {key, merged_binary})
+          case sketch_module.deserialize(binary) do
+            {:ok, existing} ->
+              merged = sketch_module.merge(existing, sketch)
+              merged_binary = sketch_module.serialize(merged)
+              :dets.insert(table, {key, merged_binary})
+
+            {:error, _reason} = error ->
+              error
+          end
 
         [] ->
           save(sketch, table, key)

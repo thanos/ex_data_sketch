@@ -199,30 +199,14 @@ defmodule ExDataSketch.Storage.CubDB do
       :ok
 
   """
-  @spec merge(struct(), pid() | atom(), ExDataSketch.Storage.key()) :: :ok
+  @spec merge(struct(), pid() | atom(), ExDataSketch.Storage.key()) :: :ok | {:error, term()}
   def merge(sketch, db, key) do
     start_time = System.monotonic_time()
     Integration.require_cubdb!()
     sketch_module = sketch.__struct__
-    tx_mod = CubDB.Tx
 
     result =
-      CubDB.transaction(db, fn tx ->
-        tx =
-          case tx_mod.get(tx, key) do
-            nil ->
-              binary = sketch_module.serialize(sketch)
-              tx_mod.put(tx, key, binary)
-
-            binary ->
-              {:ok, existing} = sketch_module.deserialize(binary)
-              merged = sketch_module.merge(existing, sketch)
-              merged_binary = sketch_module.serialize(merged)
-              tx_mod.put(tx, key, merged_binary)
-          end
-
-        {:commit, tx, :ok}
-      end)
+      CubDB.transaction(db, fn tx -> merge_tx(tx, sketch_module, sketch, key) end)
 
     :ok =
       Telemetry.execute(
@@ -233,6 +217,29 @@ defmodule ExDataSketch.Storage.CubDB do
       )
 
     result
+  end
+
+  defp merge_tx(tx, sketch_module, sketch, key) do
+    case CubDB.Tx.get(tx, key) do
+      nil ->
+        binary = sketch_module.serialize(sketch)
+        {:commit, CubDB.Tx.put(tx, key, binary), :ok}
+
+      binary ->
+        merge_tx_existing(tx, sketch_module, sketch, key, binary)
+    end
+  end
+
+  defp merge_tx_existing(tx, sketch_module, sketch, key, binary) do
+    case sketch_module.deserialize(binary) do
+      {:ok, existing} ->
+        merged = sketch_module.merge(existing, sketch)
+        merged_binary = sketch_module.serialize(merged)
+        {:commit, CubDB.Tx.put(tx, key, merged_binary), :ok}
+
+      {:error, _reason} = error ->
+        {:cancel, error}
+    end
   end
 
   @doc """

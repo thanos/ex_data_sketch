@@ -6,18 +6,20 @@ defmodule ExDataSketch.Window do
   `ExDataSketch.Window` wraps any mergeable sketch family in a fixed-size
   ring of `keep` tumbling slots, each spanning `every` milliseconds. Writes
   go to the slot for the current time; reads merge every live (non-expired)
-  slot. This is the pattern demonstrated by hand in
-  `livebooks/rolling_telemetry.livemd` -- a `current` sketch plus a list of
-  `keep` retired ones, rotated by a timer -- made functional, deterministic,
-  and reusable across every mergeable family.
+  slot. This is the pattern applications used to hand-roll -- a `current`
+  sketch plus a list of `keep` retired ones, rotated by a timer -- made
+  functional, deterministic, and reusable across every mergeable family.
 
   ## What this is not
 
   This is **not** an exact sliding window. A window of `every: 60_000,
   keep: 5` retains between 4 and 5 minutes of full history, not exactly 5,
-  because the current slot is still filling: a write at the very start of
-  its slot has almost 5 complete prior slots behind it, while a write at the
-  very end has almost 4. This slot-boundary granularity is the cost of
+  because the current slot is still filling: `keep` counts the current slot
+  itself, so only `keep - 1` (4) prior slots are ever complete. A write at
+  the very start of the current slot has just those 4 complete slots behind
+  it (~4 minutes), while a write at the very end has those same 4 plus a
+  nearly-full current slot behind it (~5 minutes). This slot-boundary
+  granularity is the cost of
   tumbling windows; an exact sliding window (for example, the
   Chabchoub-Hebrail sliding HLL construction) is more accurate but
   algorithm-specific and is explicitly out of scope here -- see the roadmap

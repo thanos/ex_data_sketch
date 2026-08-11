@@ -8,14 +8,23 @@ on:
 
 jobs:
   opencode:
+    # issue_comment/pull_request_review_comment always run with the base
+    # repo's GITHUB_TOKEN and secrets, regardless of who posted the
+    # triggering comment -- unlike pull_request, there is no fork
+    # isolation here. The author_association check below is required,
+    # not optional: without it, any GitHub account (including a
+    # first-time, unaffiliated commenter on this public repo) can trigger
+    # this job.
     if: |
-      contains(github.event.comment.body, ' /oc') ||
-      startsWith(github.event.comment.body, '/oc') ||
-      contains(github.event.comment.body, ' /opencode') ||
-      startsWith(github.event.comment.body, '/opencode')
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association) &&
+      (
+        contains(github.event.comment.body, ' /oc') ||
+        startsWith(github.event.comment.body, '/oc') ||
+        contains(github.event.comment.body, ' /opencode') ||
+        startsWith(github.event.comment.body, '/opencode')
+      )
     runs-on: ubuntu-latest
     permissions:
-      id-token: write
       contents: read
       pull-requests: read
       issues: read
@@ -26,7 +35,12 @@ jobs:
           persist-credentials: false
 
       - name: Run opencode
-        uses: anomalyco/opencode/github@latest
+        # Pinned to a commit SHA, not @latest -- a mutable tag on a
+        # third-party action combined with a secret in its environment is
+        # a standing secret-exfiltration risk (the action's code can
+        # change at any time with no corresponding change in this repo).
+        # Bump the SHA deliberately, with review, not automatically.
+        uses: anomalyco/opencode/github@284214c78d32a09fd9c729bdefc07be50f74eb40
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         with:

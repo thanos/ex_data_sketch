@@ -398,16 +398,62 @@ defmodule ExDataSketch.DataSketches.KLLSketch do
       total_retained = div(byte_size(items_bin), item_size)
       top_boundary = List.first(boundaries) + total_retained
       full_boundaries = Enum.reverse([top_boundary | Enum.reverse(boundaries)])
-      level_sizes = boundaries_to_sizes(full_boundaries)
 
-      items = decode_item_list(items_bin, variant)
-      levels = split_into_levels(items, level_sizes)
-
-      min_val = decode_item(min_bin, variant)
-      max_val = decode_item(max_bin, variant)
-
-      {:ok, %{k: k, n: n, min_val: min_val, max_val: max_val, levels: levels}}
+      validate_and_build_full_result(
+        k,
+        n,
+        total_retained,
+        full_boundaries,
+        min_bin,
+        max_bin,
+        items_bin,
+        variant
+      )
     end
+  end
+
+  defp validate_and_build_full_result(
+         k,
+         n,
+         total_retained,
+         full_boundaries,
+         min_bin,
+         max_bin,
+         items_bin,
+         variant
+       ) do
+    cond do
+      n < total_retained ->
+        {:error,
+         DeserializationError.exception(
+           reason:
+             "n (#{n}) is smaller than the retained item count (#{total_retained}) -- a " <>
+               "valid KLL sketch can never retain more items than it has ever seen"
+         )}
+
+      not monotonic?(full_boundaries) ->
+        {:error,
+         DeserializationError.exception(
+           reason:
+             "level boundaries are not monotonically non-decreasing: #{inspect(full_boundaries)}"
+         )}
+
+      true ->
+        level_sizes = boundaries_to_sizes(full_boundaries)
+        items = decode_item_list(items_bin, variant)
+        levels = split_into_levels(items, level_sizes)
+
+        min_val = decode_item(min_bin, variant)
+        max_val = decode_item(max_bin, variant)
+
+        {:ok, %{k: k, n: n, min_val: min_val, max_val: max_val, levels: levels}}
+    end
+  end
+
+  defp monotonic?(list) do
+    list
+    |> Enum.chunk_every(2, 1, :discard)
+    |> Enum.all?(fn [a, b] -> b >= a end)
   end
 
   defp boundaries_to_sizes(full_boundaries) do

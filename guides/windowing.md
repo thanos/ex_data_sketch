@@ -30,8 +30,10 @@ minutes of full history, not exactly 5:
 - Every write lands in the slot for the current time: `div(now, every)`.
 - A read merges every slot within `keep` of the current one, including the
   current, still-filling slot.
-- A write at the very start of the current slot has almost 5 complete prior
-  slots behind it. A write at the very end has almost 4.
+- `keep` counts the current slot itself, so only `keep - 1` (4) prior slots
+  are ever complete. A write at the very start of the current slot has just
+  those 4 complete slots behind it (~4 minutes). A write at the very end has
+  those same 4 plus a nearly-full current slot behind it (~5 minutes).
 
 This slot-boundary granularity is the standard cost of tumbling windows, in
 exchange for working with *any* mergeable sketch family unmodified -- no
@@ -180,4 +182,5 @@ as expected.
 
 - `ExDataSketch.Window` module documentation -- full API reference.
 - `guides/telemetry.md` -- the `[:ex_data_sketch, :window, :roll]` event.
-- `livebooks/rolling_telemetry.livemd` -- a runnable walkthrough.
+- `phoenix_demo/` -- a runnable walkthrough: a windowed `ExDataSketch.Server`
+  feeding a live dashboard.

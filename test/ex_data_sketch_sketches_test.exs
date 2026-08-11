@@ -3,7 +3,7 @@ defmodule ExDataSketch.SketchesTest do
 
   doctest ExDataSketch.Sketches
 
-  alias ExDataSketch.{HLL, Server, Sketches}
+  alias ExDataSketch.{HLL, Server, Sketches, Storage}
 
   setup do
     name = :"sketches_test_#{System.unique_integer([:positive])}"
@@ -66,6 +66,28 @@ defmodule ExDataSketch.SketchesTest do
 
     test "returns {:error, :not_found} for an unknown key", %{name: name} do
       assert Sketches.stop_child(name, :no_such_tenant) == {:error, :not_found}
+    end
+
+    test "snapshots before stopping, per Server's documented graceful-shutdown guarantee",
+         %{name: name} do
+      table = :"sketches_stop_child_snapshot_test_#{System.unique_integer([:positive])}"
+      :ets.new(table, [:set, :public, :named_table])
+
+      {:ok, pid} =
+        Sketches.start_child(name, :tenant_a,
+          sketch: :hll,
+          sketch_opts: [p: 10],
+          snapshot: [to: {Storage.ETS, table, "tenant_a"}, every: :infinity]
+        )
+
+      :ok = Server.update_sync(pid, "a")
+      :ok = Server.update_sync(pid, "b")
+      assert :ok = Sketches.stop_child(name, :tenant_a)
+
+      assert {:ok, restored} = Storage.load(HLL, {Storage.ETS, table}, "tenant_a")
+      assert_in_delta HLL.estimate(restored), 2.0, 0.5
+
+      :ets.delete(table)
     end
   end
 

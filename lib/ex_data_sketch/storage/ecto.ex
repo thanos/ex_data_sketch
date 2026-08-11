@@ -228,50 +228,8 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
     def merge(sketch, repo, key) do
       start_time = System.monotonic_time()
       Integration.require_ecto!()
-      sketch_module = sketch.__struct__
-      string_key = to_string(key)
 
-      result =
-        repo.transaction(fn ->
-          import Ecto.Query
-
-          case repo.one(
-                 from(s in Schema,
-                   where: s.key == ^string_key,
-                   lock: "FOR UPDATE",
-                   limit: 1
-                 )
-               ) do
-            %Schema{data: binary} = existing ->
-              {:ok, existing_sketch} = sketch_module.deserialize(binary)
-              merged = sketch_module.merge(existing_sketch, sketch)
-              merged_binary = sketch_module.serialize(merged)
-              changeset = Schema.changeset(existing, %{data: merged_binary})
-              repo.update!(changeset)
-
-            nil ->
-              binary = sketch_module.serialize(sketch)
-
-              sketch_type =
-                sketch_module
-                |> Module.split()
-                |> List.last()
-                |> String.downcase()
-
-              changeset =
-                Schema.changeset(%Schema{}, %{
-                  key: string_key,
-                  sketch_type: sketch_type,
-                  data: binary
-                })
-
-              repo.insert!(changeset)
-          end
-        end)
-        |> case do
-          {:ok, _} -> :ok
-          {:error, reason} -> {:error, reason}
-        end
+      result = merge_with_retry(sketch, repo, key, 3)
 
       :ok =
         Telemetry.execute(
@@ -282,6 +240,80 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
         )
 
       result
+    end
+
+    defp merge_with_retry(sketch, repo, key, retries_left) do
+      sketch_module = sketch.__struct__
+      string_key = to_string(key)
+
+      transaction_result =
+        repo.transaction(fn ->
+          merge_tx(repo, sketch_module, sketch, string_key)
+        end)
+
+      case transaction_result do
+        {:ok, :ok} ->
+          :ok
+
+        {:error, {:conflict, _changeset}} when retries_left > 0 ->
+          merge_with_retry(sketch, repo, key, retries_left - 1)
+
+        {:error, {:conflict, changeset}} ->
+          {:error, changeset}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+
+    defp merge_tx(repo, sketch_module, sketch, string_key) do
+      import Ecto.Query
+
+      query = from(s in Schema, where: s.key == ^string_key, lock: "FOR UPDATE", limit: 1)
+
+      case repo.one(query) do
+        %Schema{} = existing -> merge_tx_existing(repo, sketch_module, sketch, existing)
+        nil -> merge_tx_new(repo, sketch_module, sketch, string_key)
+      end
+    end
+
+    defp merge_tx_existing(repo, sketch_module, sketch, %Schema{data: binary} = existing) do
+      case sketch_module.deserialize(binary) do
+        {:ok, existing_sketch} ->
+          merged = sketch_module.merge(existing_sketch, sketch)
+          merged_binary = sketch_module.serialize(merged)
+          changeset = Schema.changeset(existing, %{data: merged_binary})
+
+          case repo.update(changeset) do
+            {:ok, _} -> :ok
+            {:error, changeset} -> repo.rollback(changeset)
+          end
+
+        {:error, reason} ->
+          repo.rollback(reason)
+      end
+    end
+
+    # `SELECT ... FOR UPDATE` in merge_tx/4 locks nothing when no row
+    # exists yet, so a concurrent first-writer to this same new key can
+    # race here. A plain insert! would raise on the resulting
+    # unique-constraint violation; insert/2 (non-bang) returns a clean
+    # {:error, changeset} instead (the schema declares
+    # unique_constraint(:key)), which merge_with_retry/4 retries as a
+    # fresh transaction -- one that will now see the row the other writer
+    # created and correctly merge into it, rather than either process
+    # silently overwriting the other.
+    defp merge_tx_new(repo, sketch_module, sketch, string_key) do
+      binary = sketch_module.serialize(sketch)
+      sketch_type = sketch_module |> Module.split() |> List.last() |> String.downcase()
+
+      changeset =
+        Schema.changeset(%Schema{}, %{key: string_key, sketch_type: sketch_type, data: binary})
+
+      case repo.insert(changeset) do
+        {:ok, _} -> :ok
+        {:error, changeset} -> repo.rollback({:conflict, changeset})
+      end
     end
 
     @doc """

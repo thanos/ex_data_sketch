@@ -1,4 +1,4 @@
-# Membership-Filter Raw-Hashing (Phase 6)
+# Membership-Filter Raw-Hashing Internals
 
 This document explains the raw-NIF hashing path added to the six
 membership-filter families -- Bloom, Cuckoo, Quotient, CQF, XorFilter,

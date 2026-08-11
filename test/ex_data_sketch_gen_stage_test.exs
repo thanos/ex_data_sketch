@@ -49,6 +49,44 @@ defmodule ExDataSketch.GenStageTest do
     end
   end
 
+  describe "administrative disable via config :ex_data_sketch, :integrations, gen_stage: false" do
+    setup do
+      original = Application.get_env(:ex_data_sketch, :integrations)
+      Application.put_env(:ex_data_sketch, :integrations, gen_stage: false)
+
+      on_exit(fn ->
+        if original do
+          Application.put_env(:ex_data_sketch, :integrations, original)
+        else
+          Application.delete_env(:ex_data_sketch, :integrations)
+        end
+      end)
+
+      :ok
+    end
+
+    test "SketchConsumer.start_link/1 does not silently start" do
+      Process.flag(:trap_exit, true)
+
+      assert {:error, _reason} =
+               SketchConsumer.start_link(sketch_module: ExDataSketch.HLL, sketch_opts: [p: 10])
+    end
+
+    test "SketchProducer.start_link/1 does not silently start" do
+      Process.flag(:trap_exit, true)
+
+      assert {:error, _reason} =
+               SketchProducer.start_link(sketch_module: ExDataSketch.HLL, sketch_opts: [p: 10])
+    end
+
+    test "SketchStage.start_link/1 does not silently start" do
+      Process.flag(:trap_exit, true)
+
+      assert {:error, _reason} =
+               SketchStage.start_link(sketch_module: ExDataSketch.HLL, sketch_opts: [p: 10])
+    end
+  end
+
   describe "SketchConsumer" do
     setup do
       {:ok, consumer} =

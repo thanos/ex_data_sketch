@@ -199,6 +199,15 @@ defmodule ExDataSketch.FilterChainTest do
       assert result == {:error, :full}
     end
 
+    test "update/2 raises FilterFullError, not a bare RuntimeError, when full" do
+      cuckoo = Cuckoo.new(capacity: 4)
+      chain = FilterChain.new() |> FilterChain.add_stage(cuckoo)
+
+      assert_raise ExDataSketch.Errors.FilterFullError, ~r/FilterChain stage is full/, fn ->
+        Enum.reduce(1..10_000, chain, fn i, c -> FilterChain.update(c, "item_#{i}") end)
+      end
+    end
+
     test "put on empty chain succeeds" do
       {:ok, chain} = FilterChain.put(FilterChain.new(), "hello")
       assert FilterChain.stages(chain) == []
@@ -376,6 +385,8 @@ defmodule ExDataSketch.FilterChainTest do
       caps = FilterChain.capabilities()
       assert MapSet.member?(caps, :new)
       assert MapSet.member?(caps, :put)
+      assert MapSet.member?(caps, :update)
+      assert MapSet.member?(caps, :update_many)
       assert MapSet.member?(caps, :member?)
       assert MapSet.member?(caps, :delete)
       assert MapSet.member?(caps, :serialize)

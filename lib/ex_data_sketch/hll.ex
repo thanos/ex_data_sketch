@@ -12,12 +12,33 @@ defmodule ExDataSketch.HLL do
   - Memory: `m` bytes (one byte per register in v1 format)
   - Relative standard error: approximately `1.04 / sqrt(m)`
 
-  | p  | Registers | Memory  | ~Error |
-  |----|-----------|---------|--------|
-  | 10 | 1,024     | 1 KiB  | 3.25%  |
-  | 12 | 4,096     | 4 KiB  | 1.63%  |
-  | 14 | 16,384    | 16 KiB | 0.81%  |
-  | 16 | 65,536    | 64 KiB | 0.41%  |
+  | p  | Registers  | Memory  | ~Error |
+  |----|------------|---------|--------|
+  | 10 | 1,024      | 1 KiB   | 3.25%  |
+  | 12 | 4,096      | 4 KiB   | 1.63%  |
+  | 14 | 16,384     | 16 KiB  | 0.81%  |
+  | 16 | 65,536     | 64 KiB  | 0.41%  |
+  | 20 | 1,048,576  | 1 MiB   | 0.10%  |
+  | 26 | 67,108,864 | 64 MiB  | 0.013% |
+
+  ## Precision Range (4..26)
+
+  - **`p >= 4` is a hard requirement.** The bias-correction constant
+    `alpha(m)` is only defined for `m = 2^p in {16, 32, 64}` as exact
+    published values, with a general asymptotic formula covering every
+    `m >= 128` (i.e. every `p >= 7`); together these cover `p >= 4`
+    exactly, with no case for `p < 4`. This is a real algorithmic floor,
+    not a convention.
+  - **`p <= 26` is a practical ceiling, not an algorithmic one.** Nothing
+    in the register encoding or estimator caps `p` below 26 -- registers
+    are a plain byte each (max representable rank is `64 - p + 1`, far
+    under 255 for any realistic `p`), and `alpha(m)`'s general formula is
+    valid for any `m >= 128`. 26 is chosen to match `ExDataSketch.ULL`'s
+    ceiling (itself a hard limit -- see its moduledoc) so the two
+    cardinality estimators offer the same maximum precision/memory budget
+    for a like-for-like choice between them. At `p = 26` a single sketch
+    is 64 MiB; most workloads need nowhere near this and should stay at
+    `p <= 18` or so.
 
   ## Binary State Layout (v1)
 
@@ -26,7 +47,7 @@ defmodule ExDataSketch.HLL do
       Offset  Size    Field
       ------  ------  -----
       0       1       Version (u8, currently 1)
-      1       1       Precision p (u8, 4..16)
+      1       1       Precision p (u8, 4..26)
       2       2       Reserved flags (u16 little-endian, must be 0)
       4       m       Registers (m = 2^p bytes, one u8 per register)
 
@@ -34,7 +55,8 @@ defmodule ExDataSketch.HLL do
 
   ## Options
 
-  - `:p` - precision parameter, integer 4..16 (default: 14)
+  - `:p` - precision parameter, integer 4..26 (default: 14). See
+    "Precision Range" above.
   - `:backend` - backend module (default: `ExDataSketch.Backend.Pure`)
 
   ## Merge Properties
@@ -58,7 +80,7 @@ defmodule ExDataSketch.HLL do
 
   @default_p 14
   @min_p 4
-  @max_p 16
+  @max_p 26
 
   @doc """
   Creates a new HLL sketch.

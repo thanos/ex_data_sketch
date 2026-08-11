@@ -123,6 +123,7 @@ defmodule ExDataSketch do
     Sketch,
     Theta,
     ULL,
+    Window,
     XorFilter
   }
 
@@ -340,6 +341,14 @@ defmodule ExDataSketch do
       structure: "ExDataSketch.FilterChain (chains have no merge semantics)"
   end
 
+  def merge(%Window{}, %Window{}) do
+    raise Errors.UnsupportedOperationError,
+      operation: "merge/2",
+      structure:
+        "ExDataSketch.Window (merge the sketches inside each window's live slots instead, " <>
+          "e.g. via Window.merged/1 on each followed by a family-level merge/2)"
+  end
+
   def merge(%mod{} = a, %mod{} = b), do: mod.merge(a, b)
 
   def merge(%mod_a{}, %mod_b{}) do
@@ -367,6 +376,13 @@ defmodule ExDataSketch do
 
   """
   @spec merge_many([Sketch.sketch(), ...]) :: Sketch.sketch()
+  def merge_many([]) do
+    raise Errors.InvalidOptionError,
+      option: :sketches,
+      value: [],
+      message: "merge_many/1 requires a non-empty list of sketches, got: []"
+  end
+
   def merge_many([%_{} | _] = sketches) do
     Enum.reduce(sketches, fn sketch, acc -> merge(acc, sketch) end)
   end

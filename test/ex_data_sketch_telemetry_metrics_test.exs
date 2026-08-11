@@ -78,6 +78,79 @@ defmodule ExDataSketch.Telemetry.MetricsTest do
 
       :telemetry.detach("metrics-test-e2e")
     end
+
+    test "end-to-end: sketch.ingest.count receives a measurement, not silently starved" do
+      # Regression test: event_counter/4 used to default :measurement to
+      # :count (derived from the metric's own name), but no event actually
+      # carries a :count key in its measurements (:sketch, :ingest's are
+      # :duration/:size_bytes) -- Telemetry.Metrics.counter/2's own docs:
+      # "the measurement must still be available in the event, otherwise
+      # the event is not accounted for." That silently made this counter
+      # never fire, in ExDataSketch's own Metrics.all/1 output as well as
+      # any real Telemetry.Metrics reporter (Phoenix LiveDashboard, etc.)
+      # wired up to it.
+      count_metric =
+        Enum.find(Metrics.all(), fn m ->
+          m.name == [:ex_data_sketch, :sketch, :ingest, :count]
+        end)
+
+      refute is_nil(count_metric)
+
+      test_pid = self()
+
+      :telemetry.attach(
+        "metrics-test-e2e-count",
+        count_metric.event_name,
+        fn _event, measurements, _metadata, _config ->
+          value = extract_measurement(count_metric.measurement, measurements)
+          send(test_pid, {:count_measurement, value})
+        end,
+        nil
+      )
+
+      HLL.from_enumerable(["a", "b"], p: 10)
+
+      assert_receive {:count_measurement, value}
+      assert value == 1
+
+      :telemetry.detach("metrics-test-e2e-count")
+    end
+
+    test "end-to-end: stream.reduce.count receives a measurement despite the event carrying none" do
+      count_metric =
+        Enum.find(Metrics.all(), fn m ->
+          m.name == [:ex_data_sketch, :stream, :reduce, :count]
+        end)
+
+      refute is_nil(count_metric)
+
+      test_pid = self()
+
+      :telemetry.attach(
+        "metrics-test-e2e-stream-count",
+        count_metric.event_name,
+        fn _event, measurements, _metadata, _config ->
+          value = extract_measurement(count_metric.measurement, measurements)
+          send(test_pid, {:stream_count_measurement, value})
+        end,
+        nil
+      )
+
+      # [:ex_data_sketch, :stream, :reduce] fires with an empty measurements
+      # map (see ExDataSketch.Flow's only caller) -- exercise that directly
+      # rather than pulling in the optional :flow dependency for this test.
+      ExTelemetry.execute(
+        ExTelemetry.event_name(:stream, :reduce),
+        %{},
+        %{sketch_type: :hll},
+        :stream
+      )
+
+      assert_receive {:stream_count_measurement, value}
+      assert value == 1
+
+      :telemetry.detach("metrics-test-e2e-stream-count")
+    end
   end
 
   defp extract_measurement(fun, measurements) when is_function(fun, 1), do: fun.(measurements)

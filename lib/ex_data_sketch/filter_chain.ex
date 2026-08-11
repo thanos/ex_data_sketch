@@ -166,7 +166,7 @@ defmodule ExDataSketch.FilterChain do
   def update(%__MODULE__{} = chain, item) do
     case put(chain, item) do
       {:ok, updated} -> updated
-      {:error, :full} -> raise "FilterChain stage is full"
+      {:error, :full} -> raise Errors.FilterFullError, structure: "FilterChain stage"
     end
   end
 
@@ -357,6 +357,8 @@ defmodule ExDataSketch.FilterChain do
       :new,
       :add_stage,
       :put,
+      :update,
+      :update_many,
       :member?,
       :delete,
       :count,

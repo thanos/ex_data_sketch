@@ -66,7 +66,7 @@ Add `ex_data_sketch` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:ex_data_sketch, "~> 0.10.0"}
+    {:ex_data_sketch, "~> 0.10.1"}
   ]
 end
 ```
@@ -179,12 +179,11 @@ mix docs
 | v0.8.0 | Deterministic Foundations -- pluggable hash registry (XXHash3 + Murmur3), binary stability and corruption detection, HLL hot-path optimization, precompiled NIFs, property-based validation | Released |
 | v0.9.0 | Streaming Integrations -- Stream/Collectable API, Broadway/GenStage/Flow integration, persistence (ETS/DETS/CubDB/Mnesia/Ecto), telemetry + OpenTelemetry, ULL accuracy fix, v1 serialization escape hatch | Released |
 | v0.10.0 | Production Ergonomics -- unified sketch contract & facade dispatch, storage behaviour, windowing, supervised sketches (Server/Sketches), Telemetry.Metrics + LiveDashboard, filter NIF raw-hashing, Apache KLL interop, v1 serialization escape hatch for every family | Released |
+| v0.10.1 | Post-release code review fixes -- Server graceful-shutdown snapshotting, storage merge crash-safety, filter `:hash_strategy` build/round-trip fix, KLL decode validation, hardened `opencode.yml` workflow | Released |
 | v0.11.0 | Apache HLL Interoperability & New Sketch Families -- full cross-language HLL exchange, CPC (Compressed Probabilistic Counting), Tuple Sketch (weighted distinct counting) | Planned |
 | v0.12.0 | Similarity & Sampling -- MinHash, Weighted MinHash, VarOpt sampling | Planned |
 | v1.0.0 | Stable Binary Contract -- locked EXSK format, full benchmark suite, Nx / Arrow ecosystem integrations | Planned |
 
-See [`guides/roadmap.md`](guides/roadmap.md) for the next-release preview.
-The long-form strategic roadmap is in [`plans/next_steps.md`](plans/next_steps.md).
 
 ## License
 

@@ -28,14 +28,14 @@ defmodule ExDataSketch.HLLTest do
     end
 
     test "creates sketch with custom p" do
-      for p <- 4..16 do
+      for p <- [4, 10, 14, 20, 26] do
         sketch = HLL.new(p: p)
         assert sketch.opts[:p] == p
       end
     end
 
     test "binary has correct size" do
-      for p <- [4, 10, 14, 16] do
+      for p <- [4, 10, 14, 16, 20, 26] do
         sketch = HLL.new(p: p)
         expected_size = 4 + (1 <<< p)
         assert byte_size(sketch.state) == expected_size
@@ -67,7 +67,7 @@ defmodule ExDataSketch.HLLTest do
 
     test "validates p maximum" do
       assert_raise InvalidOptionError, ~r/p must be/, fn ->
-        HLL.new(p: 17)
+        HLL.new(p: 27)
       end
     end
 
@@ -455,7 +455,7 @@ defmodule ExDataSketch.HLLTest do
 
   describe "size_bytes/1" do
     test "returns correct size for various p values" do
-      for p <- [4, 10, 14, 16] do
+      for p <- [4, 10, 14, 16, 20, 26] do
         sketch = HLL.new(p: p)
         assert HLL.size_bytes(sketch) == 4 + (1 <<< p)
       end
