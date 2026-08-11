@@ -12,7 +12,9 @@ frequency estimation, quantile computation, heavy-hitter detection, membership
 testing with deletion, and set reconciliation on streaming data. Stream-native
 integration with Elixir's `Collectable`, `GenStage`, `Broadway`, and `Flow`,
 plus `:telemetry`/OpenTelemetry instrumentation, persistence backends (ETS,
-DETS, CubDB, Mnesia, Ecto), and nine production-oriented Livebooks.
+DETS, CubDB, Mnesia, Ecto), and 23 production-oriented Livebooks (7
+cross-cutting integration guides plus a per-family tutorial for every
+sketch).
 
 [![CI](https://github.com/thanos/ex_data_sketch/actions/workflows/ci.yml/badge.svg)](https://github.com/thanos/ex_data_sketch/actions/workflows/ci.yml)
 [![Hex version](https://img.shields.io/hexpm/v/ex_data_sketch.svg)](https://hex.pm/packages/ex_data_sketch)
@@ -113,10 +115,12 @@ See the [Quick Start Guide](guides/quick_start.md) for more examples.
 
 ## Livebooks
 
-Nine production-oriented Livebooks demonstrate real-world patterns, from
-basic stream consumption to distributed merge semantics and AI workload
-analytics. See [Livebooks Guide](guides/livebooks.md) for the recommended
-reading order and what each Livebook teaches.
+23 production-oriented Livebooks demonstrate real-world patterns: a
+per-family tutorial for all 16 sketches (each generating and caching its
+own sample data), plus 7 cross-cutting guides covering stream
+consumption, distributed merge semantics, framework integration, and a
+1-billion-row-style case study. See [Livebooks Guide](guides/livebooks.md)
+for the recommended reading order and what each Livebook teaches.
 
 ## Documentation
 
@@ -137,15 +141,16 @@ Full documentation is available at [HexDocs](https://hexdocs.pm/ex_data_sketch).
 
 The following guarantees apply within the v0.x release series:
 
-- **EXSK serialization**: The ExDataSketch-native binary format is stable. Binaries produced by any v0.x release can be deserialized by any other v0.x release.
+- **EXSK serialization**: The ExDataSketch-native binary format is stable. Binaries produced by any v0.x release can be deserialized by any other v0.x release, with one exception: see the ULL v1/v2 state-format note below.
 - **Pure vs Rust parity**: Given identical inputs, both backends produce byte-identical serialized state and identical estimates.
 - **Deterministic output**: The same input sequence always produces the same sketch state and estimate, regardless of backend.
-- **Backward compatibility**: v0.7.x EXSK v1 frames are decodable by v0.9.0. `HLL.serialize(sketch, format: :v1)` produces backward-compatible v0.7.x output (requires `:phash2` hash strategy).
+- **Backward compatibility**: v0.7.x EXSK v1 frames remain decodable. `HLL.serialize(sketch, format: :v1)` (and, as of v0.10.0, every other family except `FilterChain`) produces backward-compatible v0.7.x-style output (requires `:phash2` hash strategy where applicable).
 
 Not guaranteed:
 
-- **ULL estimate stability**: ULL estimates at very low cardinalities (p < 12, n < 500) differ between v0.8.0 and v0.9.0 due to accuracy corrections. The v0.9.0 estimates are more accurate.
-- **Cross-language interop**: Only Theta supports Apache DataSketches CompactSketch format. HLL and CMS DataSketches interop is not implemented.
+- **ULL binary format (v0.10.1+)**: `ExDataSketch.ULL`'s register encoding and estimator were rewritten in v0.10.1 to fix a correctness bug (the previous implementation was an HLL-derived approximation, not real UltraLogLog, and overestimated cardinality by orders of magnitude once a sketch's registers filled up). Its internal `ULL1` state format version was bumped 1 -> 2 as part of the fix; sketches serialized by v0.10.0 or earlier fail to decode on v0.10.1+ with a clear error instead of being silently misread. Rebuild any persisted ULL sketches from source data after upgrading. No other family is affected.
+- **ULL estimate stability**: beyond the v0.10.1 binary-format break above, ULL estimates also shifted at low cardinalities between v0.8.0 and v0.9.0 due to an earlier accuracy correction.
+- **Cross-language interop**: `Theta` and `KLL` (as of v0.10.0) support Apache DataSketches compact binary formats. HLL and CMS DataSketches interop is not implemented.
 - **Performance stability**: Benchmark results may vary across hardware and OTP versions.
 - **EXSK format across major versions**: The binary format may change in future major releases.
 
@@ -184,7 +189,7 @@ mix docs
 | v0.8.0 | Deterministic Foundations -- pluggable hash registry (XXHash3 + Murmur3), binary stability and corruption detection, HLL hot-path optimization, precompiled NIFs, property-based validation | Released |
 | v0.9.0 | Streaming Integrations -- Stream/Collectable API, Broadway/GenStage/Flow integration, persistence (ETS/DETS/CubDB/Mnesia/Ecto), telemetry + OpenTelemetry, ULL accuracy fix, v1 serialization escape hatch | Released |
 | v0.10.0 | Production Ergonomics -- unified sketch contract & facade dispatch, storage behaviour, windowing, supervised sketches (Server/Sketches), Telemetry.Metrics + LiveDashboard, filter NIF raw-hashing, Apache KLL interop, v1 serialization escape hatch for every family | Released |
-| v0.10.1 | Post-release code review fixes -- Server graceful-shutdown snapshotting, storage merge crash-safety, filter `:hash_strategy` build/round-trip fix, KLL decode validation, hardened `opencode.yml` workflow | Released |
+| v0.10.1 | Correctness and polish -- `ULL` rewritten to the real UltraLogLog algorithm (was an HLL-derived approximation; binary format bumped v1->v2), `KLL` compaction weight-invariant fix, `HLL` precision range widened to p=4..26, 16 new per-family tutorial Livebooks, `phoenix_demo/` sample app, plus the original post-review fixes (Server graceful-shutdown snapshotting, storage merge crash-safety, filter `:hash_strategy` build/round-trip fix, hardened `opencode.yml` workflow) | Released |
 | v0.11.0 | Apache HLL Interoperability & New Sketch Families -- full cross-language HLL exchange, CPC (Compressed Probabilistic Counting), Tuple Sketch (weighted distinct counting) | Planned |
 | v0.12.0 | Similarity & Sampling -- MinHash, Weighted MinHash, VarOpt sampling | Planned |
 | v1.0.0 | Stable Binary Contract -- locked EXSK format, full benchmark suite, Nx / Arrow ecosystem integrations | Planned |

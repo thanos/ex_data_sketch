@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-08-11
+
+Started as post-release fixes from a full code review of the v0.10.0 diff
+(`baoulo/reviews/0.10.0_code_review.md`); grew to include two significant
+correctness fixes found via manual livebook verification (`ULL`, `KLL`),
+a precision-range widening (`HLL`), and 16 new per-family tutorial
+Livebooks plus a runnable Phoenix demo app.
+
 ### Added
 
 - `livebooks/sketches/` -- one tutorial livebook per sketch family (16
@@ -101,64 +109,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   they actually count every occurrence, regardless of that event's real
   measurement keys.
 
-### Removed
-
-- `livebooks/livedashboard_integration.livemd` and
-  `livebooks/phoenix_observability.livemd`, superseded by `phoenix_demo/`
-  -- both consisted mostly of commented-out router/application pseudocode
-  where `phoenix_demo` has working code.
-- `livebooks/rolling_telemetry.livemd` -- its `ExDataSketch.Window` content
-  (basic usage, deterministic testing, persistence) was already covered
-  in more depth by `guides/windowing.md`; its telemetry section moved to
-  `guides/telemetry.md`; its live-dashboard demonstration is superseded
-  by `phoenix_demo/`.
-
-### Changed
-
-- **`ExDataSketch.HLL`'s maximum precision raised from `p=16` to `p=26`**,
-  matching `ExDataSketch.ULL`'s range. Investigation found no algorithmic
-  reason for the old `p<=16` ceiling: registers are a plain byte each (no
-  bit-packing to overflow), and the `alpha(m)` bias-correction constant's
-  general formula (`0.7213 / (1 + 1.079/m)`) is valid for any `m >= 128`
-  -- it was simply never raised. `p>=4` remains a hard floor: `alpha(m)`
-  only has defined cases for `m = 2^p in {16, 32, 64}` plus the general
-  formula for `m >= 128`, which together cover `p >= 4` exactly. See
-  `ExDataSketch.HLL`'s new "Precision Range" moduledoc section (and
-  `ExDataSketch.ULL`'s, added for contrast -- ULL's own `p<=26` ceiling
-  *is* a hard limit, bounded by a 24-entry estimator lookup table).
-- `lib/ex_data_sketch/telemetry.ex`'s own moduledoc claimed `:ingest`'s
-  `size_bytes` measurement was "HLL only" -- wrong in both directions: 13
-  of the 14 families that emit `:ingest` report it (all but `Cuckoo`,
-  whose `put_many/2` returns a tagged tuple rather than a bare sketch),
-  and `XorFilter`/`FilterChain` don't emit `:ingest` at all. Corrected to
-  describe actual per-family coverage.
-
-### Migration
-
-- **`ExDataSketch.ULL` binary format bump (v1 -> v2).** Sketches
-  serialized by prior releases will fail to decode with
-  `"unsupported ULL state version 1, expected 2"` rather than silently
-  producing the old, significantly overestimated cardinality. This is
-  intentional: the register encoding itself changed (not just a wrapper),
-  so there is no way to reinterpret old state correctly. If you have
-  persisted ULL sketches (snapshots, ETS/DETS/CubDB/Ecto storage
-  backends, `ExDataSketch.Server` snapshot files), rebuild them from
-  source data after upgrading. HLL and every other family are unaffected
-  -- this is a `ULL`-only, algorithm-only fix.
-- **ULL estimates will change** for any existing sketch once rebuilt --
-  they are now correct rather than overestimated once a sketch's
-  registers fill up (`n` comparable to or larger than `m`). If you assert
-  specific numeric ULL estimates in tests, expect them to shift toward
-  the true cardinality.
-
-## [0.10.1] - 2026-08-07
-
-Post-release fixes from a full code review of the v0.10.0 diff
-(`baoulo/reviews/0.10.0_code_review.md`), covering both catalogued
-findings and one bug the review's own scope surfaced during the fix pass.
-
-### Fixed
-
 - **Critical:** `ExDataSketch.Server` now traps exits, so a supervisor-
   initiated shutdown (not just an explicit `GenServer.stop/2`) snapshots
   before terminating, per its documented graceful-shutdown guarantee.
@@ -211,8 +161,37 @@ findings and one bug the review's own scope surfaced during the fix pass.
   resolved as a whole against the configured default backend, instead of
   being misread as an explicit `{backend_module, ref}` pair.
 
+### Removed
+
+- `livebooks/livedashboard_integration.livemd` and
+  `livebooks/phoenix_observability.livemd`, superseded by `phoenix_demo/`
+  -- both consisted mostly of commented-out router/application pseudocode
+  where `phoenix_demo` has working code.
+- `livebooks/rolling_telemetry.livemd` -- its `ExDataSketch.Window` content
+  (basic usage, deterministic testing, persistence) was already covered
+  in more depth by `guides/windowing.md`; its telemetry section moved to
+  `guides/telemetry.md`; its live-dashboard demonstration is superseded
+  by `phoenix_demo/`.
+
 ### Changed
 
+- **`ExDataSketch.HLL`'s maximum precision raised from `p=16` to `p=26`**,
+  matching `ExDataSketch.ULL`'s range. Investigation found no algorithmic
+  reason for the old `p<=16` ceiling: registers are a plain byte each (no
+  bit-packing to overflow), and the `alpha(m)` bias-correction constant's
+  general formula (`0.7213 / (1 + 1.079/m)`) is valid for any `m >= 128`
+  -- it was simply never raised. `p>=4` remains a hard floor: `alpha(m)`
+  only has defined cases for `m = 2^p in {16, 32, 64}` plus the general
+  formula for `m >= 128`, which together cover `p >= 4` exactly. See
+  `ExDataSketch.HLL`'s new "Precision Range" moduledoc section (and
+  `ExDataSketch.ULL`'s, added for contrast -- ULL's own `p<=26` ceiling
+  *is* a hard limit, bounded by a 24-entry estimator lookup table).
+- `lib/ex_data_sketch/telemetry.ex`'s own moduledoc claimed `:ingest`'s
+  `size_bytes` measurement was "HLL only" -- wrong in both directions: 13
+  of the 14 families that emit `:ingest` report it (all but `Cuckoo`,
+  whose `put_many/2` returns a tagged tuple rather than a bare sketch),
+  and `XorFilter`/`FilterChain` don't emit `:ingest` at all. Corrected to
+  describe actual per-family coverage.
 - Raised the minimum supported Elixir version from `~> 1.15` to `~> 1.18`
   to match what CI actually tests (the 1.15-1.17 floor was never
   exercised by any CI leg).
@@ -236,6 +215,24 @@ findings and one bug the review's own scope surfaced during the fix pass.
   none of the five shipped backends do), and the bare-ref resolution
   error message (previously said "no backend module given" even when a
   structurally plausible but invalid one was given).
+
+### Migration
+
+- **`ExDataSketch.ULL` binary format bump (v1 -> v2).** Sketches
+  serialized by prior releases will fail to decode with
+  `"unsupported ULL state version 1, expected 2"` rather than silently
+  producing the old, significantly overestimated cardinality. This is
+  intentional: the register encoding itself changed (not just a wrapper),
+  so there is no way to reinterpret old state correctly. If you have
+  persisted ULL sketches (snapshots, ETS/DETS/CubDB/Ecto storage
+  backends, `ExDataSketch.Server` snapshot files), rebuild them from
+  source data after upgrading. HLL and every other family are unaffected
+  -- this is a `ULL`-only, algorithm-only fix.
+- **ULL estimates will change** for any existing sketch once rebuilt --
+  they are now correct rather than overestimated once a sketch's
+  registers fill up (`n` comparable to or larger than `m`). If you assert
+  specific numeric ULL estimates in tests, expect them to shift toward
+  the true cardinality.
 
 ## [0.10.0] - 2026-08-07
 
