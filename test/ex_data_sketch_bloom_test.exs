@@ -2,6 +2,8 @@ defmodule ExDataSketch.BloomTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  doctest ExDataSketch.Bloom
+
   alias ExDataSketch.Bloom
 
   # Deterministic test data
@@ -234,6 +236,17 @@ defmodule ExDataSketch.BloomTest do
     test "truncated binary returns error" do
       assert {:error, _} = Bloom.deserialize(<<1, 2>>)
     end
+
+    test "a non-default :hash_strategy is honored at build time and survives round-trip" do
+      bloom =
+        Bloom.new(capacity: 100, hash_strategy: :murmur3) |> Bloom.put_many(@items_100)
+
+      assert bloom.opts[:hash_strategy] == :murmur3
+
+      {:ok, recovered} = Bloom.deserialize(Bloom.serialize(bloom))
+      assert recovered.opts[:hash_strategy] == :murmur3
+      assert Enum.all?(@items_100, &Bloom.member?(recovered, &1))
+    end
   end
 
   describe "introspection" do
@@ -260,6 +273,20 @@ defmodule ExDataSketch.BloomTest do
       expected_bitset_bytes = div(bit_count + 7, 8)
       # 40 byte header + bitset
       assert Bloom.size_bytes(bloom) == 40 + expected_bitset_bytes
+    end
+  end
+
+  describe "capabilities/0" do
+    test "includes expected capabilities" do
+      caps = Bloom.capabilities()
+      assert :put in caps
+      assert :update in caps
+      assert :update_many in caps
+      assert :member? in caps
+      assert :merge in caps
+      assert :count in caps
+      assert :serialize in caps
+      assert :deserialize in caps
     end
   end
 

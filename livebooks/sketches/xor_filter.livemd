@@ -1,0 +1,125 @@
+# XorFilter Tutorial
+
+```elixir
+Mix.install([
+  {:ex_data_sketch, "~> 0.10"}
+])
+```
+
+## Introduction
+
+`ExDataSketch.XorFilter` answers the same "have I seen this" question as
+`ExDataSketch.Bloom`, but for **static** data known up front -- a
+blocklist you refresh nightly, a compiled dictionary, a fixed allowlist
+-- and is more space-efficient per item at a comparable false-positive
+rate in exchange for giving up mutability entirely: no `put/2`,
+`delete/2`, `merge/2`, or even an empty starting state. You build it once
+from a complete collection via `build/2` and only ever query it after
+that.
+
+## Sample data (cached locally)
+
+```elixir
+cache_path = Path.join(System.tmp_dir!(), "ex_data_sketch_livebook_cache/xor_filter_sample.bin")
+
+{blocklist, novel} =
+  if File.exists?(cache_path) do
+    IO.puts("Loading cached sample data from #{cache_path}")
+    cache_path |> File.read!() |> :erlang.binary_to_term()
+  else
+    IO.puts("Generating sample data (this takes a few seconds)...")
+    blocklist = for i <- 1..500_000, do: "malicious-domain-#{i}.example"
+    novel = for i <- 500_001..1_000_000, do: "malicious-domain-#{i}.example"
+    File.mkdir_p!(Path.dirname(cache_path))
+    File.write!(cache_path, :erlang.term_to_binary({blocklist, novel}))
+    {blocklist, novel}
+  end
+
+IO.puts("#{length(blocklist)} blocklisted domains, #{length(novel)} novel (safe) domains")
+```
+
+## Basic usage
+
+```elixir
+alias ExDataSketch.XorFilter
+
+{:ok, filter} = XorFilter.build(blocklist)
+
+XorFilter.member?(filter, hd(blocklist))
+```
+
+`build/2` is the only constructor -- there's no `new/1` to start from and
+add to incrementally. It can fail (`{:error, :build_failed}`) in rare
+cases with pathological input, though it succeeds virtually always in
+practice:
+
+```elixir
+case XorFilter.build(blocklist) do
+  {:ok, filter} -> IO.puts("Built successfully: #{XorFilter.count(filter)} items")
+  {:error, :build_failed} -> IO.puts("Build failed -- try again or check for degenerate input")
+end
+```
+
+## No false negatives, measured false-positive rate
+
+```elixir
+false_positives = Enum.count(novel, &XorFilter.member?(filter, &1))
+observed_fpr = false_positives / length(novel)
+IO.puts("False positives: #{false_positives} / #{length(novel)} (#{Float.round(observed_fpr * 100, 4)}%)")
+```
+
+## Xor8 vs Xor16, and vs Bloom at a comparable size
+
+Xor8 (~1/256 theoretical FPR) and Xor16 (~1/65536) trade memory for
+accuracy the same way Bloom's `:false_positive_rate` does -- compare
+directly against a same-size Bloom filter:
+
+```elixir
+alias ExDataSketch.Bloom
+
+{:ok, xor8} = XorFilter.build(blocklist, fingerprint_bits: 8)
+{:ok, xor16} = XorFilter.build(blocklist, fingerprint_bits: 16)
+bloom = Bloom.new(capacity: 500_000, false_positive_rate: 0.004) |> Bloom.put_many(blocklist)
+
+sample_novel = Enum.take(novel, 50_000)
+
+for {label, size, fpr_check} <- [
+      {"Xor8", XorFilter.size_bytes(xor8), fn -> Enum.count(sample_novel, &XorFilter.member?(xor8, &1)) end},
+      {"Xor16", XorFilter.size_bytes(xor16), fn -> Enum.count(sample_novel, &XorFilter.member?(xor16, &1)) end},
+      {"Bloom (~0.4% target)", Bloom.size_bytes(bloom), fn -> Enum.count(sample_novel, &Bloom.member?(bloom, &1)) end}
+    ] do
+  fps = fpr_check.()
+  IO.puts("#{label}: #{size} bytes, observed FPR=#{Float.round(fps / length(sample_novel) * 100, 4)}%")
+end
+```
+
+## Rebuilding when the data changes
+
+Since there's no incremental update, refreshing a XorFilter means
+rebuilding it from the full, current item set -- a natural fit for a
+periodic (nightly, hourly) batch job rather than a live stream:
+
+```elixir
+# Simulating "today's blocklist changed slightly":
+updated_blocklist = blocklist ++ ["new-malicious-domain.example"]
+{:ok, refreshed} = XorFilter.build(updated_blocklist)
+IO.puts("Refreshed filter contains the new entry: #{XorFilter.member?(refreshed, "new-malicious-domain.example")}")
+```
+
+## Serialization
+
+```elixir
+binary = XorFilter.serialize(filter)
+{:ok, restored} = XorFilter.deserialize(binary)
+IO.puts("Round-tripped membership check: #{XorFilter.member?(restored, hd(blocklist))}")
+```
+
+## See also
+
+- `ExDataSketch.XorFilter` module documentation -- full API reference
+  and the hypergraph-peeling construction algorithm.
+- `ExDataSketch.Bloom` -- mutable and mergeable, for data that changes
+  incrementally; see `livebooks/sketches/bloom.livemd`.
+- `ExDataSketch.FilterChain` -- XorFilter can be one stage in a chain
+  (as a static, precise second-pass filter behind a cheap mutable
+  first pass); see `livebooks/sketches/filter_chain.livemd`.

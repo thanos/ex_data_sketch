@@ -4,7 +4,7 @@ defmodule ExDataSketch.MisraGries do
 
   The Misra-Gries algorithm maintains at most `k` counters to track frequent
   items in a data stream. It provides a deterministic guarantee: any item
-  whose true frequency exceeds `n/k` (where `n` is the total count) is
+  whose true frequency exceeds `n/(k+1)` (where `n` is the total count) is
   guaranteed to be tracked.
 
   ## Algorithm
@@ -13,18 +13,66 @@ defmodule ExDataSketch.MisraGries do
     than k entries, insert x with count 1. Otherwise, decrement all counters
     by 1 and remove any that reach zero.
 
-  - **Guarantee**: If an item appears more than `n/k` times, it will be in the
-    counter set when queried. The estimated count is a lower bound on the
-    true count, with error at most `n/k`.
+  - **Guarantee**: If an item appears more than `n/(k+1)` times, it will be in
+    the counter set when queried. The estimated count is a lower bound on the
+    true count, with error at most `n/(k+1)`.
 
   ## Comparison with FrequentItems (SpaceSaving)
 
   | Feature | MisraGries | FrequentItems |
   |---------|-----------|---------------|
   | Algorithm | Decrement-all | SpaceSaving (min-replacement) |
-  | Guarantee | Deterministic: freq > n/k always tracked | Probabilistic with error bounds |
+  | Guarantee | Deterministic: freq > n/(k+1) always tracked | Probabilistic with error bounds |
   | Counter count | At most k | Exactly k |
   | Estimate | Lower bound | Estimate with overcount error |
+
+  **In practice, the two do not "just broadly agree" beyond the guaranteed
+  item(s).** Decrement-all discards *every* counter on a miss, including
+  ones for items that are genuinely frequent but fall below the `n/(k+1)`
+  guarantee threshold; against a workload with many moderately-frequent
+  items and a `k` too small to cover them, those items get evicted by
+  churn just as readily as truly rare ones. SpaceSaving only ever evicts
+  the single *minimum* counter, so items that are frequent-but-unguaranteed
+  tend to survive and entrench themselves in practice, even without a
+  guarantee covering them. Measured example: 1,000,000 power-law-distributed
+  events, 5,000 distinct items, `k = 20` (`n/(k+1) ~ 47,619`, cleared only by
+  the single most frequent item) -- `MisraGries.top_k(sketch, 3)` returned
+  `["query_1", "query_1144", "query_1209"]` (the latter two essentially
+  arbitrary low-count survivors), while `FrequentItems.top_k/1` on the same
+  data returned `["query_1", "query_9", "query_8"]`, much closer to the true
+  ranking. See "Choosing k" below for how to size `k` so this doesn't happen.
+
+  ## Choosing k
+
+  - **Guarantee-driven sizing**: pick `k` so `n/(k+1)` sits comfortably below
+    the smallest true frequency you need reliably retained. For a top-N
+    query, that means every one of the true top N items must individually
+    clear `n/(k+1)` -- there is no guarantee for items below it, and with a
+    "thick middle" of many moderately-frequent items and a `k` too small to
+    cover them, they are routinely evicted in practice (see above). In one
+    measured example (same data as above), `k = 100` reliably recovered the
+    true top 3 but not top 4-5; `k = 200` (`n/(k+1) ~ 4,975`) recovered the
+    exact true top 5.
+  - **Memory cost of `k` is small and predictable**: state size scales with
+    the number of *retained* entries (bounded by `k`), at roughly 21-22
+    bytes/entry for typical string keys (`4-byte key_len + key bytes +
+    8-byte count`, see "Binary State Layout" below). `k = 200` costs on the
+    order of a few KB; even `k = 5000` (tracking every distinct item in a
+    5,000-item universe) was ~109 KB in the same measurement.
+  - **CPU cost of `k` is real but far gentler than the `O(k)`-per-miss
+    "decrement all" step suggests in isolation.** As `k` grows, a larger
+    share of incoming items are already tracked (cheap O(1) increment)
+    instead of triggering a full decrement-all, so the two effects partly
+    offset. Measured example: increasing `k` 250x (20 -> 5000) increased
+    `update_many/2` wall time only ~4x for the workload above -- but this
+    ratio is workload-dependent; a stream whose cardinality vastly exceeds
+    `k` (so most items are permanent misses) will scale closer to the naive
+    `O(n*k)` case.
+  - **No NIF acceleration is available for this family.** Unlike most other
+    `ExDataSketch` sketches, `ExDataSketch.Backend.Rust`'s `mg_*` functions
+    are a thin pass-through to `ExDataSketch.Backend.Pure` -- there is no
+    compiled fast path to fall back on, so `k` (and workload shape) are the
+    only real levers over `update_many/2` cost for this family.
 
   ## Binary State Layout (MG01)
 
@@ -57,7 +105,7 @@ defmodule ExDataSketch.MisraGries do
   `k` parameter. Count (`n`) is always exactly additive.
   """
 
-  alias ExDataSketch.{Backend, Binary, Codec, Errors}
+  alias ExDataSketch.{Backend, Binary, Codec, Errors, Telemetry}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -66,6 +114,8 @@ defmodule ExDataSketch.MisraGries do
         }
 
   defstruct [:state, :opts, :backend]
+
+  @behaviour ExDataSketch.Sketch
 
   @default_k 10
 
@@ -176,7 +226,15 @@ defmodule ExDataSketch.MisraGries do
   """
   @spec merge_many(Enumerable.t()) :: t()
   def merge_many(sketches) do
-    Enum.reduce(sketches, fn sketch, acc -> merge(acc, sketch) end)
+    sketches_list = Enum.to_list(sketches)
+
+    Telemetry.span(
+      Telemetry.event_name(:sketch, :merge),
+      %{merge_count: length(sketches_list)},
+      %{sketch_type: :misra_gries},
+      :sketch,
+      fn -> Enum.reduce(sketches_list, fn sketch, acc -> merge(acc, sketch) end) end
+    )
   end
 
   @doc """
@@ -300,6 +358,12 @@ defmodule ExDataSketch.MisraGries do
   @doc """
   Serializes the sketch to the ExDataSketch-native EXSK binary format.
 
+  ## Options
+
+  - `:format` - serialization format: `:v2` (default, EXSK v2 with CRC32C)
+    or `:v1` (legacy EXSK v1, compatible with v0.7.x readers). MisraGries
+    does not have a hash-strategy option, so v1 has no restriction.
+
   ## Examples
 
       iex> sketch = ExDataSketch.MisraGries.new()
@@ -308,18 +372,41 @@ defmodule ExDataSketch.MisraGries do
       iex> byte_size(binary) > 0
       true
 
+      iex> sketch = ExDataSketch.MisraGries.new()
+      iex> binary = ExDataSketch.MisraGries.serialize(sketch, format: :v1)
+      iex> <<"EXSK", 1, 14, _rest::binary>> = binary
+
   """
-  @spec serialize(t()) :: binary()
-  def serialize(%__MODULE__{state: state, opts: opts}) do
+  @spec serialize(t(), keyword()) :: binary()
+  def serialize(%__MODULE__{state: state, opts: opts}, serialize_opts \\ []) do
+    format = Keyword.get(serialize_opts, :format, :v2)
+    start_time = System.monotonic_time()
     k = Keyword.fetch!(opts, :k)
     key_encoding = Keyword.get(opts, :key_encoding, :binary)
     enc_byte = encode_key_encoding(key_encoding)
     params_bin = <<k::unsigned-little-32, enc_byte::unsigned-8>>
 
-    Binary.encode(
-      Binary.metadata_from_opts(Codec.sketch_id_mg(), 1, opts),
-      Binary.build_payload(params_bin, state)
-    )
+    binary =
+      case format do
+        :v2 ->
+          Binary.encode(
+            Binary.metadata_from_opts(Codec.sketch_id_mg(), 1, opts),
+            Binary.build_payload(params_bin, state)
+          )
+
+        :v1 ->
+          Codec.encode(Codec.sketch_id_mg(), 1, params_bin, state)
+      end
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:sketch, :serialize),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: :misra_gries},
+        :sketch
+      )
+
+    binary
   end
 
   @doc """
@@ -335,19 +422,32 @@ defmodule ExDataSketch.MisraGries do
   """
   @spec deserialize(binary()) :: {:ok, t()} | {:error, Exception.t()}
   def deserialize(binary) when is_binary(binary) do
-    with {:ok, decoded} <- Binary.decode(binary),
-         :ok <- validate_sketch_id(decoded.sketch_id),
-         {:ok, opts} <- decode_params(decoded.params),
-         :ok <- validate_state_header(decoded.state) do
-      backend = Backend.default()
+    start_time = System.monotonic_time()
 
-      {:ok,
-       %__MODULE__{
-         state: decoded.state,
-         opts: opts,
-         backend: backend
-       }}
-    end
+    result =
+      with {:ok, decoded} <- Binary.decode(binary),
+           :ok <- validate_sketch_id(decoded.sketch_id),
+           {:ok, opts} <- decode_params(decoded.params),
+           :ok <- validate_state_header(decoded.state) do
+        backend = Backend.default()
+
+        {:ok,
+         %__MODULE__{
+           state: decoded.state,
+           opts: opts,
+           backend: backend
+         }}
+      end
+
+    :ok =
+      Telemetry.execute(
+        Telemetry.event_name(:sketch, :deserialize),
+        %{duration: System.monotonic_time() - start_time, size_bytes: byte_size(binary)},
+        %{sketch_type: :misra_gries},
+        :sketch
+      )
+
+    result
   end
 
   @doc """
@@ -362,7 +462,14 @@ defmodule ExDataSketch.MisraGries do
   """
   @spec from_enumerable(Enumerable.t(), keyword()) :: t()
   def from_enumerable(enumerable, opts \\ []) do
-    new(opts) |> update_many(enumerable)
+    Telemetry.span_with_result(
+      Telemetry.event_name(:sketch, :ingest),
+      %{},
+      %{sketch_type: :misra_gries},
+      :sketch,
+      fn -> new(opts) |> update_many(enumerable) end,
+      fn sketch -> %{size_bytes: size_bytes(sketch)} end
+    )
   end
 
   @doc """
@@ -391,6 +498,36 @@ defmodule ExDataSketch.MisraGries do
   @spec merger(keyword()) :: (t(), t() -> t())
   def merger(_opts \\ []) do
     fn a, b -> merge(a, b) end
+  end
+
+  @doc """
+  Returns the set of operation names supported by `ExDataSketch.MisraGries`.
+
+  See `ExDataSketch.Sketch` for the shared capability vocabulary.
+
+  ## Examples
+
+      iex> ExDataSketch.MisraGries.capabilities() |> MapSet.member?(:estimate)
+      true
+
+      iex> ExDataSketch.MisraGries.capabilities() |> MapSet.member?(:no_such_operation)
+      false
+
+  """
+  @spec capabilities() :: ExDataSketch.Sketch.capabilities()
+  @dialyzer {:no_opaque, capabilities: 0}
+  def capabilities do
+    MapSet.new([
+      :new,
+      :update,
+      :update_many,
+      :merge,
+      :merge_many,
+      :count,
+      :estimate,
+      :serialize,
+      :deserialize
+    ])
   end
 
   # -- Private --

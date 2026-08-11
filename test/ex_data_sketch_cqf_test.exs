@@ -2,6 +2,8 @@ defmodule ExDataSketch.CQFTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  doctest ExDataSketch.CQF
+
   alias ExDataSketch.CQF
 
   # ============================================================
@@ -431,6 +433,18 @@ defmodule ExDataSketch.CQFTest do
       assert <<"EXSK", _rest::binary>> = binary
     end
 
+    test "a non-default :hash_strategy is honored at build time and survives round-trip" do
+      cqf =
+        CQF.new(q: 10, r: 8, hash_strategy: :murmur3)
+        |> CQF.put_many(~w(a b c))
+
+      assert cqf.opts[:hash_strategy] == :murmur3
+
+      {:ok, recovered} = CQF.deserialize(CQF.serialize(cqf))
+      assert recovered.opts[:hash_strategy] == :murmur3
+      assert Enum.all?(~w(a b c), &CQF.member?(recovered, &1))
+    end
+
     test "count preservation" do
       cqf = CQF.new(q: 10, r: 8) |> CQF.put_many(~w(a b c a b a))
       {:ok, recovered} = CQF.deserialize(CQF.serialize(cqf))
@@ -491,6 +505,8 @@ defmodule ExDataSketch.CQFTest do
         :new,
         :put,
         :put_many,
+        :update,
+        :update_many,
         :member?,
         :estimate_count,
         :delete,

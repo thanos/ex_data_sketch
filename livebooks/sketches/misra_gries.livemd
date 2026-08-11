@@ -1,0 +1,218 @@
+# MisraGries Tutorial
+
+```elixir
+Mix.install([
+  {:ex_data_sketch, "~> 0.10"}
+])
+```
+
+## Introduction
+
+`ExDataSketch.MisraGries` is another top-K heavy-hitter sketch, like
+`ExDataSketch.FrequentItems`, but a different algorithm with a different
+guarantee shape: Misra-Gries counters can *undercount* a tracked item by
+up to `n / (k + 1)` (where `n` is the total items seen), and it reports
+no per-item error bound the way SpaceSaving's `:lower`/`:upper` do --
+`estimate/2` is just a plain integer. What it guarantees instead is a
+classic result: any item whose true frequency exceeds `n / (k + 1)` is
+*guaranteed* to still be tracked when you query it.
+
+## Sample data (cached locally)
+
+```elixir
+cache_path = Path.join(System.tmp_dir!(), "ex_data_sketch_livebook_cache/misra_gries_sample.bin")
+
+queries =
+  if File.exists?(cache_path) do
+    IO.puts("Loading cached sample data from #{cache_path}")
+    cache_path |> File.read!() |> :erlang.binary_to_term()
+  else
+    IO.puts("Generating sample data (this takes a few seconds)...")
+
+    # Same shape as the FrequentItems tutorial's sample, so the two are
+    # directly comparable: 1,000,000 search queries over 5,000 distinct
+    # terms, power-law distributed.
+    queries =
+      for _ <- 1..1_000_000 do
+        rank = trunc(:math.pow(:rand.uniform(), 3) * 4_999) + 1
+        "query_#{rank}"
+      end
+
+    File.mkdir_p!(Path.dirname(cache_path))
+    File.write!(cache_path, :erlang.term_to_binary(queries))
+    queries
+  end
+
+true_counts = Enum.frequencies(queries)
+IO.puts("#{length(queries)} queries across #{map_size(true_counts)} distinct terms")
+```
+
+## Basic usage
+
+```elixir
+alias ExDataSketch.MisraGries
+
+sketch = MisraGries.new(k: 20) |> MisraGries.update_many(queries)
+
+MisraGries.top_k(sketch, 5)
+```
+
+`top_k/2` returns plain `{item, count}` tuples (no error bounds):
+
+```elixir
+for {item, count} <- MisraGries.top_k(sketch, 5) do
+  true_count = Map.get(true_counts, item, 0)
+  IO.puts("#{item}: MisraGries count=#{count}, true count=#{true_count}")
+end
+```
+
+Look closely at that output: past the single dominant query, the other
+entries often have `MisraGries count=1` and a true count nowhere near
+"top 5" -- for this sample's shape, `k=20` only clears the guarantee
+threshold (`n/(k+1)`) for the single most frequent item, so everything
+else in this list is essentially whichever low-count item most recently
+survived the decrement-all churn, not genuine rank order. This is
+expected behavior, not a bug -- see "Choosing k" below for why, and for
+a `k` that actually recovers the true top 5.
+
+## frequent/2: fraction-based threshold
+
+Unlike `FrequentItems.frequent/2` (an absolute count threshold),
+`MisraGries.frequent/2` takes a **fraction** of the total count seen so
+far:
+
+```elixir
+# Terms making up at least 0.1% of all queries.
+frequent = MisraGries.frequent(sketch, 0.001)
+IO.puts("#{length(frequent)} terms with a guaranteed frequency >= 0.1% of all queries")
+```
+
+## The undercount guarantee
+
+Every tracked item's `estimate/2` is at most its true count, and never
+off by more than `n / (k + 1)`. Verify both properties directly:
+
+```elixir
+n = MisraGries.count(sketch)
+k = 20
+max_undercount = div(n, k + 1)
+
+{top_item, _} = hd(true_counts |> Enum.sort_by(fn {_, c} -> -c end))
+estimate = MisraGries.estimate(sketch, top_item)
+true_count = Map.fetch!(true_counts, top_item)
+
+IO.puts("#{top_item}: estimate=#{estimate}, true=#{true_count}, max possible undercount=#{max_undercount}")
+IO.puts("estimate <= true_count: #{estimate <= true_count}")
+IO.puts("undercount within bound: #{true_count - estimate <= max_undercount}")
+```
+
+## MisraGries vs FrequentItems, side by side
+
+Same data, same `k` -- compare where each lands on the top few items.
+With a `k` this small relative to how spread out this sample's frequency
+is, expect them to **diverge** past the single guaranteed item, not
+agree: MisraGries's decrement-all evicts *every* counter on a miss,
+including genuinely frequent items that just happen to fall below the
+`n/(k+1)` guarantee threshold. FrequentItems' SpaceSaving only ever
+evicts the single *minimum* counter, so items that are frequent but
+unguaranteed tend to survive and entrench themselves in practice, even
+without a guarantee covering them. See `ExDataSketch.MisraGries`'s
+moduledoc ("Comparison with FrequentItems") for more on why:
+
+```elixir
+alias ExDataSketch.FrequentItems
+
+fi_sketch = FrequentItems.new(k: 20) |> FrequentItems.update_many(queries)
+
+mg_top_3 = MisraGries.top_k(sketch, 3) |> Enum.map(fn {item, _} -> item end)
+fi_top_3 = FrequentItems.top_k(fi_sketch) |> Enum.take(3) |> Enum.map(& &1.item)
+
+IO.puts("MisraGries top 3: #{inspect(mg_top_3)}")
+IO.puts("FrequentItems top 3: #{inspect(fi_top_3)}")
+```
+
+FrequentItems' top 3 should land much closer to the true top 3 (compare
+against `true_counts` yourself) than MisraGries' does at this `k` --
+that's the min-replacement-vs-decrement-all difference showing up
+directly, not noise.
+
+## Choosing k
+
+`k` is the only real lever over both accuracy and cost for this family --
+unlike most other `ExDataSketch` sketches, `MisraGries` has **no Rust NIF
+acceleration**: `ExDataSketch.Backend.Rust`'s `mg_*` functions are a thin
+pass-through to `ExDataSketch.Backend.Pure`, so there's no "just switch
+backend" escape hatch here.
+
+Measured on this tutorial's 1,000,000-event, 5,000-term sample:
+
+| k    | `update_many/2` time | Memory     | Entries tracked |
+|------|-----------------------|------------|------------------|
+| 20   | ~0.5s                 | 357 bytes  | 16               |
+| 100  | ~1.7s                 | 2,010 bytes| 94               |
+| 200  | ~1.5s                 | 4,075 bytes| 191              |
+| 1000 | ~1.9s                 | 20,728 bytes| 968             |
+| 5000 | ~1.9s                 | 108,893 bytes| 4,999          |
+
+Two things worth internalizing:
+
+- **Memory is cheap and predictable**: it scales with the number of
+  *retained* entries (bounded by `k`), at roughly 21-22 bytes/entry for
+  string keys like these. Even `k = 5000` (tracking every distinct term
+  in this sample) costs only ~109 KB.
+- **CPU cost is real but far gentler than it looks.** The decrement-all
+  step is `O(k)` per miss, so naively you'd expect `update_many/2` to
+  cost `O(n*k)` -- a 250x increase in `k` (20 -> 5000) should mean a
+  ~250x slowdown. It doesn't: it's only ~4x here, because larger `k`
+  also means more incoming items are already tracked (cheap O(1)
+  increment) instead of triggering a full decrement-all. This ratio is
+  workload-dependent -- a stream whose cardinality vastly exceeds `k`
+  (so nearly everything is a permanent miss) will scale closer to the
+  naive `O(n*k)` case.
+
+The practical sizing rule: pick `k` so `n/(k+1)` sits comfortably below
+the smallest true frequency you need reliably retained. `k = 200` here
+gives `n/(k+1) ~ 4,975`, comfortably below the true top 5's counts --
+watch it recover the exact true top 5 that `k = 20` couldn't:
+
+```elixir
+sketch_k200 = MisraGries.new(k: 200) |> MisraGries.update_many(queries)
+n200 = MisraGries.count(sketch_k200)
+IO.puts("n/(k+1) = #{div(n200, 201)}")
+
+for {item, count} <- MisraGries.top_k(sketch_k200, 5) do
+  true_count = Map.get(true_counts, item, 0)
+  IO.puts("#{item}: MisraGries count=#{count}, true count=#{true_count}")
+end
+```
+
+## Merging
+
+```elixir
+half = div(length(queries), 2)
+{first_half, second_half} = Enum.split(queries, half)
+
+worker_a = MisraGries.new(k: 20) |> MisraGries.update_many(first_half)
+worker_b = MisraGries.new(k: 20) |> MisraGries.update_many(second_half)
+
+merged = MisraGries.merge(worker_a, worker_b)
+MisraGries.top_k(merged, 3)
+```
+
+## Serialization
+
+```elixir
+binary = MisraGries.serialize(sketch)
+{:ok, restored} = MisraGries.deserialize(binary)
+IO.puts("Round-tripped top term: #{restored |> MisraGries.top_k(1) |> hd() |> elem(0)}")
+```
+
+## See also
+
+* `ExDataSketch.MisraGries` module documentation -- full API reference
+  and the algorithm's formal guarantee.
+* `ExDataSketch.FrequentItems` -- SpaceSaving, with per-item
+  `:lower`/`:upper` error bounds; see
+  `livebooks/sketches/frequent_items.livemd`.
+* `ExDataSketch.CMS` -- point-query frequency estimation; see
+  `livebooks/sketches/cms.livemd`.

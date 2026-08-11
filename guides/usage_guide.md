@@ -9,18 +9,19 @@ serialization formats, and error handling for ExDataSketch.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `:p` | integer | 14 | Precision parameter. Valid range: 4..16. Higher values use more memory but give better accuracy. Register count = 2^p. |
+| `:p` | integer | 14 | Precision parameter. Valid range: 4..26 (see `ExDataSketch.HLL`'s "Precision Range" moduledoc section for why). Higher values use more memory but give better accuracy. Register count = 2^p. |
 | `:backend` | module | `ExDataSketch.Backend.Pure` | Backend module for computation. |
 
-Memory usage: `2^p` bytes for registers (e.g., p=14 uses 16 KiB).
+Memory usage: `2^p` bytes for registers (e.g., p=14 uses 16 KiB, p=26 uses 64 MiB).
 
 Relative error: approximately `1.04 / sqrt(2^p)`.
 
 ### ULL Options
 
-UltraLogLog (Ertl, 2023) provides approximately 20% better accuracy than HLL
-at the same memory footprint. It uses the same register array layout but
-stores a different value per register and applies the FGRA estimator.
+UltraLogLog (Ertl, 2023) provides approximately 30% better accuracy than HLL
+at the same memory footprint. Each register byte stores a compressed 3-bit
+window of a per-bucket accumulator (geometric rank plus a 2-bit sub-bucket
+refinement, via a pack/unpack encoding) and applies the OptimalFGRAEstimator.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
@@ -29,16 +30,16 @@ stores a different value per register and applies the FGRA estimator.
 
 Memory usage: `8 + 2^p` bytes (e.g., p=14 uses ~16 KiB).
 
-Relative error: approximately `0.835 / sqrt(2^p)`.
+Relative error: approximately `0.70 / sqrt(2^p)`.
 
 #### HLL vs ULL Comparison
 
 | p  | Memory  | HLL Error | ULL Error | ULL Improvement |
 |----|---------|-----------|-----------|-----------------|
-| 10 | ~1 KiB  | 3.25%     | 2.61%     | ~20%            |
-| 12 | ~4 KiB  | 1.63%     | 1.30%     | ~20%            |
-| 14 | ~16 KiB | 0.81%     | 0.65%     | ~20%            |
-| 16 | ~64 KiB | 0.41%     | 0.33%     | ~20%            |
+| 10 | ~1 KiB  | 3.25%     | 2.17%     | ~33%            |
+| 12 | ~4 KiB  | 1.63%     | 1.09%     | ~33%            |
+| 14 | ~16 KiB | 0.81%     | 0.55%     | ~32%            |
+| 16 | ~64 KiB | 0.41%     | 0.27%     | ~34%            |
 
 ```elixir
 sketch = ExDataSketch.ULL.new(p: 14)
@@ -644,7 +645,7 @@ stability, use the NIF build (XXHash3) or supply a custom `:hash_fn`.
 | Multiset counting (how many times?) | CQF | `q: 16, r: 8` | Approximate per-item multiplicity |
 | Static set membership | XorFilter | `fingerprint_bits: 8` | Smallest footprint, fastest lookup |
 | Set reconciliation (what's different?) | IBLT | `cell_count: 1000` | Find symmetric difference between sets |
-| Improved cardinality estimation | ULL | `p: 14` | ~20% better accuracy than HLL at the same memory |
+| Improved cardinality estimation | ULL | `p: 14` | ~30% better accuracy than HLL at the same memory |
 
 ### HLL: Real-time unique visitor counting
 
@@ -1104,7 +1105,7 @@ end
 An ad-tech platform counts unique ad impressions per campaign across a cluster.
 Each node maintains a local ULL sketch, serializes it, and sends to a central
 aggregator that merges and reports campaign reach. ULL is chosen over HLL for
-its ~20% better accuracy at the same memory -- significant when reporting to
+its ~30% better accuracy at the same memory -- significant when reporting to
 advertisers who pay per unique impression.
 
 ```elixir

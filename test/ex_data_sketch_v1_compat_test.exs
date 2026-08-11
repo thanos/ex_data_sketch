@@ -18,7 +18,7 @@ defmodule ExDataSketch.V1CompatTest do
 
   use ExUnit.Case, async: true
 
-  alias ExDataSketch.{Binary, CMS, DDSketch, FrequentItems, HLL, KLL, Theta, ULL}
+  alias ExDataSketch.{Binary, CMS, DDSketch, FrequentItems, HLL, KLL, SketchFixtures, Theta, ULL}
 
   @v1_vectors_dir Path.join([__DIR__, "vectors_v1"])
 
@@ -55,12 +55,19 @@ defmodule ExDataSketch.V1CompatTest do
     end
   end
 
-  for algorithm <- ["hll", "cms", "theta", "kll", "ddsketch", "frequent_items", "ull"] do
+  # ULL is deliberately excluded here. Its v1 fixtures encode the pre-v0.10.2
+  # ULL1-state-version-1 register format (an HLL-derived approximation, not
+  # real UltraLogLog -- see CHANGELOG). That inner state format was replaced,
+  # not just wrapped in a new outer frame, so these historical binaries
+  # cannot be correctly reinterpreted; ULL.deserialize/1 must reject them
+  # with a clear error rather than silently misestimate. See the dedicated
+  # "ull v1-state rejection" describe block below.
+  for algorithm <- ["hll", "cms", "theta", "kll", "ddsketch", "frequent_items"] do
     describe "#{algorithm} v1 decode" do
       @algo algorithm
       @vec_dir Path.join(@v1_vectors_dir, algorithm)
 
-      if @algo in ["hll", "cms", "theta", "ull"] do
+      if @algo in ["hll", "cms", "theta"] do
         @tag :rust_nif
       end
 
@@ -80,9 +87,28 @@ defmodule ExDataSketch.V1CompatTest do
     end
   end
 
+  describe "ull v1-state rejection" do
+    @tag :rust_nif
+    test "pre-v0.10.2 ULL1-state-version-1 fixtures are rejected with a clear error, not misestimated" do
+      vec_dir = Path.join(@v1_vectors_dir, "ull")
+      files = File.ls!(vec_dir) |> Enum.filter(&String.ends_with?(&1, ".json"))
+      assert files != [], "no v1 fixtures for ull"
+
+      for filename <- files do
+        json = vec_dir |> Path.join(filename) |> File.read!() |> Jason.decode!()
+        bin = Base.decode64!(json["expected"]["canonical_exsk_base64"])
+
+        assert {:error, %ExDataSketch.Errors.DeserializationError{message: message}} =
+                 ULL.deserialize(bin)
+
+        assert message =~ "unsupported ULL state version 1, expected 2",
+               "expected a clear version-rejection error for #{filename}, got: #{message}"
+      end
+    end
+  end
+
   describe "v1 → v2 upgrade path" do
     test "a v1-decoded sketch re-serializes as v2 and decodes again" do
-      # Read a v1 HLL binary, deserialize, re-serialize, decode again.
       json =
         @v1_vectors_dir
         |> Path.join("hll/empty.json")
@@ -97,6 +123,58 @@ defmodule ExDataSketch.V1CompatTest do
 
       assert {:ok, sketch2} = HLL.deserialize(v2_bin)
       assert sketch2.state == sketch.state
+    end
+  end
+
+  # Generalized across every Codec-backed family (all 15 -- everything
+  # except FilterChain, which has its own bespoke FCN1 container format
+  # with no per-family format option, see ExDataSketch.FilterChain's
+  # moduledoc "Binary Format (FCN1)" section).
+  for {family, %{module: mod, sketch_id: sketch_id, hashed?: hashed?} = spec} <-
+        SketchFixtures.families() do
+    describe "#{family} v1 serialize escape hatch" do
+      @family family
+      @mod mod
+      @sketch_id sketch_id
+      @hashed hashed?
+      @retains_hash_strategy Map.get(spec, :retains_hash_strategy?, false)
+
+      test "produces a v1 binary with the correct magic/version/sketch-id bytes" do
+        extra_args = if @hashed, do: [hash_strategy: :phash2], else: []
+        sketch = SketchFixtures.build(@family, nil, extra_args)
+        v1_bin = @mod.serialize(sketch, format: :v1)
+
+        assert <<"EXSK", 1, sketch_id_byte, _rest::binary>> = v1_bin
+        assert sketch_id_byte == @sketch_id
+      end
+
+      test "v2 remains the default format" do
+        sketch = SketchFixtures.build(@family)
+        v2_bin = @mod.serialize(sketch)
+        assert <<"EXSK", 2, _rest::binary>> = v2_bin
+      end
+
+      test "v1 serialized sketch round-trips through deserialize with identical state" do
+        extra_args = if @hashed, do: [hash_strategy: :phash2], else: []
+        sketch = SketchFixtures.build(@family, nil, extra_args)
+        v1_bin = @mod.serialize(sketch, format: :v1)
+
+        assert {:ok, decoded} = @mod.deserialize(v1_bin)
+        assert decoded.state == sketch.state
+      end
+
+      if @retains_hash_strategy do
+        test "raises for non-phash2 hash strategy" do
+          # :murmur3, not :xxhash3 -- the latter requires the Rust NIF and
+          # would raise during construction itself on NIF-less CI legs,
+          # before ever reaching the assertion this test is actually for.
+          sketch = SketchFixtures.build(@family, nil, hash_strategy: :murmur3)
+
+          assert_raise ArgumentError, ~r/v1 serialization requires :phash2/, fn ->
+            @mod.serialize(sketch, format: :v1)
+          end
+        end
+      end
     end
   end
 end

@@ -1,0 +1,146 @@
+# CQF (Counting Quotient Filter) Tutorial
+
+```elixir
+Mix.install([
+  {:ex_data_sketch, "~> 0.10"}
+])
+```
+
+## Introduction
+
+`ExDataSketch.CQF` is `ExDataSketch.Quotient`'s data structure extended
+to track **multiplicity** -- how many times each item was inserted, not
+just whether it was inserted at all. It's a multiset membership filter:
+`member?/2` for presence, `estimate_count/2` for (an over-estimate of,
+never under) how many times, `delete/2` to decrement.
+
+## Sample data (cached locally)
+
+```elixir
+cache_path = Path.join(System.tmp_dir!(), "ex_data_sketch_livebook_cache/cqf_sample.bin")
+
+events =
+  if File.exists?(cache_path) do
+    IO.puts("Loading cached sample data from #{cache_path}")
+    cache_path |> File.read!() |> :erlang.binary_to_term()
+  else
+    IO.puts("Generating sample data (this takes a few seconds)...")
+
+    # 1,000,000 rate-limit-check events over 50,000 distinct API keys,
+    # skewed (some keys are far more active than others).
+    events =
+      for _ <- 1..1_000_000 do
+        rank = trunc(:math.pow(:rand.uniform(), 2) * 49_999) + 1
+        "api_key_#{rank}"
+      end
+
+    File.mkdir_p!(Path.dirname(cache_path))
+    File.write!(cache_path, :erlang.term_to_binary(events))
+    events
+  end
+
+true_counts = Enum.frequencies(events)
+IO.puts("#{length(events)} events across #{map_size(true_counts)} distinct keys")
+```
+
+## Basic usage
+
+```elixir
+alias ExDataSketch.CQF
+
+cqf = CQF.new(q: 18, r: 8) |> CQF.put("x") |> CQF.put("x") |> CQF.put("x")
+CQF.estimate_count(cqf, "x")
+```
+
+`put_many/2` for a batch:
+
+```elixir
+sketch = CQF.new(q: 18, r: 8) |> CQF.put_many(events)
+
+{busiest_key, true_count} = Enum.max_by(true_counts, fn {_, c} -> c end)
+estimate = CQF.estimate_count(sketch, busiest_key)
+
+IO.puts("#{busiest_key}: true count=#{true_count}, CQF estimate=#{estimate}")
+IO.puts("Sketch size: #{CQF.size_bytes(sketch)} bytes")
+```
+
+## member? vs estimate_count
+
+`member?/2` is the cheap yes/no question; `estimate_count/2` is the more
+detailed (and slightly more expensive) "how many":
+
+```elixir
+IO.puts("member?: #{CQF.member?(sketch, busiest_key)}")
+IO.puts("estimate_count: #{CQF.estimate_count(sketch, busiest_key)}")
+IO.puts("member? for a truly novel key: #{CQF.member?(sketch, "never_seen_key")}")
+```
+
+## Accuracy: overestimate-only, like CMS
+
+Same guarantee shape as `ExDataSketch.CMS` -- collisions can only add
+extra weight, never remove it:
+
+```elixir
+sample_keys = true_counts |> Map.keys() |> Enum.take_random(20)
+
+results =
+  for key <- sample_keys do
+    true_c = Map.fetch!(true_counts, key)
+    est = CQF.estimate_count(sketch, key)
+    {key, true_c, est, est - true_c}
+  end
+
+never_undercounts? = Enum.all?(results, fn {_, _, _, diff} -> diff >= 0 end)
+IO.puts("Every sampled estimate >= true count: #{never_undercounts?}")
+```
+
+## Deletion
+
+```elixir
+f = CQF.new(q: 10, r: 8) |> CQF.put("x") |> CQF.put("x")
+IO.puts("Count before delete: #{CQF.estimate_count(f, "x")}")
+
+f = CQF.delete(f, "x")
+IO.puts("Count after one delete: #{CQF.estimate_count(f, "x")}")
+```
+
+## Sizing: r controls per-item collision rate
+
+```elixir
+for r <- [4, 8, 12] do
+  s = CQF.new(q: 18, r: r) |> CQF.put_many(events)
+  est = CQF.estimate_count(s, busiest_key)
+  IO.puts("r=#{r} (#{CQF.size_bytes(s)} bytes): #{busiest_key} estimate=#{est} (true: #{true_count})")
+end
+```
+
+## Merging
+
+```elixir
+half = div(length(events), 2)
+{first_half, second_half} = Enum.split(events, half)
+
+worker_a = CQF.new(q: 18, r: 8) |> CQF.put_many(first_half)
+worker_b = CQF.new(q: 18, r: 8) |> CQF.put_many(second_half)
+
+merged = CQF.merge(worker_a, worker_b)
+IO.puts("Merged estimate for #{busiest_key}: #{CQF.estimate_count(merged, busiest_key)}")
+```
+
+## Serialization
+
+```elixir
+binary = CQF.serialize(sketch)
+{:ok, restored} = CQF.deserialize(binary)
+IO.puts("Round-tripped count: #{CQF.estimate_count(restored, busiest_key)}")
+```
+
+## See also
+
+- `ExDataSketch.CQF` module documentation -- full API reference.
+- `ExDataSketch.Quotient` -- the same underlying structure without
+  counting, if you only need presence; see
+  `livebooks/sketches/quotient.livemd`.
+- `ExDataSketch.CMS` -- frequency estimation without the membership-filter
+  framing (no `:full` state, no deletion); see
+  `livebooks/sketches/cms.livemd`.

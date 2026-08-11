@@ -1,0 +1,207 @@
+# CMS (Count-Min Sketch) Tutorial
+
+```elixir
+Mix.install([
+  {:ex_data_sketch, "~> 0.10"}
+])
+```
+
+## Introduction
+
+`ExDataSketch.CMS` estimates *how many times* each item has occurred in a
+stream -- "how many requests hit this endpoint," "how many times was this
+error logged" -- in fixed memory, without storing a counter per distinct
+item. CMS estimates are always **over-estimates, never under** (hash
+collisions can only add extra weight to a counter, never subtract), and
+the amount of over-estimation shrinks as `width`/`depth` grow.
+
+## Sample data (cached locally)
+
+```elixir
+cache_path = Path.join(System.tmp_dir!(), "ex_data_sketch_livebook_cache/cms_sample.bin")
+
+events =
+  if File.exists?(cache_path) do
+    IO.puts("Loading cached sample data from #{cache_path}")
+    cache_path |> File.read!() |> :erlang.binary_to_term()
+  else
+    IO.puts("Generating sample data (this takes a few seconds)...")
+
+    # 2,000,000 page-view events over 10,000 distinct pages, power-law
+    # distributed (a few pages get most of the traffic, a long tail gets
+    # almost none) -- realistic for request/error/page-view frequency data,
+    # and the skew is exactly what makes frequency estimation interesting.
+    events =
+      for _ <- 1..2_000_000 do
+        rank = trunc(:math.pow(:rand.uniform(), 2) * 9_999) + 1
+        "page_#{rank}"
+      end
+
+    File.mkdir_p!(Path.dirname(cache_path))
+    File.write!(cache_path, :erlang.term_to_binary(events))
+    events
+  end
+
+true_counts = Enum.frequencies(events)
+IO.puts("#{length(events)} events across #{map_size(true_counts)} distinct pages")
+```
+
+## Basic usage
+
+```elixir
+alias ExDataSketch.CMS
+
+sketch = CMS.new() |> CMS.update("page_1") |> CMS.update("page_1") |> CMS.update("page_2")
+CMS.estimate(sketch, "page_1")
+```
+
+`update/3` also accepts an explicit increment (useful when you're
+replaying pre-aggregated counts rather than raw events):
+
+```elixir
+CMS.new() |> CMS.update("page_1", 5) |> CMS.estimate("page_1")
+```
+
+For a batch like our sample data, `update_many/2` is far more efficient
+than calling `update/2` in a loop -- but the backend matters far more
+than the batching does. `ExDataSketch.CMS.new/1` defaults to the Pure
+Elixir backend *regardless of whether the Rust NIF is installed* -- you
+always have to opt in explicitly with `backend: ExDataSketch.Backend.Rust`.
+Measured on this tutorial's hardware, `update_many/2` over 500,000 events
+(`width: 2048, depth: 5`) took **26.7s on Pure** vs **39ms on the Rust
+NIF backend -- a ~679x speedup**. Every `CMS.new/1` call below passes
+`backend: ExDataSketch.Backend.Rust` for exactly this reason; drop it (or
+fall back to Pure when `ExDataSketch.Backend.Rust.available?/0` is
+`false`, e.g. no precompiled NIF for your platform) and these cells will
+still work, just dramatically slower on the full 2,000,000-event sample.
+
+```elixir
+
+
+[{top_page, top_true_count} | _] = Enum.sort_by(true_counts, fn {_, c} -> -c end)
+IO.puts("#{top_page}: true count=#{top_true_count}")
+
+```
+
+```elixir
+sketch = CMS.new(backend: ExDataSketch.Backend.Rust, width: 2048, depth: 5) |> CMS.update_many(events)
+estimate = CMS.estimate(sketch, top_page)
+
+IO.puts("CMS estimate=#{estimate}")
+IO.puts("Sketch size: #{CMS.size_bytes(sketch)} bytes (fixed, regardless of distinct pages)")
+```
+
+## Accuracy: over-estimation only, and where it shows up
+
+CMS never under-counts. Check every distinct page and confirm the
+estimate is always `>=` the true count, and see where the error actually
+lands (the least-popular pages, which get squeezed by hash collisions
+with the many popular ones sharing the same `width x depth` grid):
+
+```elixir
+results =
+  for {page, true_count} <- true_counts do
+    estimate = CMS.estimate(sketch, page)
+    {page, true_count, estimate, estimate - true_count}
+  end
+
+never_undercounts? = Enum.all?(results, fn {_, _, _, diff} -> diff >= 0 end)
+IO.puts("Every estimate >= true count: #{never_undercounts?}")
+
+worst = Enum.max_by(results, fn {_, _, _, diff} -> diff end)
+IO.puts("Worst over-estimate: #{inspect(worst)}")
+
+avg_error =
+  results |> Enum.map(fn {_, true_c, est, _} -> (est - true_c) / max(true_c, 1) end) |> Enum.sum()
+avg_error = avg_error / map_size(true_counts) * 100
+IO.puts("Average relative over-estimate: #{Float.round(avg_error, 2)}%")
+```
+
+Both numbers can look alarming at first glance -- a worst-case estimate in
+the tens of thousands for a page with a true count in the hundreds, and
+an average relative error well over 100%. Neither indicates a bug: the
+*worst* result is the extreme of ~10,000 independent queries, each with
+an independent `~e^-depth` chance of exceeding the typical error bound,
+so finding one outlier among that many is expected, not anomalous. And
+the *average* is dominated by tail pages whose true count is tiny (1-50):
+a few hundred counts of fixed hash-collision noise (`~total_events /
+width` per row) is negligible against `page_1`'s true count of 20,207,
+but enormous as a *percentage* of a true count of 5. The "Sizing" section
+below shows this shrinking directly as `width`/`depth` grow.
+
+## Sizing: width/depth trade-off
+
+`width` controls per-row collision rate, `depth` controls how many
+independent rows vote (taking the *minimum* across rows is what caps the
+over-estimation) -- more of either means more memory and less error.
+
+Each `{width, depth}` combination independently rebuilds a sketch from
+all 2,000,000 events. Each build already uses the Rust backend (see the
+note in "Basic usage" -- that's the ~679x speedup that makes rebuilding
+from scratch three times even feasible in a tutorial); `Task.async/1`
+runs the three builds concurrently on top of that for a further, smaller
+win:
+
+```elixir
+{top_page, top_true} = Enum.max_by(true_counts, fn {_, c} -> c end)
+
+tasks =
+  for {width, depth} <- [{256, 3}, {1024, 5}, {4096, 7}] do
+    Task.async(fn ->
+      s = CMS.new(backend: ExDataSketch.Backend.Rust, width: width, depth: depth) |> CMS.update_many(events)
+      {width, depth, CMS.size_bytes(s), CMS.estimate(s, top_page)}
+    end)
+  end
+
+for {width, depth, size_bytes, est} <- Task.await_many(tasks, :infinity) do
+  IO.puts(
+    "width=#{width}, depth=#{depth} (#{size_bytes} bytes): " <>
+      "top page true=#{top_true}, estimate=#{est}"
+  )
+end
+```
+
+## Merging
+
+Simulating two independent workers means two independent
+`update_many/2` calls, each over a million events -- exactly the kind of
+work `Task.async/1` is for:
+
+```elixir
+half = div(length(events), 2)
+{first_half, second_half} = Enum.split(events, half)
+
+[worker_a, worker_b] =
+  [first_half, second_half]
+  |> Enum.map(fn chunk ->
+    Task.async(fn -> CMS.new(backend: ExDataSketch.Backend.Rust, width: 2048, depth: 7) |> CMS.update_many(chunk) end)
+  end)
+  |> Task.await_many(:infinity)
+
+merged = CMS.merge(worker_a, worker_b)
+{top_page, top_true} = Enum.max_by(true_counts, fn {_, c} -> c end)
+IO.puts("Merged estimate for #{top_page}: #{CMS.estimate(merged, top_page)} (true: #{top_true})")
+```
+
+## Serialization
+
+```elixir
+binary = CMS.serialize(sketch)
+{:ok, restored} = CMS.deserialize(binary)
+IO.puts("Round-tripped estimate: #{CMS.estimate(restored, top_page)}")
+```
+
+## When CMS isn't the right tool
+
+CMS answers "what's the count for *this specific* item?" -- it has no way
+to tell you *which* items are the heavy hitters without probing every
+candidate individually. If you need "give me the top-K items," use
+`ExDataSketch.FrequentItems` or `ExDataSketch.MisraGries` instead -- see
+`livebooks/sketches/frequent_items.livemd` and
+`livebooks/sketches/misra_gries.livemd`.
+
+## See also
+
+* `ExDataSketch.CMS` module documentation -- full API reference.
+* `guides/apache_interop.md` -- CMS is one of the families with Apache
+  DataSketches binary interop (`serialize_datasketches/1`).

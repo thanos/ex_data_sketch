@@ -1,0 +1,226 @@
+# KLL Sketch Tutorial
+
+```elixir
+Mix.install([
+  {:ex_data_sketch, "~> 0.10"}
+])
+```
+
+## Introduction
+
+`ExDataSketch.KLL` estimates **quantiles** (median, p90, p99, ...) and
+**ranks** over a numeric stream -- "what's the p99 request latency," "what
+fraction of orders were under $50" -- in fixed memory, without storing
+every value. KLL (Karnin-Lang-Liberty) gives uniform relative accuracy
+across the whole distribution, controlled by a single parameter `k`.
+
+## Sample data (cached locally)
+
+```elixir
+cache_path = Path.join(System.tmp_dir!(), "ex_data_sketch_livebook_cache/kll_sample.bin")
+
+latencies =
+  if File.exists?(cache_path) do
+    IO.puts("Loading cached sample data from #{cache_path}")
+    cache_path |> File.read!() |> :erlang.binary_to_term()
+  else
+    IO.puts("Generating sample data (this takes a few seconds)...")
+
+    # 1,000,000 simulated request latencies (ms): mostly fast, with a
+    # realistic long tail -- like real production latency distributions.
+    latencies =
+      for _ <- 1..1_000_000 do
+        base = :rand.uniform() * :rand.uniform() * 200
+        if :rand.uniform(100) == 1, do: base + :rand.uniform(2000), else: base
+      end
+
+    File.mkdir_p!(Path.dirname(cache_path))
+    File.write!(cache_path, :erlang.term_to_binary(latencies))
+    latencies
+  end
+
+sorted = Enum.sort(latencies)
+IO.puts("#{length(latencies)} latency samples ready")
+```
+
+## Basic usage
+
+Every cell below that reports a KLL-estimated value also computes the
+*exact* value directly from the fully-sorted sample and prints both side
+by side -- that's what actually shows you whether the sketch is working,
+not just what it outputs in isolation:
+
+```elixir
+exact_percentile = fn p ->
+  idx = min(round(p * length(sorted)), length(sorted) - 1)
+  Enum.at(sorted, idx)
+end
+
+exact_rank = fn value ->
+  Enum.count(sorted, &(&1 <= value)) / length(sorted)
+end
+
+:ok
+```
+
+```elixir
+alias ExDataSketch.KLL
+
+sketch = KLL.new(k: 200) |> KLL.update_many(latencies)
+
+for p <- [0.50, 0.90, 0.99] do
+  exact = exact_percentile.(p)
+  estimate = KLL.quantile(sketch, p)
+  IO.puts("p#{round(p * 100)}: exact=#{Float.round(exact, 1)}ms, KLL=#{Float.round(estimate, 1)}ms")
+end
+
+IO.puts("Sketch size: #{KLL.size_bytes(sketch)} bytes for #{length(latencies)} samples")
+```
+
+Notice p99 can be *much* further off than p50/p90 -- this sample deliberately
+has a 1-in-100 chance per event of adding a large tail boost, which creates
+a sharp jump in the sorted data right around the 99th percentile. See
+"Accuracy against the true (sorted) data" below for why that specifically
+(not a bug) causes larger error there than elsewhere.
+
+`quantiles/2` computes several at once more efficiently than repeated
+`quantile/2` calls:
+
+```elixir
+ps = [0.5, 0.9, 0.95, 0.99, 0.999]
+estimates = KLL.quantiles(sketch, ps)
+
+for {p, estimate} <- Enum.zip(ps, estimates) do
+  exact = exact_percentile.(p)
+  IO.puts("p#{Float.round(p * 100, 1)}: exact=#{Float.round(exact, 1)}ms, KLL=#{Float.round(estimate, 1)}ms")
+end
+```
+
+## Accuracy against the true (sorted) data
+
+The same exact-vs-KLL comparison as above, but explicit about the error
+in each direction (KLL can land on either side of the true value -- it
+has no one-sided bias the way CMS or MisraGries do):
+
+```elixir
+for p <- [0.5, 0.9, 0.99] do
+  exact = exact_percentile.(p)
+  estimate = KLL.quantile(sketch, p)
+  error_pct = (estimate - exact) / exact * 100
+  IO.puts(
+    "p#{round(p * 100)}: exact=#{Float.round(exact, 1)}ms, KLL=#{Float.round(estimate, 1)}ms, " <>
+      "error=#{Float.round(error_pct, 2)}%"
+  )
+end
+```
+
+p99's error here can be dramatically larger than p50/p90's -- possibly
+hundreds of percent, and it won't shrink monotonically as `k` grows (see
+"Sizing" below). That's expected, not a bug: KLL's accuracy guarantee
+bounds *rank* error (how far off the estimated position in sorted order
+is), not *value* error. Those track each other almost everywhere, but
+diverge sharply at a distributional cliff -- and this sample has a
+deliberate one, right at p99: 99% of events are a "base" latency in
+roughly 0-200ms, and the remaining 1% get a large tail boost added (up
+to +2000ms), so the true value can jump by hundreds of milliseconds over
+a rank shift of a few hundred items out of a million. A well-within-bound
+rank error can land the estimate on the wrong side of that jump. This is
+inherent to every rank-approximate quantile sketch (KLL, t-digest, GK,
+...), not specific to this implementation -- see `ExDataSketch.KLL`'s
+moduledoc for more.
+
+## rank/2: the inverse of quantile/2
+
+`quantile/2` answers "what value is at rank R"; `rank/2` answers "what
+rank is this value at" -- useful for "what fraction of requests were
+under 100ms". `exact_rank/1` (defined above) computes the same thing by
+directly counting the sorted sample:
+
+```elixir
+exact = exact_rank.(100.0)
+estimate = KLL.rank(sketch, 100.0)
+
+IO.puts("Under 100ms -- exact=#{Float.round(exact * 100, 2)}%, KLL=#{Float.round(estimate * 100, 2)}%")
+```
+
+## count, min, max
+
+Unlike `quantile/2` and `rank/2`, these three are tracked exactly by
+KLL -- no estimation involved, so exact and KLL always match:
+
+```elixir
+IO.puts("Count -- exact=#{length(latencies)}, KLL=#{KLL.count(sketch)}")
+IO.puts("Min -- exact=#{Float.round(Enum.min(latencies), 2)}ms, KLL=#{Float.round(KLL.min_value(sketch), 2)}ms")
+IO.puts("Max -- exact=#{Float.round(Enum.max(latencies), 2)}ms, KLL=#{Float.round(KLL.max_value(sketch), 2)}ms")
+```
+
+## Sizing: k trade-off
+
+`k` trades memory for accuracy uniformly across the whole distribution
+(not just the median) -- this is KLL's headline feature versus a naive
+reservoir sample:
+
+```elixir
+exact_p99 = exact_percentile.(0.99)
+
+for k <- [50, 200, 800] do
+  s = KLL.new(k: k) |> KLL.update_many(latencies)
+  estimate = KLL.quantile(s, 0.99)
+  error_pct = abs(estimate - exact_p99) / exact_p99 * 100
+
+  IO.puts(
+    "k=#{k} (#{KLL.size_bytes(s)} bytes): exact=#{Float.round(exact_p99, 1)}ms, " <>
+      "KLL=#{Float.round(estimate, 1)}ms, error=#{Float.round(error_pct, 1)}%"
+  )
+end
+```
+
+Don't be surprised if `k=200`'s error here is *worse* than both `k=50`'s
+and `k=800`'s -- error at a genuine density cliff (see "Accuracy" above)
+isn't a smooth, monotonically-decreasing function of `k` the way it is
+everywhere else in the distribution; which specific samples survive
+compaction right around the cliff depends on `k` in a way that doesn't
+resolve into a clean trend. Query a percentile *away* from the cliff
+(e.g. `0.5` or `0.9`) and the expected smooth improvement with `k`
+reappears reliably -- try it.
+
+## Merging
+
+```elixir
+half = div(length(latencies), 2)
+{first_half, second_half} = Enum.split(latencies, half)
+
+worker_a = KLL.new(k: 200) |> KLL.update_many(first_half)
+worker_b = KLL.new(k: 200) |> KLL.update_many(second_half)
+
+merged = KLL.merge(worker_a, worker_b)
+exact = exact_percentile.(0.99)
+estimate = KLL.quantile(merged, 0.99)
+IO.puts("Merged p99 -- exact=#{Float.round(exact, 1)}ms, KLL=#{Float.round(estimate, 1)}ms")
+```
+
+## Serialization (and Apache DataSketches interop)
+
+```elixir
+binary = KLL.serialize(sketch)
+{:ok, restored} = KLL.deserialize(binary)
+exact = exact_percentile.(0.5)
+estimate = KLL.quantile(restored, 0.5)
+IO.puts("Round-tripped p50 -- exact=#{Float.round(exact, 1)}ms, KLL=#{Float.round(estimate, 1)}ms")
+```
+
+KLL also has full binary interop with the Apache DataSketches Java/C++/
+Python implementations (`serialize_datasketches/2`,
+`deserialize_datasketches/2`) -- see `guides/apache_interop.md`.
+
+## See also
+
+* `ExDataSketch.KLL` module documentation -- full API reference,
+  including `cdf/2` and `pmf/2`.
+* `ExDataSketch.DDSketch` -- a quantile sketch tuned for accuracy that
+  scales with the *value* rather than the rank; see
+  `livebooks/sketches/ddsketch.livemd`.
+* `ExDataSketch.REQ` -- a quantile sketch tuned for extra accuracy at the
+  extreme tails (p99.9+); see `livebooks/sketches/req.livemd`.
+* `ExDataSketch.Quantiles` -- a facade that lets you pick the underlying
+  quantile family by config instead of hardcoding one.

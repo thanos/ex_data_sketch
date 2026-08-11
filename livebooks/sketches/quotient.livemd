@@ -1,0 +1,122 @@
+# Quotient Filter Tutorial
+
+```elixir
+Mix.install([
+  {:ex_data_sketch, "~> 0.10"}
+])
+```
+
+## Introduction
+
+`ExDataSketch.Quotient` is a membership filter with both of the things
+`ExDataSketch.Cuckoo` trades off against each other: **safe deletion**
+(deleting a non-inserted item is guaranteed to be a no-op, never
+introducing a false negative for something else) *and* `merge/2`. The
+trade is sizing: capacity is set via `:q`/`:r` bit widths (`2^q` slots)
+rather than a plain item count, and false-positive rate is a function of
+`:r` alone.
+
+## Sample data (cached locally)
+
+```elixir
+cache_path = Path.join(System.tmp_dir!(), "ex_data_sketch_livebook_cache/quotient_sample.bin")
+
+{inserted, novel} =
+  if File.exists?(cache_path) do
+    IO.puts("Loading cached sample data from #{cache_path}")
+    cache_path |> File.read!() |> :erlang.binary_to_term()
+  else
+    IO.puts("Generating sample data (this takes a few seconds)...")
+    inserted = for i <- 1..300_000, do: "api_key_#{i}"
+    novel = for i <- 300_001..600_000, do: "api_key_#{i}"
+    File.mkdir_p!(Path.dirname(cache_path))
+    File.write!(cache_path, :erlang.term_to_binary({inserted, novel}))
+    {inserted, novel}
+  end
+
+IO.puts("#{length(inserted)} inserted keys, #{length(novel)} novel keys")
+```
+
+## Basic usage
+
+`:q` picks the slot count (`2^q`) -- `q: 19` gives 524,288 slots, enough
+headroom for 300,000 items without excessive load:
+
+```elixir
+alias ExDataSketch.Quotient
+
+filter = Quotient.new(q: 19, r: 8) |> Quotient.put_many(inserted)
+
+Quotient.member?(filter, hd(inserted))
+```
+
+## Safe deletion
+
+```elixir
+f = Quotient.new(q: 10, r: 8) |> Quotient.put("real_item")
+
+# Deleting something never inserted is a safe no-op -- it does not
+# disturb "real_item", unlike a naive Cuckoo-style eviction could.
+f = Quotient.delete(f, "never_inserted")
+
+IO.puts("real_item still present: #{Quotient.member?(f, "real_item")}")
+```
+
+## No false negatives, measured false-positive rate
+
+```elixir
+false_positives = Enum.count(novel, &Quotient.member?(filter, &1))
+observed_fpr = false_positives / length(novel)
+IO.puts("False positives: #{false_positives} / #{length(novel)} (#{Float.round(observed_fpr * 100, 4)}%)")
+```
+
+## Sizing: r controls false-positive rate
+
+```elixir
+for r <- [4, 8, 12] do
+  f = Quotient.new(q: 19, r: r) |> Quotient.put_many(inserted)
+  observed = Enum.count(Enum.take(novel, 50_000), &Quotient.member?(f, &1)) / 50_000
+  IO.puts("r=#{r} (#{Quotient.size_bytes(f)} bytes): observed FPR=#{Float.round(observed * 100, 4)}%")
+end
+```
+
+| r bits | Theoretical FPR |
+|---|---|
+| 4  | ~6.25%   |
+| 8  | ~0.39%   |
+| 12 | ~0.024%  |
+| 16 | ~0.0015% |
+
+## Merging
+
+Both filters must share identical `q`, `r`, and `seed`:
+
+```elixir
+half = div(length(inserted), 2)
+{first_half, second_half} = Enum.split(inserted, half)
+
+worker_a = Quotient.new(q: 19, r: 8) |> Quotient.put_many(first_half)
+worker_b = Quotient.new(q: 19, r: 8) |> Quotient.put_many(second_half)
+
+merged = Quotient.merge(worker_a, worker_b)
+IO.puts("Merged contains first-half item: #{Quotient.member?(merged, hd(first_half))}")
+IO.puts("Merged contains second-half item: #{Quotient.member?(merged, hd(second_half))}")
+```
+
+## Serialization
+
+```elixir
+binary = Quotient.serialize(filter)
+{:ok, restored} = Quotient.deserialize(binary)
+IO.puts("Round-tripped membership check: #{Quotient.member?(restored, hd(inserted))}")
+```
+
+## See also
+
+- `ExDataSketch.Quotient` module documentation -- full API reference and
+  the QOT1 binary layout.
+- `ExDataSketch.Cuckoo` -- also supports deletion but not merge, and
+  sizes by item capacity rather than bit widths; see
+  `livebooks/sketches/cuckoo.livemd`.
+- `ExDataSketch.CQF` -- the same quotient-filter data structure extended
+  with approximate per-item counting; see `livebooks/sketches/cqf.livemd`.

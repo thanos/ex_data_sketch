@@ -130,9 +130,10 @@ non-goals):
 - No sparse/dense layout redesign.
 - No ARM-specific tuning.
 - No raw-NIF migration for membership filters (Bloom/Cuckoo/Quotient/
-  CQF/XorFilter/IBLT) — those already cross the NIF boundary with
-  pre-hashed integers via `put_many` and would need a separate design
-  pass.
+  CQF/XorFilter/IBLT) — those crossed the NIF boundary with pre-hashed
+  integers via `put_many` at the time this document was written, and
+  needed a separate design pass. That pass shipped in v0.10.0 Phase 6 —
+  see `guides/filter_performance.md`.
 
 ## Scheduler safety
 

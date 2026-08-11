@@ -2,6 +2,8 @@ defmodule ExDataSketch.CuckooTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  doctest ExDataSketch.Cuckoo
+
   alias ExDataSketch.Cuckoo
 
   # Deterministic test data
@@ -131,6 +133,14 @@ defmodule ExDataSketch.CuckooTest do
       cuckoo = Cuckoo.put!(cuckoo, "hello")
       assert Cuckoo.member?(cuckoo, "hello")
     end
+
+    test "raises FilterFullError, not a bare RuntimeError, when full" do
+      cuckoo = Cuckoo.new(capacity: 4)
+
+      assert_raise ExDataSketch.Errors.FilterFullError, ~r/Cuckoo filter is full/, fn ->
+        Enum.reduce(1..10_000, cuckoo, fn i, c -> Cuckoo.put!(c, "item_#{i}") end)
+      end
+    end
   end
 
   describe "put_many/2" do
@@ -216,6 +226,17 @@ defmodule ExDataSketch.CuckooTest do
     test "truncated binary returns error" do
       assert {:error, _} = Cuckoo.deserialize(<<1, 2>>)
     end
+
+    test "a non-default :hash_strategy is honored at build time and survives round-trip" do
+      {:ok, cuckoo} =
+        Cuckoo.new(capacity: 1000, hash_strategy: :murmur3) |> Cuckoo.put_many(@items_100)
+
+      assert cuckoo.opts[:hash_strategy] == :murmur3
+
+      {:ok, recovered} = Cuckoo.deserialize(Cuckoo.serialize(cuckoo))
+      assert recovered.opts[:hash_strategy] == :murmur3
+      assert Enum.all?(@items_100, &Cuckoo.member?(recovered, &1))
+    end
   end
 
   describe "compatible_with?/2" do
@@ -249,6 +270,8 @@ defmodule ExDataSketch.CuckooTest do
     test "includes expected capabilities" do
       caps = Cuckoo.capabilities()
       assert :put in caps
+      assert :update in caps
+      assert :update_many in caps
       assert :delete in caps
       assert :member? in caps
       assert :count in caps

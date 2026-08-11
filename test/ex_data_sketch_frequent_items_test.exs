@@ -1,6 +1,8 @@
 defmodule ExDataSketch.FrequentItemsTest do
   use ExUnit.Case, async: true
 
+  doctest ExDataSketch.FrequentItems
+
   alias ExDataSketch.FrequentItems
 
   # Deterministic dataset: "a"x100 + "b"x60 + "c"x30 + "d"x10 + "u1".."u50" each once = 250

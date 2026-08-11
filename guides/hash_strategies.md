@@ -1,4 +1,4 @@
-# Hash Infrastructure — Phase 1 of v0.8.0
+# Hash Strategy Internals
 
 This document explains the deterministic hashing infrastructure introduced
 in `ex_data_sketch` v0.8.0. It is intended for contributors and for users

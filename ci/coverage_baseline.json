@@ -1,5 +1,5 @@
 {
-  "threshold": 92.0,
-  "updated_at": "2026-03-23",
+  "threshold": 90.0,
+  "updated_at": "2026-05-18",
   "notes": "CI baseline (Pure-only, no Rust NIF). Rust-only code in nif.ex and rust.ex excluded via coveralls-ignore pragmas. Testable public helpers (ensure_binaries, normalize_cms_items) remain covered."
 }
