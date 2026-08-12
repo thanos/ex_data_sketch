@@ -21,6 +21,19 @@ fn cko_alt_index(index: u32, fingerprint: u32, bucket_count: u32) -> u32 {
     (index ^ cko_fp_hash(fingerprint)) & (bucket_count - 1)
 }
 
+// Deterministic-but-well-mixed eviction-slot choice -- see the matching
+// `cko_kick_slot/3` comment in `lib/ex_data_sketch/backend/pure.ex` for why
+// a plain `(fp + kick_count) % bucket_size` can enter a real, confirmed
+// infinite cycle. Must stay bit-for-bit identical to the Elixir version
+// for Pure/Rust parity: Elixir computes `bxor(fp, kick_count * C)` in
+// arbitrary precision then masks to 32 bits inside `cko_fp_hash`: by
+// `(a*b) mod n = ((a mod n)*b) mod n`, truncating to u32 *before* calling
+// a u32 `cko_fp_hash` here gives the identical result.
+fn cko_kick_slot(fp: u32, kick_count: u32, bucket_size: u8) -> u32 {
+    let mixed = (fp as u64 ^ (kick_count as u64).wrapping_mul(0x9E3779B1)) as u32;
+    cko_fp_hash(mixed) % bucket_size as u32
+}
+
 fn cko_slot_offset(bucket_idx: u32, slot_idx: u32, bucket_size: u8, fp_bytes: u8) -> usize {
     (bucket_idx as usize) * (bucket_size as usize) * (fp_bytes as usize)
         + (slot_idx as usize) * (fp_bytes as usize)
@@ -227,7 +240,7 @@ fn cko_kick_loop(
     let mut fp = start_fp;
 
     for kick_count in 0..max_kicks {
-        let evict_slot = (fp + kick_count) % bucket_size as u32;
+        let evict_slot = cko_kick_slot(fp, kick_count, bucket_size);
         let old_fp = cko_read_slot(body, bucket, evict_slot, bucket_size, fp_bytes);
         cko_write_slot(body, bucket, evict_slot, bucket_size, fp_bytes, fp);
 

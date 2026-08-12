@@ -46,6 +46,28 @@ defmodule ExDataSketch.Cuckoo do
   item removes a legitimate fingerprint, creating a false negative for a
   different item. This hazard is inherent to all Cuckoo filters.
 
+  ## Eviction Slot Selection
+
+  When an insert's target bucket is full, an existing entry is "kicked" to
+  its alternate bucket, repeating up to `:max_kicks` times. Which slot
+  within a bucket gets kicked is chosen by mixing the evicted fingerprint
+  and the current kick count through the same hash used for fingerprints
+  (`cko_fp_hash/1`), rather than a plain `rem(fingerprint + kick_count,
+  bucket_size)`. The plain linear form is a known cuckoo-filter
+  anti-pattern: with only `2^fingerprint_size` possible fingerprint values
+  shared across a much larger item count, two colliding fingerprints that
+  differ by a multiple of `bucket_size` can synchronize the kick sequence
+  into a short, exactly-repeating cycle among a handful of buckets, burning
+  through every remaining kick without ever finding an empty slot -- well
+  below the table's designed ~95.5% load factor. `Cuckoo.new(capacity:
+  500_000) |> Cuckoo.put_many(for i <- 1..500_000, do: "session_\#{i}")`
+  reproduced this reliably before the fix. The hash-mixed slot choice stays
+  fully deterministic (same input sequence always produces the same
+  sketch state, matching this library's general guarantee) while avoiding
+  the arithmetic periodicity that caused it. Both backends implement this
+  identically, so Pure and Rust produce byte-identical state for identical
+  input.
+
   ## Binary State Layout (CKO1)
 
   See `plans/adr/ADR-102-cuckoo-binary-format.md` for the full specification.

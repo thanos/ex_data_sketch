@@ -69,8 +69,18 @@ sketch, where the large value's error would dwarf the small one's:
 
 ```elixir
 exact_percentile = fn p ->
-  idx = min(round(p * length(sorted)), length(sorted) - 1)
-  Enum.at(sorted, idx)
+  # Matches ExDataSketch.DDSketch.quantile/2's own rank convention exactly
+  # (target = p * n, returns the value once cumulative count reaches that
+  # target -- effectively the target-th smallest item, 1-indexed) rather
+  # than an independently-chosen indexing scheme. A plain
+  # `Enum.at(sorted, round(p * n))` is 0-indexed and off by one rank from
+  # what DDSketch itself targets; that one-rank gap is usually
+  # inconsequential, but exactly at a bucket boundary it can land the
+  # "exact" reference value in the *next* bucket over from the one
+  # DDSketch correctly answered for, making a correct estimate look like
+  # it exceeded `alpha` when it didn't.
+  rank = max(1, round(p * length(sorted)))
+  Enum.at(sorted, min(rank - 1, length(sorted) - 1))
 end
 
 # p50 is in the "fast API calls" range (small values); p99.5 is in the
@@ -83,13 +93,16 @@ for p <- [0.5, 0.995] do
 end
 ```
 
-Both relative errors should be well under `alpha * 100 = 1%`, regardless
-of the three-orders-of-magnitude gap between the two values.
+Both relative errors should be at most `alpha * 100 = 1%`, regardless of
+the three-orders-of-magnitude gap between the two values -- that's the
+DDSketch guarantee, and it's a *tight* bound (achieved at a bucket's
+edges), not a "usually comfortably inside" one, so don't be surprised to
+see values sitting close to `1%` rather than well under it.
 
 ## Sizing: alpha trade-off
 
 ```elixir
-for alpha <- [0.05, 0.01, 0.005] do
+for alpha <- [0.05, 0.01, 0.005, 0.001] do
   s = DDSketch.new(alpha: alpha) |> DDSketch.update_many(durations)
   estimate = DDSketch.quantile(s, 0.99)
   exact = exact_percentile.(0.99)
@@ -129,9 +142,9 @@ IO.puts("Round-tripped p50: #{Float.round(DDSketch.quantile(restored, 0.5), 2)}m
 
 ## See also
 
-- `ExDataSketch.DDSketch` module documentation -- full API reference and
+* `ExDataSketch.DDSketch` module documentation -- full API reference and
   the DDS1 binary layout.
-- `ExDataSketch.KLL` -- rank-relative accuracy instead of value-relative;
+* `ExDataSketch.KLL` -- rank-relative accuracy instead of value-relative;
   see `livebooks/sketches/kll.livemd` for when that distinction matters.
-- `ExDataSketch.REQ` -- extra accuracy specifically at extreme tail
+* `ExDataSketch.REQ` -- extra accuracy specifically at extreme tail
   quantiles; see `livebooks/sketches/req.livemd`.

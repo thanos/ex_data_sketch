@@ -1994,7 +1994,7 @@ defmodule ExDataSketch.Backend.Pure do
   end
 
   defp cko_kick_loop(%CkoCtx{} = ctx, bucket, fp, kick_count) do
-    evict_slot = rem(fp + kick_count, ctx.bucket_size)
+    evict_slot = cko_kick_slot(fp, kick_count, ctx.bucket_size)
 
     old_fp = cko_read_slot(ctx, bucket, evict_slot)
     ctx = cko_write_slot(ctx, bucket, evict_slot, fp)
@@ -2009,6 +2009,24 @@ defmodule ExDataSketch.Backend.Pure do
       :full ->
         cko_kick_loop(ctx, alt_bucket, old_fp, kick_count + 1)
     end
+  end
+
+  # Deterministic-but-well-mixed eviction-slot choice. A plain
+  # `rem(fp + kick_count, bucket_size)` is a linear function of both
+  # inputs, and with only 2^fingerprint_size possible fingerprint values
+  # shared across a much larger item count, two colliding fingerprints
+  # that happen to differ by a multiple of `bucket_size` can synchronize
+  # the kick sequence into a short, exactly-repeating cycle between a
+  # handful of buckets -- confirmed via direct trace: a real dataset hit a
+  # 4-step cycle between 3 buckets that burned through every remaining
+  # kick (500, or even 2000) without ever finding an empty slot, well
+  # below the table's designed ~95.5% load factor. Routing (fp,
+  # kick_count) through the existing fingerprint-mixing hash keeps this
+  # fully deterministic -- same inputs always produce the same eviction
+  # sequence, preserving this library's byte-identical-output guarantee --
+  # while avoiding the arithmetic periodicity that caused it.
+  defp cko_kick_slot(fp, kick_count, bucket_size) do
+    rem(cko_fp_hash(bxor(fp, kick_count * 0x9E3779B1)), bucket_size)
   end
 
   # ============================================================
@@ -4573,13 +4591,21 @@ defmodule ExDataSketch.Backend.Pure do
     # LRA: compact (halve) the UPPER portion, keep LOWER intact at this level
     half = div(n, 2)
 
+    # As with KLL (see kll_compact_level/2's comment), promoting exactly
+    # half a portion at double the weight only preserves total weight when
+    # that portion has an even length. `half = div(n, 2)` is frequently
+    # odd, so hold back one item from the portion being compacted -- it
+    # rejoins the `stay` side unweighted, for a future compaction -- so
+    # the actually-compacted subset always has even length.
     {stay, promoted} =
       if state.hra do
         {lower, upper} = Enum.split(sorted, half)
-        {upper, kll_select_half(lower, parity)}
+        {to_compact, held_back} = req_split_for_compaction(lower)
+        {held_back ++ upper, kll_select_half(to_compact, parity)}
       else
         {lower, upper} = Enum.split(sorted, n - half)
-        {lower, kll_select_half(upper, parity)}
+        {to_compact, held_back} = req_split_for_compaction(upper)
+        {lower ++ held_back, kll_select_half(to_compact, parity)}
       end
 
     new_compaction_bits = kll_flip_parity(state.compaction_bits, level)
@@ -4600,6 +4626,15 @@ defmodule ExDataSketch.Backend.Pure do
     }
 
     req_compact_if_needed(state, level + 1)
+  end
+
+  defp req_split_for_compaction(sorted_sublist) do
+    if rem(length(sorted_sublist), 2) == 1 do
+      [last | rest] = Enum.reverse(sorted_sublist)
+      {Enum.reverse(rest), [last]}
+    else
+      {sorted_sublist, []}
+    end
   end
 
   defp req_build_sorted_view(state) do

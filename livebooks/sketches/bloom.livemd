@@ -55,7 +55,7 @@ Bloom.member?(filter, "https://example.com/page/1")
 `put_many/2` is far more efficient than looping `put/2` for a batch:
 
 ```elixir
-filter = Bloom.new(capacity: 500_000, false_positive_rate: 0.01) |> Bloom.put_many(inserted)
+filter = Bloom.new(backend: ExDataSketch.Backend.Rust, capacity: 500_000, false_positive_rate: 0.01) |> Bloom.put_many(inserted)
 
 IO.puts("Filter size: #{Bloom.size_bytes(filter)} bytes for #{length(inserted)} items")
 ```
@@ -84,7 +84,7 @@ derived bit-array size -- lower FPR or higher capacity means more memory:
 
 ```elixir
 for fpr <- [0.1, 0.01, 0.001] do
-  f = Bloom.new(capacity: 500_000, false_positive_rate: fpr) |> Bloom.put_many(inserted)
+  f = Bloom.new(backend: ExDataSketch.Backend.Rust, capacity: 500_000, false_positive_rate: fpr) |> Bloom.put_many(inserted)
   observed = Enum.count(Enum.take(novel, 50_000), &Bloom.member?(f, &1)) / 50_000
 
   IO.puts(
@@ -104,8 +104,8 @@ Bloom merge is a bitwise OR -- both filters must share identical
 half = div(length(inserted), 2)
 {first_half, second_half} = Enum.split(inserted, half)
 
-worker_a = Bloom.new(capacity: 500_000, false_positive_rate: 0.01) |> Bloom.put_many(first_half)
-worker_b = Bloom.new(capacity: 500_000, false_positive_rate: 0.01) |> Bloom.put_many(second_half)
+worker_a = Bloom.new(backend: ExDataSketch.Backend.Rust, capacity: 500_000, false_positive_rate: 0.01) |> Bloom.put_many(first_half)
+worker_b = Bloom.new(backend: ExDataSketch.Backend.Rust, capacity: 500_000, false_positive_rate: 0.01) |> Bloom.put_many(second_half)
 
 merged = Bloom.merge(worker_a, worker_b)
 IO.puts("Merged filter contains first-half item: #{Bloom.member?(merged, hd(first_half))}")

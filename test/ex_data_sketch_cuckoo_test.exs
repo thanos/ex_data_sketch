@@ -4,10 +4,24 @@ defmodule ExDataSketch.CuckooTest do
 
   doctest ExDataSketch.Cuckoo
 
-  alias ExDataSketch.Cuckoo
+  alias ExDataSketch.{Backend, Cuckoo}
 
   # Deterministic test data
   @items_100 Enum.map(0..99, &"cuckoo_item_#{&1}")
+
+  # Regression fixture for the eviction-slot cycling bug (see cuckoo.ex's
+  # "Eviction Slot Selection" moduledoc section): with the old
+  # `rem(fingerprint + kick_count, bucket_size)` eviction formula,
+  # sequential "session_N" keys inserted up to this exact capacity
+  # deterministically synchronized into a kick cycle and reported
+  # {:error, :full, ...} at 51,189 inserts, well under the requested
+  # capacity of 51,500 (bucket_count=16,384, so a ~78.6% load factor --
+  # nowhere near the table's designed ~95.5% ceiling). Found by bisecting
+  # capacity against the real (fixed-formula-reverted) implementation, not
+  # a synthetic case -- the exact capacity is load-bearing for reproducing
+  # the failure and must not be changed casually.
+  @eviction_cycle_capacity 51_500
+  @eviction_cycle_items Enum.map(1..51_500, &"session_#{&1}")
 
   describe "new/1" do
     test "default options" do
@@ -421,6 +435,42 @@ defmodule ExDataSketch.CuckooTest do
         assert Cuckoo.member?(cuckoo, item)
         {:ok, cuckoo} = Cuckoo.delete(cuckoo, item)
         refute Cuckoo.member?(cuckoo, item)
+      end
+    end
+  end
+
+  describe "eviction-slot cycling regression" do
+    test "sequential keys well under the load-factor ceiling all insert successfully (Pure)" do
+      result =
+        Cuckoo.new(capacity: @eviction_cycle_capacity, backend: Backend.Pure)
+        |> Cuckoo.put_many(@eviction_cycle_items)
+
+      assert {:ok, cuckoo} = result
+      assert Cuckoo.count(cuckoo) == @eviction_cycle_capacity
+      assert Enum.all?(@eviction_cycle_items, &Cuckoo.member?(cuckoo, &1))
+    end
+
+    if Backend.Rust.available?() do
+      test "sequential keys well under the load-factor ceiling all insert successfully (Rust)" do
+        result =
+          Cuckoo.new(capacity: @eviction_cycle_capacity, backend: Backend.Rust)
+          |> Cuckoo.put_many(@eviction_cycle_items)
+
+        assert {:ok, cuckoo} = result
+        assert Cuckoo.count(cuckoo) == @eviction_cycle_capacity
+        assert Enum.all?(@eviction_cycle_items, &Cuckoo.member?(cuckoo, &1))
+      end
+
+      test "Pure and Rust produce byte-identical state for the same eviction-heavy sequence" do
+        {:ok, pure} =
+          Cuckoo.new(capacity: @eviction_cycle_capacity, backend: Backend.Pure)
+          |> Cuckoo.put_many(@eviction_cycle_items)
+
+        {:ok, rust} =
+          Cuckoo.new(capacity: @eviction_cycle_capacity, backend: Backend.Rust)
+          |> Cuckoo.put_many(@eviction_cycle_items)
+
+        assert Cuckoo.serialize(pure) == Cuckoo.serialize(rust)
       end
     end
   end

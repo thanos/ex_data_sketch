@@ -52,7 +52,7 @@ IO.puts("#{length(queries)} queries across #{map_size(true_counts)} distinct ter
 ```elixir
 alias ExDataSketch.MisraGries
 
-sketch = MisraGries.new(k: 20) |> MisraGries.update_many(queries)
+sketch = MisraGries.new(k: 100) |> MisraGries.update_many(queries)
 
 MisraGries.top_k(sketch, 5)
 ```
@@ -122,7 +122,7 @@ moduledoc ("Comparison with FrequentItems") for more on why:
 ```elixir
 alias ExDataSketch.FrequentItems
 
-fi_sketch = FrequentItems.new(k: 20) |> FrequentItems.update_many(queries)
+fi_sketch = FrequentItems.new(k: 100) |> FrequentItems.update_many(queries)
 
 mg_top_3 = MisraGries.top_k(sketch, 3) |> Enum.map(fn {item, _} -> item end)
 fi_top_3 = FrequentItems.top_k(fi_sketch) |> Enum.take(3) |> Enum.map(& &1.item)
@@ -146,21 +146,21 @@ backend" escape hatch here.
 
 Measured on this tutorial's 1,000,000-event, 5,000-term sample:
 
-| k    | `update_many/2` time | Memory     | Entries tracked |
-|------|-----------------------|------------|------------------|
-| 20   | ~0.5s                 | 357 bytes  | 16               |
-| 100  | ~1.7s                 | 2,010 bytes| 94               |
-| 200  | ~1.5s                 | 4,075 bytes| 191              |
-| 1000 | ~1.9s                 | 20,728 bytes| 968             |
-| 5000 | ~1.9s                 | 108,893 bytes| 4,999          |
+| k    | `update_many/2` time | Memory        | Entries tracked |
+| ---- | -------------------- | ------------- | --------------- |
+| 20   | ~0.5s                | 357 bytes     | 16              |
+| 100  | ~1.7s                | 2,010 bytes   | 94              |
+| 200  | ~1.5s                | 4,075 bytes   | 191             |
+| 1000 | ~1.9s                | 20,728 bytes  | 968             |
+| 5000 | ~1.9s                | 108,893 bytes | 4,999           |
 
 Two things worth internalizing:
 
-- **Memory is cheap and predictable**: it scales with the number of
+* **Memory is cheap and predictable**: it scales with the number of
   *retained* entries (bounded by `k`), at roughly 21-22 bytes/entry for
   string keys like these. Even `k = 5000` (tracking every distinct term
   in this sample) costs only ~109 KB.
-- **CPU cost is real but far gentler than it looks.** The decrement-all
+* **CPU cost is real but far gentler than it looks.** The decrement-all
   step is `O(k)` per miss, so naively you'd expect `update_many/2` to
   cost `O(n*k)` -- a 250x increase in `k` (20 -> 5000) should mean a
   ~250x slowdown. It doesn't: it's only ~4x here, because larger `k`
@@ -173,7 +173,9 @@ Two things worth internalizing:
 The practical sizing rule: pick `k` so `n/(k+1)` sits comfortably below
 the smallest true frequency you need reliably retained. `k = 200` here
 gives `n/(k+1) ~ 4,975`, comfortably below the true top 5's counts --
-watch it recover the exact true top 5 that `k = 20` couldn't:
+watch it recover the correct *identities and ranking* of the true top 5
+that `k = 20` couldn't (the *counts* will still visibly undercount --
+that's expected, see below):
 
 ```elixir
 sketch_k200 = MisraGries.new(k: 200) |> MisraGries.update_many(queries)
@@ -185,6 +187,21 @@ for {item, count} <- MisraGries.top_k(sketch_k200, 5) do
   IO.puts("#{item}: MisraGries count=#{count}, true count=#{true_count}")
 end
 ```
+
+Notice two things about this output. First, "recovers the true top 5"
+means the *identities and ranking* are correct -- `query_1`...`query_5`,
+in the right order -- not that the counts match exactly; every count is
+visibly below its true count, and that's expected (Misra-Gries counts
+are always `<=` the true count). Second, and more interesting: the
+undercount is *identical* for every single item here, not just similar.
+That's not a coincidence -- a decrement-all event lowers *every*
+currently-tracked counter by 1, so any item that's been tracked
+continuously since it first entered the counter set has absorbed exactly
+the same number of decrement events as every other continuously-tracked
+item. The shared undercount you see is that mechanic showing through
+directly in the data, and it should sit comfortably under the
+`n/(k+1)` bound printed above -- if it didn't, the guarantee would be
+violated.
 
 ## Merging
 

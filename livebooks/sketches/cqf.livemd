@@ -137,10 +137,10 @@ IO.puts("Round-tripped count: #{CQF.estimate_count(restored, busiest_key)}")
 
 ## See also
 
-- `ExDataSketch.CQF` module documentation -- full API reference.
-- `ExDataSketch.Quotient` -- the same underlying structure without
+* `ExDataSketch.CQF` module documentation -- full API reference.
+* `ExDataSketch.Quotient` -- the same underlying structure without
   counting, if you only need presence; see
   `livebooks/sketches/quotient.livemd`.
-- `ExDataSketch.CMS` -- frequency estimation without the membership-filter
+* `ExDataSketch.CMS` -- frequency estimation without the membership-filter
   framing (no `:full` state, no deletion); see
   `livebooks/sketches/cms.livemd`.

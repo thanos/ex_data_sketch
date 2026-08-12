@@ -40,7 +40,7 @@ IO.puts("#{length(inserted)} inserted sessions, #{length(novel)} novel sessions"
 ```elixir
 alias ExDataSketch.Cuckoo
 
-{:ok, filter} = Cuckoo.new(capacity: 500_000) |> Cuckoo.put_many(inserted)
+{:ok, filter} = Cuckoo.new(backend: ExDataSketch.Backend.Rust, capacity: 500_000) |> Cuckoo.put_many(inserted)
 
 Cuckoo.member?(filter, hd(inserted))
 ```
@@ -130,9 +130,9 @@ IO.puts("Round-tripped membership check: #{Cuckoo.member?(restored, hd(inserted)
 
 ## See also
 
-- `ExDataSketch.Cuckoo` module documentation -- full API reference.
-- `ExDataSketch.Quotient` -- deletion that's *always* safe (deleting a
+* `ExDataSketch.Cuckoo` module documentation -- full API reference.
+* `ExDataSketch.Quotient` -- deletion that's *always* safe (deleting a
   non-member is a guaranteed no-op, not just usually one) and does
   support `merge/2`; see `livebooks/sketches/quotient.livemd`.
-- `ExDataSketch.Bloom` -- no deletion, but mergeable and simpler; see
+* `ExDataSketch.Bloom` -- no deletion, but mergeable and simpler; see
   `livebooks/sketches/bloom.livemd`.

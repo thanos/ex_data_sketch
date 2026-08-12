@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`ExDataSketch.REQ` had the same compaction weight-preservation bug as
+  `ExDataSketch.KLL`'s v0.10.1 fix, independently discovered via the same
+  manual livebook-verification process.** `req_compact_level`'s biased
+  compaction promotes half of whichever portion (upper for LRA, lower for
+  HRA) is being compacted, at double the weight; that only preserves
+  total weight when the portion being halved has an even length. Portion
+  length is `div(n, 2)`, frequently odd, so -- exactly as with KLL --
+  every odd-length compaction silently gained or lost one item's worth of
+  weight, corrupting the `sum(retained_weight) == n` invariant that
+  `quantile/2` depends on. Confirmed via the same weight-invariant check
+  used for the KLL fix (drift growing with `n`, both HRA and LRA
+  affected identically since the bug is in the shared halving step, not
+  the HRA/LRA bias itself). Symptom: HRA and LRA modes could produce
+  visibly wrong relative behavior (e.g. HRA -- which is supposed to bias
+  accuracy toward high ranks -- performing *worse* than LRA at p99.9).
+  Fixed with the same technique as KLL: hold back one item (unweighted,
+  for a future compaction) whenever the portion being compacted has an
+  odd length. Verified the weight invariant now holds exactly, and that
+  HRA is measurably more accurate than LRA at high ranks once again
+  (previously, at small `k`, the bug made the two modes nearly
+  indistinguishable). No binary format change -- old serialized sketches
+  still decode and work. See `ExDataSketch.REQ`'s moduledoc for why,
+  similarly to KLL, *value* error at a specific query can still be large
+  near a sharp change in data density even with this fixed -- that part
+  is inherent to rank-approximate sketches, not a bug.
+
+- **`ExDataSketch.Cuckoo` could spuriously return `{:error, :full, ...}`
+  well below its designed ~95.5% load factor, in both the Pure and Rust
+  backends, discovered via the same manual livebook-verification
+  process.** The kick-eviction loop chose which slot within a bucket to
+  evict with a plain `rem(fingerprint + kick_count, bucket_size)` -- a
+  linear function of both inputs. With only `2^fingerprint_size` possible
+  fingerprint values (256 for the default 8-bit size) shared across a much
+  larger item count, two colliding fingerprints that happened to differ by
+  a multiple of `bucket_size` could synchronize the kick sequence into a
+  short, exactly-repeating cycle among a handful of buckets, burning
+  through every remaining kick without ever finding an empty slot.
+  Confirmed via direct source-level tracing: a real dataset (500,000
+  sequential `"session_N"` keys into `Cuckoo.new(capacity: 500_000)`) hit
+  a 4-step cycle between 3 buckets that exhausted `:max_kicks` every time,
+  well below the table's intended capacity. Fixed by routing the evicted
+  fingerprint and kick count through the same hash already used for
+  fingerprint mixing before reducing mod `bucket_size`, which keeps slot
+  choice fully deterministic (same input sequence still always produces
+  the same sketch state) while eliminating the arithmetic periodicity
+  that caused the cycling. Ported identically to the Rust NIF backend;
+  confirmed the two backends still produce byte-identical serialized
+  state for identical input. Because the eviction-slot formula changed,
+  any Cuckoo filter build that exercises kick-eviction now produces a
+  different (but now non-cyclic) final state than before -- this is a
+  behavior change, not a binary format change; old serialized sketches
+  still decode and work. See `ExDataSketch.Cuckoo`'s moduledoc for
+  details.
+
 ## [0.10.1] - 2026-08-11
 
 Started as post-release fixes from a full code review of the v0.10.0 diff

@@ -62,7 +62,14 @@ REQ.quantiles(sketch, [0.5, 0.9, 0.99, 0.999])
 
 Build the same data into both modes and compare error at a *low* quantile
 (p10) against a *high* one (p99.9) -- HRA should be visibly more accurate
-at p99.9 and less accurate at p10; LRA the reverse:
+at p99.9 and less accurate at p10; LRA the reverse.
+
+This sample is a hard case for a small `k`: 99.9% of it is squeezed into
+just 20 distinct discrete values (11-30ms), with the "important" tail
+(500-5000ms) only 0.1% of the data. At `k: 12` (REQ's default) there
+isn't enough retained resolution left for the HRA/LRA bias to show up at
+all -- both modes converge to nearly the same (poor) answer at p99.9.
+Push `k` up to `800` and the intended asymmetry reappears clearly:
 
 ```elixir
 exact_percentile = fn p ->
@@ -70,8 +77,8 @@ exact_percentile = fn p ->
   Enum.at(sorted, idx)
 end
 
-hra_sketch = REQ.new(k: 12, hra: true) |> REQ.update_many(latencies)
-lra_sketch = REQ.new(k: 12, hra: false) |> REQ.update_many(latencies)
+hra_sketch = REQ.new(k: 800, hra: true) |> REQ.update_many(latencies)
+lra_sketch = REQ.new(k: 800, hra: false) |> REQ.update_many(latencies)
 
 for {label, s} <- [{"HRA", hra_sketch}, {"LRA", lra_sketch}] do
   IO.puts("== #{label} ==")
@@ -84,6 +91,17 @@ for {label, s} <- [{"HRA", hra_sketch}, {"LRA", lra_sketch}] do
   end
 end
 ```
+
+HRA's p99.9 error should now be clearly *smaller* than LRA's (LRA barely
+escapes the 11-30ms bulk at all, typically still reporting something
+near 30), and LRA's p10 error should be clearly smaller than HRA's --
+the intended trade-off, showing up as designed. Don't expect HRA's own
+p99.9 error to be small in absolute terms, though: p99.9 sits right at
+the boundary between the dense bulk and the sparse tail, the same kind
+of density cliff covered in `ExDataSketch.KLL`'s moduledoc -- a
+correctly-working sketch can still land far from the exact value there,
+because a tiny rank shift crosses from "extremely common" to "extremely
+rare" data.
 
 ## rank/2, cdf/2, pmf/2
 
@@ -127,8 +145,8 @@ IO.puts("Round-tripped p99: #{Float.round(REQ.quantile(restored, 0.99), 1)}ms")
 
 ## See also
 
-- `ExDataSketch.REQ` module documentation -- full API reference.
-- `ExDataSketch.KLL` -- uniform accuracy across all ranks instead of
+* `ExDataSketch.REQ` module documentation -- full API reference.
+* `ExDataSketch.KLL` -- uniform accuracy across all ranks instead of
   biased toward one tail; see `livebooks/sketches/kll.livemd`.
-- `ExDataSketch.DDSketch` -- value-relative (not rank-biased) accuracy;
+* `ExDataSketch.DDSketch` -- value-relative (not rank-biased) accuracy;
   see `livebooks/sketches/ddsketch.livemd`.
