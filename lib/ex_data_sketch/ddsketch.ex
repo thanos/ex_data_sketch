@@ -65,7 +65,7 @@ defmodule ExDataSketch.DDSketch do
   have identical `alpha` parameters to merge.
   """
 
-  alias ExDataSketch.{Backend, Binary, Codec, Errors, Telemetry}
+  alias ExDataSketch.{Backend, Binary, Codec, Config, Errors, Telemetry}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -98,6 +98,7 @@ defmodule ExDataSketch.DDSketch do
   """
   @spec new(keyword()) :: t()
   def new(opts \\ []) do
+    opts = Config.merge_defaults(:ddsketch, opts)
     alpha = Keyword.get(opts, :alpha, @default_alpha)
     validate_alpha!(alpha)
     backend = Backend.resolve(opts)

@@ -1,20 +1,15 @@
 # CQF (Counting Quotient Filter) Tutorial
 
 ```elixir
-# Mix.install([
-#   {:ex_data_sketch, "~> 0.10"}
-# ])
-Mix.install(
-  [
-    {:ex_data_sketch, path: "/Users/thanos/work/ex_data_sketch"},
-    {:rustler, ">= 0.0.0"},
-    {:telemetry_metrics, "~> 1.1"}
-  ],
-  config: [
-    rustler_precompiled: [force_build: [ex_data_sketch: true]]
-  ],
-  force: true
-)
+Mix.install([
+  {:ex_data_sketch, "~> 0.10"}
+],
+config: [
+    ex_data_sketch: [
+      backend: ExDataSketch.Backend.Rust,
+      integrations: [opentelemetry: false]
+    ]
+  ])
 ```
 
 ## Introduction
@@ -67,7 +62,7 @@ CQF.estimate_count(cqf, "x")
 if the table fills up partway through -- see the sizing section below):
 
 ```elixir
-{:ok, sketch} = CQF.new(backend: ExDataSketch.Backend.Rust, q: 21, r: 8) |> CQF.put_many(events)
+{:ok, sketch} = CQF.new(q: 21, r: 8) |> CQF.put_many(events)
 
 {busiest_key, true_count} = Enum.max_by(true_counts, fn {_, c} -> c end)
 estimate = CQF.estimate_count(sketch, busiest_key)
@@ -164,7 +159,7 @@ the error tuple, for callers who'd rather crash than handle it explicitly.
 
 ```elixir
 for r <- [4, 8, 12] do
-  {:ok, s} = CQF.new(backend: ExDataSketch.Backend.Rust, q: 21, r: r) |> CQF.put_many(events)
+  {:ok, s} = CQF.new(q: 21, r: r) |> CQF.put_many(events)
   est = CQF.estimate_count(s, busiest_key)
   IO.puts("r=#{r} (#{CQF.size_bytes(s)} bytes): #{busiest_key} estimate=#{est} (true: #{true_count})")
 end
@@ -176,8 +171,8 @@ end
 half = div(length(events), 2)
 {first_half, second_half} = Enum.split(events, half)
 
-{:ok, worker_a} = CQF.new(backend: ExDataSketch.Backend.Rust, q: 21, r: 8) |> CQF.put_many(first_half)
-{:ok, worker_b} = CQF.new(backend: ExDataSketch.Backend.Rust, q: 21, r: 8) |> CQF.put_many(second_half)
+{:ok, worker_a} = CQF.new(q: 21, r: 8) |> CQF.put_many(first_half)
+{:ok, worker_b} = CQF.new(q: 21, r: 8) |> CQF.put_many(second_half)
 
 merged = CQF.merge(worker_a, worker_b)
 IO.puts("Merged estimate for #{busiest_key}: #{CQF.estimate_count(merged, busiest_key)}")

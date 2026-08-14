@@ -4,7 +4,12 @@
 Mix.install([
   {:ex_data_sketch, "~> 0.10"},
   {:broadway, "~> 1.0"}
-])
+],
+config: [
+    ex_data_sketch: [
+      integrations: [opentelemetry: false]
+    ]
+  ])
 ```
 
 ## Introduction

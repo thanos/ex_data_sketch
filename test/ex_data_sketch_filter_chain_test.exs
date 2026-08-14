@@ -214,20 +214,115 @@ defmodule ExDataSketch.FilterChainTest do
     end
   end
 
+  describe "put_many/2" do
+    test "inserts into Bloom stage" do
+      chain = FilterChain.new() |> FilterChain.add_stage(Bloom.new(capacity: 100))
+      {:ok, chain} = FilterChain.put_many(chain, ["a", "b", "c"])
+      assert FilterChain.member?(chain, "a")
+      assert FilterChain.member?(chain, "b")
+      assert FilterChain.member?(chain, "c")
+    end
+
+    test "inserts into multiple dynamic stages" do
+      chain =
+        FilterChain.new()
+        |> FilterChain.add_stage(Bloom.new(capacity: 100))
+        |> FilterChain.add_stage(CQF.new(q: 10, r: 8))
+
+      {:ok, chain} = FilterChain.put_many(chain, ["a", "b", "c"])
+      assert FilterChain.member?(chain, "a")
+      assert FilterChain.member?(chain, "b")
+      assert FilterChain.member?(chain, "c")
+    end
+
+    test "skips XorFilter stage" do
+      {:ok, xor} = XorFilter.build(["existing"])
+
+      chain =
+        FilterChain.new()
+        |> FilterChain.add_stage(Bloom.new(capacity: 100))
+        |> FilterChain.add_stage(xor)
+
+      {:ok, chain} = FilterChain.put_many(chain, ["new_item"])
+      [bloom, _xor] = FilterChain.stages(chain)
+      assert Bloom.member?(bloom, "new_item")
+    end
+
+    test "equivalent to sequential put/2 for a diverse chain" do
+      items = ["a", "b", "a", "c", "b", "a"]
+
+      chain_seq =
+        Enum.reduce(items, FilterChain.new() |> FilterChain.add_stage(Cuckoo.new()), fn item, c ->
+          {:ok, updated} = FilterChain.put(c, item)
+          updated
+        end)
+
+      {:ok, chain_many} =
+        FilterChain.put_many(FilterChain.new() |> FilterChain.add_stage(Cuckoo.new()), items)
+
+      assert FilterChain.serialize(chain_seq) == FilterChain.serialize(chain_many)
+    end
+
+    test "returns {:error, :full, partial} preserving prior successful stages" do
+      cuckoo = Cuckoo.new(capacity: 4)
+      chain = FilterChain.new() |> FilterChain.add_stage(cuckoo)
+
+      items = for i <- 1..10_000, do: "item_#{i}"
+      assert {:error, :full, partial} = FilterChain.put_many(chain, items)
+      [partial_cuckoo] = FilterChain.stages(partial)
+      assert Cuckoo.count(partial_cuckoo) > 0
+    end
+
+    test "update_many/2 raises FilterFullError, not a bare RuntimeError, when full" do
+      cuckoo = Cuckoo.new(capacity: 4)
+      chain = FilterChain.new() |> FilterChain.add_stage(cuckoo)
+      items = for i <- 1..10_000, do: "item_#{i}"
+
+      assert_raise ExDataSketch.Errors.FilterFullError, ~r/FilterChain stage is full/, fn ->
+        FilterChain.update_many(chain, items)
+      end
+    end
+
+    test "1000-item batch against a large-capacity chain completes quickly" do
+      # Regression: FilterChain.update_many/2 used to loop put/2 once per
+      # item across every stage. Every family's single-item put/2 runs in
+      # the Pure backend regardless of :backend (no per-item Rust NIF
+      # exists for any family), and the Pure backend's immutable-binary
+      # state means a single-item write reconstructs the *entire* state
+      # binary -- O(state size) per call. Confirmed: 10,000 items into a
+      # [Bloom, Cuckoo] chain (500,000 capacity each) took ~2.3s via the
+      # old loop; put_many/2 (batching through each stage's own
+      # put_many/2) takes under a millisecond for the same input. A
+      # generous 5s bound leaves huge margin over CI variance while still
+      # catching a real regression back to the item-by-item loop.
+      chain =
+        FilterChain.new()
+        |> FilterChain.add_stage(Bloom.new(capacity: 500_000, false_positive_rate: 0.05))
+        |> FilterChain.add_stage(Cuckoo.new(capacity: 500_000))
+
+      items = for i <- 1..1_000, do: "item_#{i}"
+
+      {time_us, {:ok, _}} = :timer.tc(fn -> FilterChain.put_many(chain, items) end)
+
+      assert time_us < 5_000_000,
+             "1000-item put_many/2 took #{time_us / 1000}ms -- did the per-item loop regress?"
+    end
+  end
+
   # -- delete/2 --
 
   describe "delete/2" do
     test "deletes from Cuckoo stage" do
       {:ok, cuckoo} = Cuckoo.new() |> Cuckoo.put("hello")
       chain = FilterChain.new() |> FilterChain.add_stage(cuckoo)
-      {:ok, chain} = FilterChain.delete(chain, "hello")
+      chain = FilterChain.delete(chain, "hello")
       refute FilterChain.member?(chain, "hello")
     end
 
     test "deletes from CQF stage" do
       cqf = CQF.new(q: 10, r: 8) |> CQF.put!("hello")
       chain = FilterChain.new() |> FilterChain.add_stage(cqf)
-      {:ok, chain} = FilterChain.delete(chain, "hello")
+      chain = FilterChain.delete(chain, "hello")
       refute FilterChain.member?(chain, "hello")
     end
 
@@ -240,7 +335,7 @@ defmodule ExDataSketch.FilterChainTest do
         |> FilterChain.add_stage(cuckoo)
         |> FilterChain.add_stage(cqf)
 
-      {:ok, chain} = FilterChain.delete(chain, "hello")
+      chain = FilterChain.delete(chain, "hello")
       refute FilterChain.member?(chain, "hello")
     end
 
@@ -263,7 +358,7 @@ defmodule ExDataSketch.FilterChainTest do
     end
 
     test "delete on empty chain succeeds" do
-      {:ok, chain} = FilterChain.delete(FilterChain.new(), "hello")
+      chain = FilterChain.delete(FilterChain.new(), "hello")
       assert FilterChain.stages(chain) == []
     end
   end
@@ -592,7 +687,7 @@ defmodule ExDataSketch.FilterChainTest do
     test "deletes from Quotient stage" do
       qot = Quotient.new(q: 10, r: 8) |> Quotient.put("hello")
       chain = FilterChain.new() |> FilterChain.add_stage(qot)
-      {:ok, chain} = FilterChain.delete(chain, "hello")
+      chain = FilterChain.delete(chain, "hello")
       refute FilterChain.member?(chain, "hello")
     end
 
@@ -607,14 +702,14 @@ defmodule ExDataSketch.FilterChainTest do
         |> FilterChain.add_stage(qot)
         |> FilterChain.add_stage(cqf)
 
-      {:ok, chain} = FilterChain.delete(chain, "hello")
+      chain = FilterChain.delete(chain, "hello")
       refute FilterChain.member?(chain, "hello")
     end
 
     test "cuckoo delete not-found leaves stage unchanged" do
       {:ok, cuckoo} = Cuckoo.new() |> Cuckoo.put("keep_me")
       chain = FilterChain.new() |> FilterChain.add_stage(cuckoo)
-      {:ok, chain} = FilterChain.delete(chain, "not_present")
+      chain = FilterChain.delete(chain, "not_present")
       assert FilterChain.member?(chain, "keep_me")
     end
 

@@ -7,7 +7,34 @@ blocks =
   Regex.scan(~r/```elixir\n(.*?)\n```/s, content, capture: :all_but_first)
   |> Enum.map(fn [code] -> code end)
 
-[_mix_install | cells] = blocks
+[mix_install_src | cells] = blocks
+
+# The Mix.install cell itself is skipped (deps are already loaded via the
+# real project), but its `config:` option (e.g. `config: [ex_data_sketch:
+# [backend: ExDataSketch.Backend.Rust]]`) is NOT -- apply it via
+# Application.put_env/3 before evaluating anything else, so a notebook
+# that configures a non-default backend (or any other app env) actually
+# gets tested under that configuration, matching what a real Livebook
+# session running the Mix.install cell would do. Parsed via the AST
+# (not string-matched) so it's robust to formatting.
+config_kw =
+  with {:ok, quoted} <- Code.string_to_quoted(mix_install_src),
+       {{:., _, [{:__aliases__, _, [:Mix]}, :install]}, _, [_deps, opts]} <- quoted,
+       true <- Keyword.keyword?(opts),
+       {:ok, config_ast} <- Keyword.fetch(opts, :config) do
+    {config, _bindings} = Code.eval_quoted(config_ast)
+    config
+  else
+    _ -> []
+  end
+
+Enum.each(config_kw, fn {app, app_config} ->
+  Enum.each(app_config, fn {key, val} -> Application.put_env(app, key, val) end)
+end)
+
+if config_kw != [] do
+  IO.puts("Applied Mix.install config: #{inspect(config_kw)}")
+end
 
 # Code.eval_string/3 doesn't carry aliases between separate calls (only
 # bindings), so collect every `alias ...` line used anywhere in the file

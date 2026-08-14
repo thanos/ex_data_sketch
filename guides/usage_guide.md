@@ -25,7 +25,7 @@ refinement, via a pack/unpack encoding) and applies the OptimalFGRAEstimator.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `:p` | integer | 14 | Precision parameter. Valid range: 4..26. Higher values use more memory but give better accuracy. Register count = 2^p. |
+| `:p` | integer | 14 | Precision parameter. Valid range: 4..26 -- unlike HLL's, this is a *hard* limit, not a practical one (see `ExDataSketch.ULL`'s "Precision Range" moduledoc section for why). Higher values use more memory but give better accuracy. Register count = 2^p. |
 | `:backend` | module | `ExDataSketch.Backend.Pure` | Backend module for computation. |
 
 Memory usage: `8 + 2^p` bytes (e.g., p=14 uses ~16 KiB).
@@ -417,6 +417,46 @@ sketch = ExDataSketch.Quantiles.update_many(sketch, latency_samples)
 ExDataSketch.Quantiles.quantile(sketch, 0.99)  # p99 with relative accuracy
 ```
 
+## Configuration
+
+Every setting below is read from `config :ex_data_sketch, ...` in your
+application's config files -- none require a restart-triggering recompile
+(they're read at call time via `Application.get_env/2,3`, not
+`Application.compile_env/2,3`), so runtime config (`config/runtime.exs`,
+environment variables via `System.get_env/1`, etc.) works too. Per-call
+or per-sketch options, where they exist, always take precedence over
+whatever is configured here.
+
+| Key | Controls | Details |
+|-----|----------|---------|
+| `:backend` | Default backend module (`ExDataSketch.Backend.Pure` or `.Rust`) for every family's `new/1` | [Selecting a Backend](#selecting-a-backend) below |
+| `:defaults` | Per-family default constructor options (`:p`, `:q`, `:r`, `:capacity`, ...) | [Configuring Per-Family Defaults](#configuring-per-family-defaults) below |
+| `:dirty_thresholds` | Batch-size thresholds above which Rust NIF calls run on dirty CPU schedulers | [Dirty Scheduler Thresholds](#dirty-scheduler-thresholds) below |
+| `:storage` | Default storage backend module for `ExDataSketch.Storage.save/3` and friends | `ExDataSketch.Storage`'s moduledoc |
+| `:persistence_backends` | Enables/disables individual storage backends (ETS, DETS, CubDB, Mnesia, Ecto) | `guides/persistence.md`'s Configuration section |
+| `:telemetry_enabled` | Global on/off switch for all telemetry events | `guides/telemetry.md`'s Configuration section |
+| `:telemetry` | Per-category telemetry on/off (`:sketch`, `:persistence`, `:stream`, `:pipeline`, `:window`, `:server`) | `guides/telemetry.md`'s Configuration section |
+| `:integrations` | Enables/disables optional-dependency integrations (Broadway, Flow, GenStage, CubDB, Ecto, OpenTelemetry) regardless of whether the dependency is loaded | `ExDataSketch.Integration`'s moduledoc |
+
+A config file exercising most of these together:
+
+```elixir
+# config/config.exs
+config :ex_data_sketch,
+  backend: ExDataSketch.Backend.Rust,
+  defaults: [
+    hll: [p: 16],
+    cqf: [q: 20, r: 10],
+    bloom: [capacity: 50_000]
+  ],
+  dirty_thresholds: %{hll_update_many: 5_000},
+  storage: [backend: ExDataSketch.Storage.ETS],
+  persistence_backends: [ecto: [enabled: false]],
+  telemetry_enabled: true,
+  telemetry: [server: false],
+  integrations: [opentelemetry: false]
+```
+
 ## Backend System
 
 ExDataSketch uses a backend system to allow swapping computation engines
@@ -476,6 +516,28 @@ config :ex_data_sketch, backend: ExDataSketch.Backend.Rust
 The per-sketch option always takes precedence over the global config.
 If `Backend.Rust` is configured but the NIF is not available, it
 automatically falls back to `Backend.Pure`.
+
+### Configuring Per-Family Defaults
+
+Every family's constructor (`new/1`, or `build/2` for `XorFilter`) also
+reads default options from a single flat `:defaults` config key, keyed
+by the same atoms `ExDataSketch.sketches/0` uses:
+
+```elixir
+config :ex_data_sketch,
+  backend: ExDataSketch.Backend.Rust,
+  defaults: [
+    hll: [p: 16],
+    cqf: [q: 20, r: 10],
+    bloom: [capacity: 50_000]
+  ]
+```
+
+Explicit options passed to `new/1` always take precedence over
+configured defaults, which in turn only fill in keys not already
+covered by that family's own hardcoded defaults. `FilterChain.new/0`
+takes no options at all, so it has no corresponding `:filter_chain`
+entry. See `ExDataSketch.Config` for the full contract.
 
 ### Rust Backend Details
 

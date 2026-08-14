@@ -61,7 +61,7 @@ defmodule ExDataSketch.CMS do
   same result, making CMS safe for parallel and distributed aggregation.
   """
 
-  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash, Telemetry}
+  alias ExDataSketch.{Backend, Binary, Codec, Config, Errors, Hash, Telemetry}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -98,6 +98,7 @@ defmodule ExDataSketch.CMS do
   """
   @spec new(keyword()) :: t()
   def new(opts \\ []) do
+    opts = Config.merge_defaults(:cms, opts)
     width = Keyword.get(opts, :width, @default_width)
     depth = Keyword.get(opts, :depth, @default_depth)
     counter_width = Keyword.get(opts, :counter_width, @default_counter_width)

@@ -2,8 +2,14 @@
 
 ```elixir
 Mix.install([
-  {:ex_data_sketch, "~> 0.10.1"}
-])
+  {:ex_data_sketch, "~> 0.10"}
+],
+config: [
+    ex_data_sketch: [
+      backend: ExDataSketch.Backend.Rust,
+      integrations: [opentelemetry: false]
+    ]
+  ])
 ```
 
 ## Introduction
@@ -82,7 +88,7 @@ IO.puts("Sketch size: #{HLL.size_bytes(sketch)} bytes")
 more memory, less error:
 
 ```elixir
-for p <- [10, 12, 14, 16] do
+for p <- [4, 10, 12, 14, 16, 20] do
   sketch = HLL.from_enumerable(events, p: p)
   estimate = HLL.estimate(sketch)
   error_pct = abs(estimate - 500_000) / 500_000 * 100
@@ -93,6 +99,23 @@ for p <- [10, 12, 14, 16] do
   )
 end
 ```
+
+### Why 4..26?
+
+`p >= 4` is a real algorithmic floor: the bias-correction constant
+`alpha(m)` (`m = 2^p`, the register count) is only defined via exact
+published values for `m in {16, 32, 64}` plus a general asymptotic
+formula valid for `m >= 128` -- together these cover exactly `p >= 4`,
+with no case for `p < 4`.
+
+`p <= 26` is a *practical* ceiling, not an algorithmic one -- nothing in
+HLL's register encoding or estimator caps `p` below 26 (registers are
+plain bytes with tons of headroom, and `alpha(m)`'s formula works for
+any `m >= 128`). It's set to 26 specifically to match `ExDataSketch.ULL`'s
+ceiling, which *is* a hard limit (see `ull.livemd`), so choosing between
+the two estimators is an apples-to-apples memory/precision tradeoff. At
+`p = 26` a single sketch is 64 MiB -- most workloads should stay at
+`p <= 18` or so, well below either ceiling.
 
 ## Merging (distributed counting)
 

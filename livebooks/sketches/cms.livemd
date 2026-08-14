@@ -2,8 +2,14 @@
 
 ```elixir
 Mix.install([
-  {:ex_data_sketch, "~> 0.10.1"}
-])
+  {:ex_data_sketch, "~> 0.10"}
+],
+config: [
+    ex_data_sketch: [
+      backend: ExDataSketch.Backend.Rust,
+      integrations: [opentelemetry: false]
+    ]
+  ])
 ```
 
 ## Introduction

@@ -52,7 +52,7 @@ defmodule ExDataSketch.XorFilter do
 
   """
 
-  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash}
+  alias ExDataSketch.{Backend, Binary, Codec, Config, Errors, Hash}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -90,6 +90,7 @@ defmodule ExDataSketch.XorFilter do
   """
   @spec build(Enumerable.t(), keyword()) :: {:ok, t()} | {:error, :build_failed}
   def build(items, opts \\ []) do
+    opts = Config.merge_defaults(:xor_filter, opts)
     fp_bits = Keyword.get(opts, :fingerprint_bits, @default_fingerprint_bits)
     seed = Keyword.get(opts, :seed, @default_seed)
     hash_fn = Keyword.get(opts, :hash_fn)

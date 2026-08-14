@@ -3,7 +3,13 @@
 ```elixir
 Mix.install([
   {:ex_data_sketch, "~> 0.10"}
-])
+],
+config: [
+    ex_data_sketch: [
+      backend: ExDataSketch.Backend.Rust,
+      integrations: [opentelemetry: false]
+    ]
+  ])
 ```
 
 ## Introduction
@@ -66,7 +72,7 @@ end
 ```elixir
 alias ExDataSketch.KLL
 
-sketch = KLL.new(k: 200) |> KLL.update_many(latencies)
+sketch = KLL.new(k: 100) |> KLL.update_many(latencies)
 
 for p <- [0.50, 0.90, 0.99] do
   exact = exact_percentile.(p)

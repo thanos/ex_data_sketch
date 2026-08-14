@@ -80,7 +80,7 @@ defmodule ExDataSketch.Cuckoo do
   For mergeable membership filters, use `ExDataSketch.Bloom`.
   """
 
-  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash, Telemetry}
+  alias ExDataSketch.{Backend, Binary, Codec, Config, Errors, Hash, Telemetry}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -128,6 +128,7 @@ defmodule ExDataSketch.Cuckoo do
   """
   @spec new(keyword()) :: t()
   def new(opts \\ []) do
+    opts = Config.merge_defaults(:cuckoo, opts)
     capacity = Keyword.get(opts, :capacity, @default_capacity)
     fp_size = Keyword.get(opts, :fingerprint_size, @default_fingerprint_size)
     bucket_size = Keyword.get(opts, :bucket_size, @default_bucket_size)

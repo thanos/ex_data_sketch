@@ -1,16 +1,16 @@
 # Cuckoo Filter Tutorial
 
 ```elixir
-Mix.install(
-  [
-    {:ex_data_sketch, path: "/Users/thanos/work/ex_data_sketch"},
-    {:rustler, ">= 0.0.0"},
-    {:telemetry_metrics, "~> 1.1"}
-  ],
-  config: [
-    rustler_precompiled: [force_build: [ex_data_sketch: true]]
-  ]
-)
+Mix.install([
+  {:ex_data_sketch, "~> 0.10"}
+],
+config: [
+    ex_data_sketch: [
+      backend: ExDataSketch.Backend.Rust,
+      integrations: [opentelemetry: false]
+    ]
+  ])
+
 ```
 
 ## Introduction
@@ -47,7 +47,7 @@ IO.puts("#{length(inserted)} inserted sessions, #{length(novel)} novel sessions"
 ```elixir
 alias ExDataSketch.Cuckoo
 
-{:ok, filter} = Cuckoo.new(backend: ExDataSketch.Backend.Rust, capacity: 500_000) |> Cuckoo.put_many(inserted)
+{:ok, filter} = Cuckoo.new(capacity: 500_000) |> Cuckoo.put_many(inserted)
 
 Cuckoo.member?(filter, hd(inserted))
 ```

@@ -39,6 +39,13 @@ defmodule ExDataSketch.REQ do
   example where `k=12` fails to differentiate the two modes at all, but
   `k=800`+ does.
 
+  ## No NIF acceleration is available for this family
+
+  Unlike most other `ExDataSketch` sketches, `ExDataSketch.Backend.Rust`'s
+  `req_*` functions are a thin pass-through to `ExDataSketch.Backend.Pure`
+  -- there is no compiled fast path to fall back on, so `:backend` has no
+  effect on REQ's performance either way.
+
   ## Binary State Layout (REQ1)
 
   All multi-byte fields are little-endian.
@@ -70,7 +77,7 @@ defmodule ExDataSketch.REQ do
   have the same HRA/LRA mode to merge.
   """
 
-  alias ExDataSketch.{Backend, Binary, Codec, Errors, Telemetry}
+  alias ExDataSketch.{Backend, Binary, Codec, Config, Errors, Telemetry}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -104,6 +111,7 @@ defmodule ExDataSketch.REQ do
   """
   @spec new(keyword()) :: t()
   def new(opts \\ []) do
+    opts = Config.merge_defaults(:req, opts)
     k = Keyword.get(opts, :k, @default_k)
     hra = Keyword.get(opts, :hra, true)
     validate_k!(k)

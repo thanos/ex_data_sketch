@@ -105,7 +105,7 @@ defmodule ExDataSketch.MisraGries do
   `k` parameter. Count (`n`) is always exactly additive.
   """
 
-  alias ExDataSketch.{Backend, Binary, Codec, Errors, Telemetry}
+  alias ExDataSketch.{Backend, Binary, Codec, Config, Errors, Telemetry}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -139,6 +139,7 @@ defmodule ExDataSketch.MisraGries do
   """
   @spec new(keyword()) :: t()
   def new(opts \\ []) do
+    opts = Config.merge_defaults(:misra_gries, opts)
     k = Keyword.get(opts, :k, @default_k)
     key_encoding = Keyword.get(opts, :key_encoding, :binary)
     validate_k!(k)

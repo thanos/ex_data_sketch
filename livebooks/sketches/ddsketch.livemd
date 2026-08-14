@@ -3,7 +3,13 @@
 ```elixir
 Mix.install([
   {:ex_data_sketch, "~> 0.10"}
-])
+],
+config: [
+    ex_data_sketch: [
+      backend: ExDataSketch.Backend.Rust,
+      integrations: [opentelemetry: false]
+    ]
+  ])
 ```
 
 ## Introduction
@@ -113,9 +119,18 @@ end
 
 ## count, min, max
 
+`min_value/1`/`max_value/1` track the raw minimum/maximum ever inserted
+at full precision -- independent of `alpha` and of the log-scale bucket
+machinery entirely. With 900,000 samples drawn uniformly from `[0, 50)`
+for the "fast API calls" bucket, the smallest of that many draws lands
+well under 0.001ms (expected order of magnitude ~`50 / 900_000`), so
+don't be surprised to see `Min: 0.0ms` if you round to only 3 decimal
+places -- it's rounding display precision, not the sketch losing the
+value:
+
 ```elixir
 IO.puts("Count: #{DDSketch.count(sketch)}")
-IO.puts("Min: #{Float.round(DDSketch.min_value(sketch), 3)}ms")
+IO.puts("Min: #{DDSketch.min_value(sketch)}ms (exact, not rounded)")
 IO.puts("Max: #{Float.round(DDSketch.max_value(sketch), 0)}ms")
 ```
 

@@ -69,7 +69,7 @@ defmodule ExDataSketch.Quotient do
 
   import Bitwise
 
-  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash, Telemetry}
+  alias ExDataSketch.{Backend, Binary, Codec, Config, Errors, Hash, Telemetry}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -110,6 +110,7 @@ defmodule ExDataSketch.Quotient do
   """
   @spec new(keyword()) :: t()
   def new(opts \\ []) do
+    opts = Config.merge_defaults(:quotient, opts)
     q = Keyword.get(opts, :q, @default_q)
     r = Keyword.get(opts, :r, @default_r)
     seed = Keyword.get(opts, :seed, @default_seed)

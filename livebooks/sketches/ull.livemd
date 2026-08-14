@@ -2,8 +2,14 @@
 
 ```elixir
 Mix.install([
-  {:ex_data_sketch, "~> 0.10.1"},
-])
+  {:ex_data_sketch, "~> 0.10"}
+],
+config: [
+    ex_data_sketch: [
+      backend: ExDataSketch.Backend.Rust,
+      integrations: [opentelemetry: false]
+    ]
+  ])
 ```
 
 ## Introduction
@@ -85,6 +91,21 @@ but ULL's error should be lower than HLL's on average across runs, per
 the ~30% measured improvement. See `ExDataSketch.ULL`'s moduledoc for why
 (a compressed per-register encoding with an extra sub-bucket refinement,
 and the OptimalFGRAEstimator instead of HLL's harmonic mean).
+
+### Why 4..26, and why it's a *hard* limit here
+
+Both families share `p >= 4` as a real algorithmic floor (see
+`hll.livemd`'s "Why 4..26?" for the reason -- it applies to ULL too).
+The ceiling is where they differ: `ExDataSketch.HLL`'s `p <= 26` is just
+a practical choice with no algorithmic basis, but ULL's `p <= 26` is a
+**hard limit** -- Ertl (2023)'s `ESTIMATION_FACTORS` lookup table has
+exactly 24 published entries, indexed by `p - 3`, giving a valid range
+of `p in 3..26`. This library additionally requires `p >= 4` (one higher
+than the table's own floor) purely to match HLL's floor, not because
+`p = 3` is actually unsafe for ULL. Raising ULL's ceiling past 26 would
+need the paper's authors (or an independent from-scratch derivation) to
+publish more table entries -- unlike HLL's ceiling, it can't be done by
+just changing a constant.
 
 ## Merging
 
