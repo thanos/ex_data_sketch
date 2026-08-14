@@ -73,7 +73,7 @@ Add `ex_data_sketch` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:ex_data_sketch, "~> 0.10.1"}
+    {:ex_data_sketch, "~> 0.10.2"}
   ]
 end
 ```
@@ -190,6 +190,7 @@ mix docs
 | v0.9.0 | Streaming Integrations -- Stream/Collectable API, Broadway/GenStage/Flow integration, persistence (ETS/DETS/CubDB/Mnesia/Ecto), telemetry + OpenTelemetry, ULL accuracy fix, v1 serialization escape hatch | Released |
 | v0.10.0 | Production Ergonomics -- unified sketch contract & facade dispatch, storage behaviour, windowing, supervised sketches (Server/Sketches), Telemetry.Metrics + LiveDashboard, filter NIF raw-hashing, Apache KLL interop, v1 serialization escape hatch for every family | Released |
 | v0.10.1 | Correctness and polish -- `ULL` rewritten to the real UltraLogLog algorithm (was an HLL-derived approximation; binary format bumped v1->v2), `KLL` compaction weight-invariant fix, `HLL` precision range widened to p=4..26, 16 new per-family tutorial Livebooks, `phoenix_demo/` sample app, plus the original post-review fixes (Server graceful-shutdown snapshotting, storage merge crash-safety, filter `:hash_strategy` build/round-trip fix, hardened `opencode.yml` workflow) | Released |
+| v0.10.2 | Application-config-driven per-family defaults (`ExDataSketch.Config`), `FilterChain.put_many/2` batching (with a simplified `delete/2` return), plus correctness fixes found via manual livebook verification -- `Cuckoo` eviction-slot cycling, `Quotient`/`CQF` O(table size) lookups, `CQF` silent overflow, and a `REQ` compaction weight-invariant bug matching v0.10.1's `KLL` fix | Released |
 | v0.11.0 | Apache HLL Interoperability & New Sketch Families -- full cross-language HLL exchange, CPC (Compressed Probabilistic Counting), Tuple Sketch (weighted distinct counting) | Planned |
 | v0.12.0 | Similarity & Sampling -- MinHash, Weighted MinHash, VarOpt sampling | Planned |
 | v1.0.0 | Stable Binary Contract -- locked EXSK format, full benchmark suite, Nx / Arrow ecosystem integrations | Planned |

@@ -5,9 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.10.2] - 2026-08-14
+
+Started as post-release fixes found via the same manual livebook-
+verification process used for v0.10.1 (`Cuckoo` eviction cycling,
+`Quotient`/`CQF` full-table decode on every call, `CQF` silent
+overflow, `REQ`'s KLL-shared compaction bug); grew to include
+Application-config-driven per-family defaults and a `FilterChain`
+batching fix.
 
 ### Added
+
+- **`ExDataSketch.Config`** -- per-family default option overrides via a
+  single flat Application config key, mirroring the existing
+  `config :ex_data_sketch, backend: ...` pattern:
+
+  ```elixir
+  config :ex_data_sketch,
+    defaults: [
+      hll: [p: 16],
+      cqf: [q: 20, r: 10],
+      bloom: [capacity: 50_000]
+    ]
+  ```
+
+  Every family's `new/1` (or `build/2` for `ExDataSketch.XorFilter`) now
+  merges its configured defaults underneath whatever options are
+  explicitly passed -- explicit options always win. `FilterChain.new/0`
+  takes no options at all, so it has no corresponding `:filter_chain`
+  entry. See the "Configuring Per-Family Defaults" section of
+  `guides/usage_guide.md` and `ExDataSketch.Config`'s moduledoc.
 
 - **`ExDataSketch.Quotient.member_many?/2`** -- tests membership for
   multiple items in a single pass, decoding the filter's header once
@@ -21,7 +48,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an error tuple. Added for chaining convenience
   (`new() |> put!(...) |> put!(...)`), mirroring `ExDataSketch.Cuckoo`.
 
+- **`ExDataSketch.FilterChain.put_many/2`** -- batches an insert through
+  each stage's own `put_many/2` (Rust-accelerated where that stage's
+  backend supports it) instead of looping single-item `put/2` calls.
+  Returns `{:ok, chain}` or `{:error, :full, partial_chain}` (stages
+  before the failure fully applied). `update_many/2` now delegates to
+  it (see Changed below). Added `:put_many` to `capabilities/0`.
+
 ### Changed
+
+- **BREAKING: `ExDataSketch.FilterChain.delete/2` now returns a bare
+  `t()` instead of `{:ok, t()}`.** It never had a real error case to
+  report -- a per-stage "item not found" is already absorbed as a no-op
+  by `delete_stage/2`, and a stage that doesn't support deletion raises
+  `UnsupportedOperationError` upfront rather than returning an error
+  tuple. Existing callers doing `{:ok, chain} = FilterChain.delete(...)`
+  need to drop the pattern match: `chain = FilterChain.delete(...)`.
+- **`ExDataSketch.FilterChain.update_many/2` now delegates to the new
+  `put_many/2`** instead of reducing over single-item `update/2` calls.
+  The old implementation forced every stage onto the Pure backend
+  (no family has a per-item Rust NIF) and reconstructed each stage's
+  entire state binary per item, making a large `update_many/2` call
+  orders of magnitude slower than necessary regardless of the
+  configured `:backend`; behavior (raises `FilterFullError` on overflow)
+  is unchanged, only the cost.
 
 - **BREAKING: `ExDataSketch.CQF.put/2` and `put_many/2` now return
   `{:ok, cqf}` / `{:ok, cqf} | {:error, :full, partial_cqf}` instead of
@@ -168,6 +218,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   call against a `q: 18` (262,144-slot) filter, purely from the
   full-table decode. Fixed the same way. See `ExDataSketch.CQF`'s
   moduledoc for details.
+
+- `livebooks/sketches/.verify_extract.exs`, the harness that
+  automatically re-runs every tutorial livebook's cells to catch
+  regressions, extracted every cell except the `Mix.install` cell
+  itself -- so a livebook's own `config:` block (e.g. `backend:
+  ExDataSketch.Backend.Rust`) was silently never applied during
+  verification, and every livebook ran on the Pure backend regardless
+  of what it configured. This is how the `FilterChain.put_many/2`
+  slowness above went unnoticed by the harness. Fixed by parsing the
+  `Mix.install` cell's `config:` option via `Code.string_to_quoted/1`
+  and applying it via `Application.put_env/3` before the remaining
+  cells run.
+
+- `ExDataSketch.REQ`'s moduledoc now documents that it has no NIF
+  acceleration (`ExDataSketch.Backend.Rust`'s `req_*` functions are a
+  thin pass-through to `ExDataSketch.Backend.Pure`), matching the note
+  `ExDataSketch.MisraGries` already carried -- previously undocumented,
+  so `:backend` silently had no effect on REQ's performance either way.
 
 ## [0.10.1] - 2026-08-11
 
