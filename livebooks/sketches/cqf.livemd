@@ -1,9 +1,20 @@
 # CQF (Counting Quotient Filter) Tutorial
 
 ```elixir
-Mix.install([
-  {:ex_data_sketch, "~> 0.10"}
-])
+# Mix.install([
+#   {:ex_data_sketch, "~> 0.10"}
+# ])
+Mix.install(
+  [
+    {:ex_data_sketch, path: "/Users/thanos/work/ex_data_sketch"},
+    {:rustler, ">= 0.0.0"},
+    {:telemetry_metrics, "~> 1.1"}
+  ],
+  config: [
+    rustler_precompiled: [force_build: [ex_data_sketch: true]]
+  ],
+  force: true
+)
 ```
 
 ## Introduction
@@ -48,14 +59,15 @@ IO.puts("#{length(events)} events across #{map_size(true_counts)} distinct keys"
 ```elixir
 alias ExDataSketch.CQF
 
-cqf = CQF.new(q: 18, r: 8) |> CQF.put("x") |> CQF.put("x") |> CQF.put("x")
+cqf = CQF.new(q: 18, r: 8) |> CQF.put!("x") |> CQF.put!("x") |> CQF.put!("x")
 CQF.estimate_count(cqf, "x")
 ```
 
-`put_many/2` for a batch:
+`put_many/2` for a batch. It returns `{:ok, cqf}` (or `{:error, :full, partial_cqf}`
+if the table fills up partway through -- see the sizing section below):
 
 ```elixir
-sketch = CQF.new(q: 18, r: 8) |> CQF.put_many(events)
+{:ok, sketch} = CQF.new(backend: ExDataSketch.Backend.Rust, q: 21, r: 8) |> CQF.put_many(events)
 
 {busiest_key, true_count} = Enum.max_by(true_counts, fn {_, c} -> c end)
 estimate = CQF.estimate_count(sketch, busiest_key)
@@ -97,18 +109,62 @@ IO.puts("Every sampled estimate >= true count: #{never_undercounts?}")
 ## Deletion
 
 ```elixir
-f = CQF.new(q: 10, r: 8) |> CQF.put("x") |> CQF.put("x")
+f = CQF.new(q: 10, r: 8) |> CQF.put!("x") |> CQF.put!("x")
 IO.puts("Count before delete: #{CQF.estimate_count(f, "x")}")
 
 f = CQF.delete(f, "x")
 IO.puts("Count after one delete: #{CQF.estimate_count(f, "x")}")
 ```
 
+## Sizing: q must budget for total occurrences, not distinct keys
+
+Unlike most of this library's filters, CQF's slot budget (`2^q` slots) is
+consumed by **every occurrence of every item**, not just distinct keys --
+each repeat of an already-seen item costs one more physical slot (there's
+no compact run-length counter; a count of N is literally N-1 duplicate
+slots plus the original). This dataset has 1,000,000 events across only
+50,000 distinct keys, so `q` has to be sized against the 1,000,000, not
+the 50,000: `q: 18` (262,144 slots) is under a third of what 1,000,000
+occurrences need. `put/2`/`put_many/2` return `{:error, :full, partial}`
+once the table has no room left (mirroring `ExDataSketch.Cuckoo`), so
+undersizing no longer fails silently -- but it's still expensive to get
+there: as the table fills, each insert searches further for a free slot
+before finally failing. `q: 21` (2,097,152 slots) gives this dataset
+roughly 2x headroom over its raw occurrence count, so size generously
+rather than relying on the error signal alone.
+
+## What "full" looks like
+
+Force it with a tiny `q`:
+
+```elixir
+tiny = CQF.new(q: 4, r: 4)
+
+result =
+  Enum.reduce_while(1..10_000, {:ok, tiny}, fn i, {:ok, f} ->
+    case CQF.put(f, "item_#{i}") do
+      {:ok, updated} -> {:cont, {:ok, updated}}
+      {:error, :full} -> {:halt, {:error, :full, i - 1}}
+    end
+  end)
+
+case result do
+  {:error, :full, items_inserted} ->
+    IO.puts("Filter reported full after #{items_inserted} inserts (q was 4, 16 slots)")
+
+  {:ok, _} ->
+    IO.puts("Never filled -- try a smaller q")
+end
+```
+
+`put!/2` raises `ExDataSketch.Errors.FilterFullError` instead of returning
+the error tuple, for callers who'd rather crash than handle it explicitly.
+
 ## Sizing: r controls per-item collision rate
 
 ```elixir
 for r <- [4, 8, 12] do
-  s = CQF.new(q: 18, r: r) |> CQF.put_many(events)
+  {:ok, s} = CQF.new(backend: ExDataSketch.Backend.Rust, q: 21, r: r) |> CQF.put_many(events)
   est = CQF.estimate_count(s, busiest_key)
   IO.puts("r=#{r} (#{CQF.size_bytes(s)} bytes): #{busiest_key} estimate=#{est} (true: #{true_count})")
 end
@@ -120,8 +176,8 @@ end
 half = div(length(events), 2)
 {first_half, second_half} = Enum.split(events, half)
 
-worker_a = CQF.new(q: 18, r: 8) |> CQF.put_many(first_half)
-worker_b = CQF.new(q: 18, r: 8) |> CQF.put_many(second_half)
+{:ok, worker_a} = CQF.new(backend: ExDataSketch.Backend.Rust, q: 21, r: 8) |> CQF.put_many(first_half)
+{:ok, worker_b} = CQF.new(backend: ExDataSketch.Backend.Rust, q: 21, r: 8) |> CQF.put_many(second_half)
 
 merged = CQF.merge(worker_a, worker_b)
 IO.puts("Merged estimate for #{busiest_key}: #{CQF.estimate_count(merged, busiest_key)}")

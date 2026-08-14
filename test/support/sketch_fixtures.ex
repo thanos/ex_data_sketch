@@ -134,6 +134,16 @@ defmodule ExDataSketch.SketchFixtures do
     sketch
   end
 
+  def build(:cqf, items, extra_args) do
+    items = items || default_items(:cqf)
+    merged_args = Keyword.merge(families()[:cqf].args, extra_args)
+
+    case CQF.from_enumerable(items, merged_args) do
+      {:ok, sketch} -> sketch
+      {:error, :full, sketch} -> sketch
+    end
+  end
+
   def build(family, items, extra_args) do
     %{module: mod, args: args} = Map.fetch!(families(), family)
     items = items || default_items(family)

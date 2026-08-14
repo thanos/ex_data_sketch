@@ -4,7 +4,7 @@ defmodule ExDataSketch.CQFTest do
 
   doctest ExDataSketch.CQF
 
-  alias ExDataSketch.CQF
+  alias ExDataSketch.{Backend, CQF}
 
   # ============================================================
   # new/1
@@ -63,21 +63,21 @@ defmodule ExDataSketch.CQFTest do
 
   describe "put/2 and member?/2" do
     test "inserted item is a member" do
-      cqf = CQF.new(q: 10, r: 8) |> CQF.put("hello")
+      cqf = CQF.new(q: 10, r: 8) |> CQF.put!("hello")
       assert CQF.member?(cqf, "hello")
     end
 
     test "non-inserted item is not a member" do
-      cqf = CQF.new(q: 10, r: 8) |> CQF.put("hello")
+      cqf = CQF.new(q: 10, r: 8) |> CQF.put!("hello")
       refute CQF.member?(cqf, "world")
     end
 
     test "multiple distinct items" do
       cqf =
         CQF.new(q: 10, r: 8)
-        |> CQF.put("a")
-        |> CQF.put("b")
-        |> CQF.put("c")
+        |> CQF.put!("a")
+        |> CQF.put!("b")
+        |> CQF.put!("c")
 
       assert CQF.member?(cqf, "a")
       assert CQF.member?(cqf, "b")
@@ -88,15 +88,15 @@ defmodule ExDataSketch.CQFTest do
     test "duplicate inserts maintain membership" do
       cqf =
         CQF.new(q: 10, r: 8)
-        |> CQF.put("x")
-        |> CQF.put("x")
-        |> CQF.put("x")
+        |> CQF.put!("x")
+        |> CQF.put!("x")
+        |> CQF.put!("x")
 
       assert CQF.member?(cqf, "x")
     end
 
     test "integer items" do
-      cqf = CQF.new(q: 10, r: 8) |> CQF.put(42)
+      cqf = CQF.new(q: 10, r: 8) |> CQF.put!(42)
       assert CQF.member?(cqf, 42)
       refute CQF.member?(cqf, 43)
     end
@@ -104,10 +104,10 @@ defmodule ExDataSketch.CQFTest do
     test "various term types" do
       cqf =
         CQF.new(q: 10, r: 8)
-        |> CQF.put("string")
-        |> CQF.put(123)
-        |> CQF.put(:atom)
-        |> CQF.put({:tuple, 1})
+        |> CQF.put!("string")
+        |> CQF.put!(123)
+        |> CQF.put!(:atom)
+        |> CQF.put!({:tuple, 1})
 
       assert CQF.member?(cqf, "string")
       assert CQF.member?(cqf, 123)
@@ -127,15 +127,15 @@ defmodule ExDataSketch.CQFTest do
     end
 
     test "returns 1 for single insert" do
-      cqf = CQF.new(q: 10, r: 8) |> CQF.put("x")
+      cqf = CQF.new(q: 10, r: 8) |> CQF.put!("x")
       assert CQF.estimate_count(cqf, "x") == 1
     end
 
     test "increments with duplicate inserts" do
       cqf =
         CQF.new(q: 10, r: 8)
-        |> CQF.put("x")
-        |> CQF.put("x")
+        |> CQF.put!("x")
+        |> CQF.put!("x")
 
       assert CQF.estimate_count(cqf, "x") == 2
     end
@@ -143,27 +143,27 @@ defmodule ExDataSketch.CQFTest do
     test "count=3 with three inserts" do
       cqf =
         CQF.new(q: 10, r: 8)
-        |> CQF.put("x")
-        |> CQF.put("x")
-        |> CQF.put("x")
+        |> CQF.put!("x")
+        |> CQF.put!("x")
+        |> CQF.put!("x")
 
       assert CQF.estimate_count(cqf, "x") == 3
     end
 
     test "high multiplicity" do
       n = 10
-      cqf = Enum.reduce(1..n, CQF.new(q: 10, r: 8), fn _i, acc -> CQF.put(acc, "x") end)
+      cqf = Enum.reduce(1..n, CQF.new(q: 10, r: 8), fn _i, acc -> CQF.put!(acc, "x") end)
       assert CQF.estimate_count(cqf, "x") == n
     end
 
     test "different items have independent counts" do
       cqf =
         CQF.new(q: 10, r: 8)
-        |> CQF.put("a")
-        |> CQF.put("a")
-        |> CQF.put("a")
-        |> CQF.put("b")
-        |> CQF.put("b")
+        |> CQF.put!("a")
+        |> CQF.put!("a")
+        |> CQF.put!("a")
+        |> CQF.put!("b")
+        |> CQF.put!("b")
 
       assert CQF.estimate_count(cqf, "a") == 3
       assert CQF.estimate_count(cqf, "b") == 2
@@ -171,7 +171,7 @@ defmodule ExDataSketch.CQFTest do
     end
 
     test "returns 0 for non-member" do
-      cqf = CQF.new(q: 10, r: 8) |> CQF.put("a")
+      cqf = CQF.new(q: 10, r: 8) |> CQF.put!("a")
       assert CQF.estimate_count(cqf, "b") == 0
     end
   end
@@ -182,7 +182,7 @@ defmodule ExDataSketch.CQFTest do
 
   describe "put_many/2" do
     test "inserts multiple items" do
-      cqf = CQF.new(q: 10, r: 8) |> CQF.put_many(["a", "b", "c"])
+      {:ok, cqf} = CQF.new(q: 10, r: 8) |> CQF.put_many(["a", "b", "c"])
       assert CQF.member?(cqf, "a")
       assert CQF.member?(cqf, "b")
       assert CQF.member?(cqf, "c")
@@ -190,12 +190,12 @@ defmodule ExDataSketch.CQFTest do
 
     test "empty list is no-op" do
       cqf = CQF.new(q: 10, r: 8)
-      cqf2 = CQF.put_many(cqf, [])
+      {:ok, cqf2} = CQF.put_many(cqf, [])
       assert CQF.count(cqf) == CQF.count(cqf2)
     end
 
     test "duplicates in list increment counts" do
-      cqf = CQF.new(q: 10, r: 8) |> CQF.put_many(["x", "x", "x", "y", "y"])
+      {:ok, cqf} = CQF.new(q: 10, r: 8) |> CQF.put_many(["x", "x", "x", "y", "y"])
       assert CQF.estimate_count(cqf, "x") == 3
       assert CQF.estimate_count(cqf, "y") == 2
     end
@@ -203,8 +203,8 @@ defmodule ExDataSketch.CQFTest do
     test "equivalent to sequential puts" do
       items = ["a", "b", "a", "c", "b", "a"]
 
-      cqf_many = CQF.new(q: 10, r: 8) |> CQF.put_many(items)
-      cqf_seq = Enum.reduce(items, CQF.new(q: 10, r: 8), &CQF.put(&2, &1))
+      {:ok, cqf_many} = CQF.new(q: 10, r: 8) |> CQF.put_many(items)
+      cqf_seq = Enum.reduce(items, CQF.new(q: 10, r: 8), &CQF.put!(&2, &1))
 
       assert CQF.count(cqf_many) == CQF.count(cqf_seq)
       assert CQF.estimate_count(cqf_many, "a") == CQF.estimate_count(cqf_seq, "a")
@@ -221,9 +221,9 @@ defmodule ExDataSketch.CQFTest do
     test "decrements count" do
       cqf =
         CQF.new(q: 10, r: 8)
-        |> CQF.put("x")
-        |> CQF.put("x")
-        |> CQF.put("x")
+        |> CQF.put!("x")
+        |> CQF.put!("x")
+        |> CQF.put!("x")
         |> CQF.delete("x")
 
       assert CQF.estimate_count(cqf, "x") == 2
@@ -232,7 +232,7 @@ defmodule ExDataSketch.CQFTest do
     test "removes item when count reaches 0" do
       cqf =
         CQF.new(q: 10, r: 8)
-        |> CQF.put("x")
+        |> CQF.put!("x")
         |> CQF.delete("x")
 
       refute CQF.member?(cqf, "x")
@@ -248,8 +248,8 @@ defmodule ExDataSketch.CQFTest do
     test "does not affect other items" do
       cqf =
         CQF.new(q: 10, r: 8)
-        |> CQF.put("a")
-        |> CQF.put("b")
+        |> CQF.put!("a")
+        |> CQF.put!("b")
         |> CQF.delete("a")
 
       refute CQF.member?(cqf, "a")
@@ -259,8 +259,8 @@ defmodule ExDataSketch.CQFTest do
     test "delete from count=2" do
       cqf =
         CQF.new(q: 10, r: 8)
-        |> CQF.put("x")
-        |> CQF.put("x")
+        |> CQF.put!("x")
+        |> CQF.put!("x")
         |> CQF.delete("x")
 
       assert CQF.estimate_count(cqf, "x") == 1
@@ -280,8 +280,8 @@ defmodule ExDataSketch.CQFTest do
     test "count increases with inserts" do
       cqf =
         CQF.new(q: 10, r: 8)
-        |> CQF.put("a")
-        |> CQF.put("b")
+        |> CQF.put!("a")
+        |> CQF.put!("b")
 
       assert CQF.count(cqf) == 2
     end
@@ -289,9 +289,9 @@ defmodule ExDataSketch.CQFTest do
     test "count tracks multiplicities" do
       cqf =
         CQF.new(q: 10, r: 8)
-        |> CQF.put("a")
-        |> CQF.put("a")
-        |> CQF.put("b")
+        |> CQF.put!("a")
+        |> CQF.put!("a")
+        |> CQF.put!("b")
 
       assert CQF.count(cqf) == 3
     end
@@ -299,9 +299,9 @@ defmodule ExDataSketch.CQFTest do
     test "count decreases with deletes" do
       cqf =
         CQF.new(q: 10, r: 8)
-        |> CQF.put("a")
-        |> CQF.put("a")
-        |> CQF.put("b")
+        |> CQF.put!("a")
+        |> CQF.put!("a")
+        |> CQF.put!("b")
         |> CQF.delete("a")
 
       assert CQF.count(cqf) == 2
@@ -314,8 +314,8 @@ defmodule ExDataSketch.CQFTest do
 
   describe "merge/2" do
     test "merged filter contains items from both" do
-      a = CQF.new(q: 10, r: 8) |> CQF.put("x")
-      b = CQF.new(q: 10, r: 8) |> CQF.put("y")
+      a = CQF.new(q: 10, r: 8) |> CQF.put!("x")
+      b = CQF.new(q: 10, r: 8) |> CQF.put!("y")
       merged = CQF.merge(a, b)
 
       assert CQF.member?(merged, "x")
@@ -323,15 +323,15 @@ defmodule ExDataSketch.CQFTest do
     end
 
     test "merge sums counts (multiset union)" do
-      a = CQF.new(q: 10, r: 8) |> CQF.put("x") |> CQF.put("x")
-      b = CQF.new(q: 10, r: 8) |> CQF.put("x") |> CQF.put("x") |> CQF.put("x")
+      a = CQF.new(q: 10, r: 8) |> CQF.put!("x") |> CQF.put!("x")
+      b = CQF.new(q: 10, r: 8) |> CQF.put!("x") |> CQF.put!("x") |> CQF.put!("x")
       merged = CQF.merge(a, b)
 
       assert CQF.estimate_count(merged, "x") == 5
     end
 
     test "merge with empty filter" do
-      a = CQF.new(q: 10, r: 8) |> CQF.put("x")
+      a = CQF.new(q: 10, r: 8) |> CQF.put!("x")
       b = CQF.new(q: 10, r: 8)
       merged = CQF.merge(a, b)
 
@@ -340,8 +340,8 @@ defmodule ExDataSketch.CQFTest do
     end
 
     test "merge total count is sum" do
-      a = CQF.new(q: 10, r: 8) |> CQF.put("a") |> CQF.put("b")
-      b = CQF.new(q: 10, r: 8) |> CQF.put("c") |> CQF.put("a")
+      a = CQF.new(q: 10, r: 8) |> CQF.put!("a") |> CQF.put!("b")
+      b = CQF.new(q: 10, r: 8) |> CQF.put!("c") |> CQF.put!("a")
       merged = CQF.merge(a, b)
 
       assert CQF.count(merged) == CQF.count(a) + CQF.count(b)
@@ -383,7 +383,7 @@ defmodule ExDataSketch.CQFTest do
     test "merges multiple filters" do
       filters =
         Enum.map(1..3, fn i ->
-          CQF.new(q: 10, r: 8) |> CQF.put("item_#{i}")
+          CQF.new(q: 10, r: 8) |> CQF.put!("item_#{i}")
         end)
 
       merged = CQF.merge_many(filters)
@@ -402,8 +402,8 @@ defmodule ExDataSketch.CQFTest do
     test "round-trip preserves membership" do
       cqf =
         CQF.new(q: 10, r: 8)
-        |> CQF.put("a")
-        |> CQF.put("b")
+        |> CQF.put!("a")
+        |> CQF.put!("b")
 
       binary = CQF.serialize(cqf)
       {:ok, recovered} = CQF.deserialize(binary)
@@ -416,9 +416,9 @@ defmodule ExDataSketch.CQFTest do
     test "round-trip preserves counts" do
       cqf =
         CQF.new(q: 10, r: 8)
-        |> CQF.put("x")
-        |> CQF.put("x")
-        |> CQF.put("x")
+        |> CQF.put!("x")
+        |> CQF.put!("x")
+        |> CQF.put!("x")
 
       binary = CQF.serialize(cqf)
       {:ok, recovered} = CQF.deserialize(binary)
@@ -434,7 +434,7 @@ defmodule ExDataSketch.CQFTest do
     end
 
     test "a non-default :hash_strategy is honored at build time and survives round-trip" do
-      cqf =
+      {:ok, cqf} =
         CQF.new(q: 10, r: 8, hash_strategy: :murmur3)
         |> CQF.put_many(~w(a b c))
 
@@ -446,7 +446,7 @@ defmodule ExDataSketch.CQFTest do
     end
 
     test "count preservation" do
-      cqf = CQF.new(q: 10, r: 8) |> CQF.put_many(~w(a b c a b a))
+      {:ok, cqf} = CQF.new(q: 10, r: 8) |> CQF.put_many(~w(a b c a b a))
       {:ok, recovered} = CQF.deserialize(CQF.serialize(cqf))
       assert CQF.count(recovered) == CQF.count(cqf)
     end
@@ -541,7 +541,7 @@ defmodule ExDataSketch.CQFTest do
 
   describe "from_enumerable/2" do
     test "builds from list" do
-      cqf = CQF.from_enumerable(["a", "b", "c"], q: 10, r: 8)
+      {:ok, cqf} = CQF.from_enumerable(["a", "b", "c"], q: 10, r: 8)
       assert CQF.member?(cqf, "a")
       assert CQF.member?(cqf, "b")
       assert CQF.member?(cqf, "c")
@@ -568,8 +568,8 @@ defmodule ExDataSketch.CQFTest do
   describe "merger/1" do
     test "merging function" do
       merger = CQF.merger()
-      a = CQF.new(q: 10, r: 8) |> CQF.put("x")
-      b = CQF.new(q: 10, r: 8) |> CQF.put("y")
+      a = CQF.new(q: 10, r: 8) |> CQF.put!("x")
+      b = CQF.new(q: 10, r: 8) |> CQF.put!("y")
       merged = merger.(a, b)
       assert CQF.member?(merged, "x")
       assert CQF.member?(merged, "y")
@@ -611,7 +611,7 @@ defmodule ExDataSketch.CQFTest do
 
       cqf =
         Enum.reduce(1..n_items, CQF.new(q: 10, r: 8), fn i, acc ->
-          CQF.put(acc, "item_#{i}")
+          CQF.put!(acc, "item_#{i}")
         end)
 
       false_positives =
@@ -631,18 +631,18 @@ defmodule ExDataSketch.CQFTest do
 
   describe "parameter variants" do
     test "small q" do
-      cqf = CQF.new(q: 4, r: 8) |> CQF.put("hello")
+      cqf = CQF.new(q: 4, r: 8) |> CQF.put!("hello")
       assert CQF.member?(cqf, "hello")
     end
 
     test "larger r" do
-      cqf = CQF.new(q: 10, r: 16) |> CQF.put("hello")
+      cqf = CQF.new(q: 10, r: 16) |> CQF.put!("hello")
       assert CQF.member?(cqf, "hello")
       assert CQF.estimate_count(cqf, "hello") == 1
     end
 
     test "custom seed" do
-      cqf = CQF.new(q: 10, r: 8, seed: 12_345) |> CQF.put("hello")
+      cqf = CQF.new(q: 10, r: 8, seed: 12_345) |> CQF.put!("hello")
       assert CQF.member?(cqf, "hello")
     end
   end
@@ -660,7 +660,7 @@ defmodule ExDataSketch.CQFTest do
                   max_length: 50
                 )
             ) do
-        cqf = CQF.new(q: 10, r: 8) |> CQF.put_many(items)
+        {:ok, cqf} = CQF.new(q: 10, r: 8) |> CQF.put_many(items)
 
         Enum.each(items, fn item ->
           assert CQF.member?(cqf, item)
@@ -676,7 +676,7 @@ defmodule ExDataSketch.CQFTest do
                   max_length: 50
                 )
             ) do
-        cqf = CQF.new(q: 10, r: 8) |> CQF.put_many(items)
+        {:ok, cqf} = CQF.new(q: 10, r: 8) |> CQF.put_many(items)
         assert CQF.count(cqf) == length(items)
       end
     end
@@ -689,7 +689,7 @@ defmodule ExDataSketch.CQFTest do
                   max_length: 30
                 )
             ) do
-        cqf = CQF.new(q: 10, r: 8) |> CQF.put_many(items)
+        {:ok, cqf} = CQF.new(q: 10, r: 8) |> CQF.put_many(items)
         {:ok, recovered} = CQF.deserialize(CQF.serialize(cqf))
         assert CQF.count(recovered) == CQF.count(cqf)
 
@@ -704,7 +704,7 @@ defmodule ExDataSketch.CQFTest do
               item <- string(:alphanumeric, min_length: 1, max_length: 10),
               n <- integer(2..10)
             ) do
-        cqf = Enum.reduce(1..n, CQF.new(q: 10, r: 8), fn _i, acc -> CQF.put(acc, item) end)
+        cqf = Enum.reduce(1..n, CQF.new(q: 10, r: 8), fn _i, acc -> CQF.put!(acc, item) end)
         cqf = CQF.delete(cqf, item)
         assert CQF.estimate_count(cqf, item) == n - 1
         assert CQF.count(cqf) == n - 1
@@ -724,8 +724,8 @@ defmodule ExDataSketch.CQFTest do
                   max_length: 20
                 )
             ) do
-        a = CQF.new(q: 10, r: 8) |> CQF.put_many(items_a)
-        b = CQF.new(q: 10, r: 8) |> CQF.put_many(items_b)
+        {:ok, a} = CQF.new(q: 10, r: 8) |> CQF.put_many(items_a)
+        {:ok, b} = CQF.new(q: 10, r: 8) |> CQF.put_many(items_b)
 
         ab = CQF.merge(a, b)
         ba = CQF.merge(b, a)
@@ -748,12 +748,105 @@ defmodule ExDataSketch.CQFTest do
                   max_length: 20
                 )
             ) do
-        cqf = CQF.new(q: 10, r: 8) |> CQF.put_many(items)
+        {:ok, cqf} = CQF.new(q: 10, r: 8) |> CQF.put_many(items)
         bin1 = CQF.serialize(cqf)
         {:ok, recovered} = CQF.deserialize(bin1)
         bin2 = CQF.serialize(recovered)
         assert bin1 == bin2
       end
+    end
+  end
+
+  # ============================================================
+  # overflow detection (put/2, put_many/2, put!/2)
+  # ============================================================
+
+  describe "overflow detection" do
+    test "put/2 returns {:error, :full} when the table has no room left" do
+      tiny = CQF.new(q: 2, r: 2)
+
+      result =
+        Enum.reduce_while(1..10_000, {:ok, tiny}, fn i, {:ok, f} ->
+          case CQF.put(f, "item_#{i}") do
+            {:ok, updated} -> {:cont, {:ok, updated}}
+            {:error, :full} -> {:halt, {:error, :full}}
+          end
+        end)
+
+      assert result == {:error, :full}
+    end
+
+    test "put_many/2 returns {:error, :full, partial} preserving prior successful inserts" do
+      items = for i <- 1..2000, do: "item_#{i}"
+
+      assert {:error, :full, partial} = CQF.new(q: 4, r: 4) |> CQF.put_many(items)
+      assert CQF.count(partial) > 0
+      assert CQF.count(partial) < length(items)
+
+      inserted_prefix = Enum.take(items, CQF.count(partial))
+      assert Enum.all?(inserted_prefix, &CQF.member?(partial, &1))
+    end
+
+    test "put!/2 raises FilterFullError, not a bare RuntimeError, when full" do
+      tiny = CQF.new(q: 2, r: 2)
+
+      assert_raise ExDataSketch.Errors.FilterFullError, ~r/CQF is full/, fn ->
+        Enum.reduce(1..10_000, tiny, fn i, c -> CQF.put!(c, "item_#{i}") end)
+      end
+    end
+
+    test "update_many/2 raises FilterFullError when the table fills up partway through" do
+      items = for i <- 1..2000, do: "item_#{i}"
+
+      assert_raise ExDataSketch.Errors.FilterFullError, ~r/CQF is full/, fn ->
+        ExDataSketch.update_many(CQF.new(q: 4, r: 4), items)
+      end
+    end
+
+    if Backend.Rust.available?() do
+      test "Pure and Rust report :full at the same point and produce identical partial state" do
+        items = for i <- 1..2000, do: "item_#{i}"
+
+        assert {:error, :full, pure} =
+                 CQF.new(q: 4, r: 4, backend: Backend.Pure) |> CQF.put_many(items)
+
+        assert {:error, :full, rust} =
+                 CQF.new(q: 4, r: 4, backend: Backend.Rust) |> CQF.put_many(items)
+
+        assert CQF.serialize(pure) == CQF.serialize(rust)
+        assert CQF.count(pure) == CQF.count(rust)
+      end
+    end
+  end
+
+  # ============================================================
+  # Regression: member?/estimate_count must not decode the entire
+  # table per call
+  # ============================================================
+
+  describe "member?/estimate_count performance regression" do
+    test "1000 member?/estimate_count calls against a large table complete quickly" do
+      # q=18 -> 262,144 slots. Only a handful of items are inserted --
+      # what this guards against is slot_count, not occupancy: the fixed
+      # bug decoded the whole table on every call regardless of how full
+      # it was. Confirmed at ~190ms per single call before the fix
+      # (~190s for 1000 calls); the fix brings this to microseconds per
+      # call. A generous 5s bound leaves huge margin over CI variance
+      # while still catching a real regression back to the
+      # O(slot_count)-per-call behavior.
+      cqf = CQF.new(q: 18, r: 8) |> CQF.put!("hello")
+
+      {time_us, _} =
+        :timer.tc(fn ->
+          Enum.each(1..1000, fn i ->
+            CQF.member?(cqf, "item_#{i}")
+            CQF.estimate_count(cqf, "item_#{i}")
+          end)
+        end)
+
+      assert time_us < 5_000_000,
+             "2000 calls took #{time_us / 1000}ms -- did the O(slot_count) " <>
+               "decode-per-call regress?"
     end
   end
 end

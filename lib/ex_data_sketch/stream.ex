@@ -41,6 +41,7 @@ defmodule ExDataSketch.Stream do
     CMS,
     CQF,
     DDSketch,
+    Errors,
     FrequentItems,
     HLL,
     IBLT,
@@ -227,18 +228,26 @@ defmodule ExDataSketch.Stream do
   @doc """
   Builds a CQF (Counting Quotient Filter) from a stream.
 
-  Delegates to `ExDataSketch.CQF.from_enumerable/2`.
+  Delegates to `ExDataSketch.CQF.from_enumerable/2`, raising
+  `ExDataSketch.Errors.FilterFullError` if the table fills up partway
+  through -- call `CQF.from_enumerable/2` directly for `{:ok, ...} |
+  {:error, :full, partial}` instead of raising.
 
   ## Examples
 
       iex> items = 1..50 |> Stream.map(&to_string/1)
-      iex> cqf = ExDataSketch.Stream.cqf(items, capacity: 100)
+      iex> cqf = ExDataSketch.Stream.cqf(items, q: 10, r: 8)
       iex> ExDataSketch.CQF.member?(cqf, "1")
       true
 
   """
   @spec cqf(Enumerable.t(), keyword()) :: CQF.t()
-  def cqf(enumerable, opts \\ []), do: CQF.from_enumerable(enumerable, opts)
+  def cqf(enumerable, opts \\ []) do
+    case CQF.from_enumerable(enumerable, opts) do
+      {:ok, cqf} -> cqf
+      {:error, :full, _partial} -> raise Errors.FilterFullError, structure: "CQF"
+    end
+  end
 
   @doc """
   Builds an IBLT from a stream.

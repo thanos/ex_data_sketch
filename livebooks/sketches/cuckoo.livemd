@@ -1,9 +1,16 @@
 # Cuckoo Filter Tutorial
 
 ```elixir
-Mix.install([
-  {:ex_data_sketch, "~> 0.10"}
-])
+Mix.install(
+  [
+    {:ex_data_sketch, path: "/Users/thanos/work/ex_data_sketch"},
+    {:rustler, ">= 0.0.0"},
+    {:telemetry_metrics, "~> 1.1"}
+  ],
+  config: [
+    rustler_precompiled: [force_build: [ex_data_sketch: true]]
+  ]
+)
 ```
 
 ## Introduction

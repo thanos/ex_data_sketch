@@ -461,20 +461,20 @@ defmodule ExDataSketch.ParityTest do
     @cqf_b Enum.map(50..99, &"cqf_b_#{&1}")
 
     test "put_many with duplicates produces identical serialization" do
-      pure = CQF.new(q: 8, r: 5, backend: Pure) |> CQF.put_many(@cqf_dupes)
-      rust = CQF.new(q: 8, r: 5, backend: Rust) |> CQF.put_many(@cqf_dupes)
+      {:ok, pure} = CQF.new(q: 8, r: 5, backend: Pure) |> CQF.put_many(@cqf_dupes)
+      {:ok, rust} = CQF.new(q: 8, r: 5, backend: Rust) |> CQF.put_many(@cqf_dupes)
 
       assert CQF.serialize(pure) == CQF.serialize(rust)
       assert CQF.count(pure) == CQF.count(rust)
     end
 
     test "merge produces identical serialization" do
-      pure_a = CQF.new(q: 8, r: 5, backend: Pure) |> CQF.put_many(@cqf_a)
-      pure_b = CQF.new(q: 8, r: 5, backend: Pure) |> CQF.put_many(@cqf_b)
+      {:ok, pure_a} = CQF.new(q: 8, r: 5, backend: Pure) |> CQF.put_many(@cqf_a)
+      {:ok, pure_b} = CQF.new(q: 8, r: 5, backend: Pure) |> CQF.put_many(@cqf_b)
       pure_merged = CQF.merge(pure_a, pure_b)
 
-      rust_a = CQF.new(q: 8, r: 5, backend: Rust) |> CQF.put_many(@cqf_a)
-      rust_b = CQF.new(q: 8, r: 5, backend: Rust) |> CQF.put_many(@cqf_b)
+      {:ok, rust_a} = CQF.new(q: 8, r: 5, backend: Rust) |> CQF.put_many(@cqf_a)
+      {:ok, rust_b} = CQF.new(q: 8, r: 5, backend: Rust) |> CQF.put_many(@cqf_b)
       rust_merged = CQF.merge(rust_a, rust_b)
 
       assert CQF.serialize(pure_merged) == CQF.serialize(rust_merged)
@@ -482,8 +482,8 @@ defmodule ExDataSketch.ParityTest do
     end
 
     test "member? and estimate_count return identical results" do
-      pure = CQF.new(q: 8, r: 5, backend: Pure) |> CQF.put_many(@cqf_dupes)
-      rust = CQF.new(q: 8, r: 5, backend: Rust) |> CQF.put_many(@cqf_dupes)
+      {:ok, pure} = CQF.new(q: 8, r: 5, backend: Pure) |> CQF.put_many(@cqf_dupes)
+      {:ok, rust} = CQF.new(q: 8, r: 5, backend: Rust) |> CQF.put_many(@cqf_dupes)
 
       for item <- @cqf_items do
         assert CQF.member?(pure, item) == CQF.member?(rust, item),
@@ -497,20 +497,20 @@ defmodule ExDataSketch.ParityTest do
     test "a custom :hash_fn bypasses the raw NIF path and still matches Pure" do
       hash_fn = fn item -> :erlang.phash2(item, 1_000_000_000) end
 
-      pure =
+      {:ok, pure} =
         CQF.new(q: 8, r: 5, hash_fn: hash_fn, backend: Pure) |> CQF.put_many(@cqf_dupes)
 
-      rust =
+      {:ok, rust} =
         CQF.new(q: 8, r: 5, hash_fn: hash_fn, backend: Rust) |> CQF.put_many(@cqf_dupes)
 
       assert CQF.serialize(pure) == CQF.serialize(rust)
     end
 
     test ":hash_strategy: :murmur3 takes the raw NIF murmur3 path and still matches Pure" do
-      pure =
+      {:ok, pure} =
         CQF.new(q: 8, r: 5, hash_strategy: :murmur3, backend: Pure) |> CQF.put_many(@cqf_dupes)
 
-      rust =
+      {:ok, rust} =
         CQF.new(q: 8, r: 5, hash_strategy: :murmur3, backend: Rust) |> CQF.put_many(@cqf_dupes)
 
       assert CQF.serialize(pure) == CQF.serialize(rust)

@@ -1,9 +1,19 @@
 # FilterChain Tutorial
 
 ```elixir
-Mix.install([
-  {:ex_data_sketch, "~> 0.10"}
-])
+# Mix.install([
+#   {:ex_data_sketch, "~> 0.10"}
+# ])
+Mix.install(
+  [
+    {:ex_data_sketch, path: "/Users/thanos/work/ex_data_sketch"},
+    {:rustler, ">= 0.0.0"},
+    {:telemetry_metrics, "~> 1.1"}
+  ],
+  config: [
+    rustler_precompiled: [force_build: [ex_data_sketch: true]]
+  ]
+)
 ```
 
 ## Introduction
@@ -151,9 +161,9 @@ IO.puts("Round-tripped membership check: #{FilterChain.member?(restored, hd(inse
 
 ## See also
 
-- `ExDataSketch.FilterChain` module documentation -- full API reference,
+* `ExDataSketch.FilterChain` module documentation -- full API reference,
   including `IBLT` adjunct stages for reconciliation alongside a query
   chain.
-- `livebooks/sketches/bloom.livemd`, `cuckoo.livemd`, `quotient.livemd`,
+* `livebooks/sketches/bloom.livemd`, `cuckoo.livemd`, `quotient.livemd`,
   `cqf.livemd`, `xor_filter.livemd` -- the individual filter families
   this module composes.

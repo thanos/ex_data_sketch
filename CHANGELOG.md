@@ -7,7 +7,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`ExDataSketch.Quotient.member_many?/2`** -- tests membership for
+  multiple items in a single pass, decoding the filter's header once
+  instead of once per item (mirrors the existing `put_many/2` batch
+  shape). Prefer this over `Enum.map(items, &member?(filter, &1))` when
+  checking many items against the same filter, e.g. measuring
+  false-positive rate over a large novel set.
+
+- **`ExDataSketch.CQF.put!/2`** -- inserts a single item, raising
+  `ExDataSketch.Errors.FilterFullError` on overflow instead of returning
+  an error tuple. Added for chaining convenience
+  (`new() |> put!(...) |> put!(...)`), mirroring `ExDataSketch.Cuckoo`.
+
+### Changed
+
+- **BREAKING: `ExDataSketch.CQF.put/2` and `put_many/2` now return
+  `{:ok, cqf}` / `{:ok, cqf} | {:error, :full, partial_cqf}` instead of
+  a bare `cqf`**, mirroring `ExDataSketch.Cuckoo`'s existing contract.
+  This is the other half of the fix described below -- detecting
+  overflow requires a way to report it. `update/2` and `update_many/2`
+  (the generic `ExDataSketch.Sketch` behaviour callbacks, which must
+  return a bare sketch) now raise `ExDataSketch.Errors.FilterFullError`
+  on overflow instead, matching Cuckoo's `update/2`/`update_many/2`.
+  `from_enumerable/2` likewise now returns `{:ok, cqf} | {:error, :full,
+  partial_cqf}`. Existing callers using `|>` chains with `put/2` or
+  `put_many/2` need to switch to `put!/2` or explicit `{:ok, cqf} = ...`
+  pattern matching.
+
 ### Fixed
+
+- **`ExDataSketch.CQF` silently dropped inserts once its table filled
+  up, in both backends, discovered while investigating why a livebook's
+  `put_many/2` call over a 1,000,000-event dataset was taking far longer
+  than expected (see the sizing fix below for that side of the
+  investigation).** CQF shares its slot layout and shift-right insertion
+  machinery with `ExDataSketch.Quotient`; that machinery's cascade loop
+  was bounded (to `slot_count` steps, so it always terminates rather
+  than looping forever on a full table) but had no way to report back
+  that it hadn't found room -- it just stopped, silently leaving the
+  requested item uninserted. Unlike `ExDataSketch.Cuckoo`, which already
+  had `{:error, :full}` for exactly this situation, CQF (and Quotient)
+  had no such signal at all. Fixed for CQF by threading a success/failure
+  result through the insertion call chain in both the Pure backend
+  (immutable, so a failed attempt's partial mutations are simply never
+  bound and thus discarded automatically) and the Rust NIF (mutates
+  `Vec<Slot>` in place, so each insertion path now checks whether its
+  shift-right cascade would fit *before* applying any mutation --
+  including preparatory metadata-bit changes -- rather than mutating
+  first and discovering failure partway through, which would have left
+  the table in a structurally inconsistent state for other entries, not
+  just failed the one insert cleanly). Verified: Pure and Rust report
+  `:full` at the identical point and produce byte-identical partial
+  state for the same over-capacity input; every item inserted before the
+  failure point remains a correctly-retrievable member; round-tripping
+  the partial state through serialize/deserialize preserves it exactly.
+  `ExDataSketch.Quotient`'s equivalent internal fix is present too (same
+  shared machinery), but surfaces as a safe no-op (a full table simply
+  stops growing) rather than a public `{:error, :full}`, since Quotient's
+  `put/2`/`put_many/2` API wasn't part of this change -- previously,
+  Quotient's Pure backend could genuinely hang forever inserting into an
+  exactly-100%-full table (no bound existed on that loop at all); it now
+  terminates safely. See `ExDataSketch.CQF`'s and
+  `ExDataSketch.Quotient`'s moduledocs for details.
+
+- **`ExDataSketch.CQF.put_many/2` (and the tutorial's other full-dataset
+  cells) could take minutes to hours because the demo's `q: 18` sized
+  the table for 50,000 *distinct* keys when it needed to be sized for
+  1,000,000 total occurrences -- CQF spends one physical slot per
+  occurrence of an item, not per distinct item (see `ExDataSketch.CQF`'s
+  "Counter Encoding" and "Sizing `:q`" moduledoc sections, the latter
+  also corrected here: it previously described a compact "bracketing"
+  counter scheme that was never actually implemented in either backend
+  -- the real representation is, and always was, one physical slot per
+  duplicate occurrence).** Confirmed: `q: 18` (262,144 slots, ~25% of
+  the 1,000,000 occurrences the demo dataset needs) ran for over 60
+  minutes without finishing `put_many/2`; `q: 21` (2,097,152 slots, ~2x
+  headroom) finishes the identical call in under a second. Fixed the
+  livebook's `q` values and added a "Sizing: q must budget for total
+  occurrences, not distinct keys" section explaining why, with a worked
+  example.
 
 - **`ExDataSketch.REQ` had the same compaction weight-preservation bug as
   `ExDataSketch.KLL`'s v0.10.1 fix, independently discovered via the same
@@ -62,6 +142,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   behavior change, not a binary format change; old serialized sketches
   still decode and work. See `ExDataSketch.Cuckoo`'s moduledoc for
   details.
+
+- **`ExDataSketch.Quotient.member?/2` (and `delete/2`'s lookup phase)
+  could take minutes for what should be a near-instant check, discovered
+  via the same manual livebook-verification process.** Both always
+  decoded the *entire* slot table (`2^q` slots) into a tuple before
+  reading the one run they actually needed, regardless of which
+  `:backend` was configured -- there is no per-item Rust NIF for these
+  (only `put_many/2` has one), so every call paid this cost. Confirmed:
+  300,000 sequential `member?/2` calls against a `q: 19` (524,288-slot)
+  filter took roughly 40 minutes. Fixed by adding a lazy decode path that
+  parses only the 32-byte header and reads individual slots directly
+  from the binary at their byte offset on demand, so a lookup now costs
+  O(run length) -- typically a handful of slots -- instead of
+  O(slot_count). `delete/2` additionally now skips the encode round-trip
+  entirely when the item isn't present. Confirmed: the same 300,000
+  calls now take ~0.13s total. No format or behavior change -- same
+  results, just fast. See `ExDataSketch.Quotient`'s moduledoc for
+  details.
+
+- **`ExDataSketch.CQF.member?/2`, `estimate_count/2`, and `delete/2` had
+  the identical bug**, found while investigating the same class of issue
+  for `ExDataSketch.Quotient` above (CQF shares Quotient's slot layout
+  and decode/encode machinery). Confirmed: ~190ms per single `member?/2`
+  call against a `q: 18` (262,144-slot) filter, purely from the
+  full-table decode. Fixed the same way. See `ExDataSketch.CQF`'s
+  moduledoc for details.
 
 ## [0.10.1] - 2026-08-11
 
@@ -339,8 +445,6 @@ sketch family.
 
       config :ex_data_sketch, :storage, backend: ExDataSketch.Storage.ETS
 
-  Each backend module's own API is unchanged. See
-  `baoulo/plans/0.10.0_phase2_stub_review.md` for the full design.
 - `ExDataSketch.Window` -- a ring of tumbling sub-sketches for "in the last
   N" questions without a hand-rolled timer:
 

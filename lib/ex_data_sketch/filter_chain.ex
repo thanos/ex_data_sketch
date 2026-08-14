@@ -396,7 +396,7 @@ defmodule ExDataSketch.FilterChain do
   defp put_stage(%Bloom{} = s, item), do: {:ok, Bloom.put(s, item)}
   defp put_stage(%Cuckoo{} = s, item), do: Cuckoo.put(s, item)
   defp put_stage(%Quotient{} = s, item), do: {:ok, Quotient.put(s, item)}
-  defp put_stage(%CQF{} = s, item), do: {:ok, CQF.put(s, item)}
+  defp put_stage(%CQF{} = s, item), do: CQF.put(s, item)
 
   defp member_stage(%Bloom{} = s, item), do: Bloom.member?(s, item)
   defp member_stage(%Cuckoo{} = s, item), do: Cuckoo.member?(s, item)

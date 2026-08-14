@@ -152,37 +152,69 @@ fn scan_run(slots: &[Slot], pos: u32, fr: u64, sc: u32) -> bool {
     }
 }
 
-pub fn do_insert(slots: &mut [Slot], fq: u32, fr: u64, sc: u32) {
+// Returns true on success, false if the table has no room for this
+// insert. On false, NO mutation is applied at all -- every branch below
+// checks `shift_right_fits` before applying any preparatory meta-bit
+// mutation (is_occupied/is_continuation), not just before the final
+// shift-right cascade. This matters because `slots` is mutated in
+// place: unlike the Elixir Pure backend (where an aborted attempt's
+// intermediate ctx is simply never bound, leaving the original
+// immutable binary untouched), a Rust caller that mutated a bit and
+// *then* found the cascade didn't fit would leave that bit applied,
+// corrupting the run structure for other entries -- not just failing
+// this one insert cleanly.
+pub fn do_insert(slots: &mut [Slot], fq: u32, fr: u64, sc: u32) -> bool {
     let was_occ = occ(slots, fq);
     let had_entry = meta(slots, fq) != 0;
 
-    set_meta_bit(slots, fq, QOT_OCC);
-
     if !was_occ && !had_entry {
-        // Fast path: canonical slot was completely empty
+        // Fast path: canonical slot was completely empty, always succeeds.
+        set_meta_bit(slots, fq, QOT_OCC);
         slots[fq as usize] = (QOT_OCC, fr);
-    } else if was_occ {
-        let run_start = find_run_start(slots, fq, sc);
-        insert_into_run(slots, fq, run_start, fr, sc);
-    } else {
-        // New run: insert first entry at run_start
-        let run_start = find_run_start(slots, fq, sc);
-        let m = if run_start == fq { 0 } else { QOT_SHI };
-        shift_right(slots, run_start, m, fr, sc);
+        return true;
     }
+
+    if was_occ {
+        // set_meta_bit here is a no-op (bit already set), so it's safe
+        // regardless of insert_into_run's outcome.
+        set_meta_bit(slots, fq, QOT_OCC);
+        let run_start = find_run_start(slots, fq, sc);
+        return insert_into_run(slots, fq, run_start, fr, sc);
+    }
+
+    // New run: insert first entry at run_start.
+    let run_start = find_run_start(slots, fq, sc);
+    let m = if run_start == fq { 0 } else { QOT_SHI };
+
+    if !shift_right_fits(slots, run_start, sc) {
+        return false;
+    }
+
+    set_meta_bit(slots, fq, QOT_OCC);
+    shift_right_commit(slots, run_start, m, fr, sc);
+    true
 }
 
-fn insert_into_run(slots: &mut [Slot], fq: u32, run_start: u32, fr: u64, sc: u32) {
+fn insert_into_run(slots: &mut [Slot], fq: u32, run_start: u32, fr: u64, sc: u32) -> bool {
     let (pos, at_start) = sorted_pos(slots, run_start, fr, sc);
 
+    if !shift_right_fits(slots, pos, sc) {
+        return false;
+    }
+
     if at_start {
+        // Inserting before the current first element of the run. The old
+        // first element becomes a continuation -- only safe to mark once
+        // shift_right_fits has confirmed the insert will actually happen.
         set_meta_bit(slots, run_start, QOT_CON);
         let m = if pos == fq { 0 } else { QOT_SHI };
-        shift_right(slots, pos, m, fr, sc);
+        shift_right_commit(slots, pos, m, fr, sc);
     } else {
         let m = QOT_CON | if pos == fq { 0 } else { QOT_SHI };
-        shift_right(slots, pos, m, fr, sc);
+        shift_right_commit(slots, pos, m, fr, sc);
     }
+
+    true
 }
 
 fn sorted_pos(slots: &[Slot], run_start: u32, fr: u64, sc: u32) -> (u32, bool) {
@@ -203,7 +235,36 @@ fn sorted_pos(slots: &[Slot], run_start: u32, fr: u64, sc: u32) -> (u32, bool) {
     }
 }
 
-pub fn shift_right(slots: &mut [Slot], pos: u32, new_meta: u8, new_rem: u64, sc: u32) {
+// Read-only: would a shift-right cascade starting at `pos` (about to be
+// overwritten, displacing its current occupant into the chain)
+// terminate within `sc` steps? Mirrors shift_right_commit's exact walk
+// without mutating anything, so callers can check before committing to
+// any mutation.
+pub fn shift_right_fits(slots: &[Slot], pos: u32, sc: u32) -> bool {
+    let (old_meta, _) = slots[pos as usize];
+
+    if old_meta == 0 {
+        return true;
+    }
+
+    let mut p = nxt(pos, sc);
+    for _ in 0..sc {
+        if meta(slots, p) == 0 {
+            return true;
+        }
+        p = nxt(p, sc);
+    }
+    false
+}
+
+// Shift right: insert (new_meta, new_rem) at pos, pushing existing
+// entries rightward. is_occupied at each position is preserved.
+//
+// Unconditional -- only call this once shift_right_fits(slots, pos, sc)
+// has confirmed success, or via shift_right/5 which checks first. The
+// inner loop has no separate bound because shift_right_fits already
+// walked the identical path and confirmed it terminates.
+pub fn shift_right_commit(slots: &mut [Slot], pos: u32, new_meta: u8, new_rem: u64, sc: u32) {
     let (old_meta, old_rem) = slots[pos as usize];
     let occ_here = old_meta & QOT_OCC;
     slots[pos as usize] = (new_meta | occ_here, new_rem);
@@ -212,13 +273,11 @@ pub fn shift_right(slots: &mut [Slot], pos: u32, new_meta: u8, new_rem: u64, sc:
         return;
     }
 
-    // Iterative shift chain, bounded to sc steps to prevent infinite loops
-    // on full/corrupt filters.
     let mut cur_meta = (old_meta & !QOT_OCC) | QOT_SHI;
     let mut cur_rem = old_rem;
     let mut p = nxt(pos, sc);
 
-    for _ in 0..sc {
+    loop {
         let (om, or) = slots[p as usize];
         let oh = om & QOT_OCC;
         slots[p as usize] = (cur_meta | oh, cur_rem);
@@ -231,6 +290,17 @@ pub fn shift_right(slots: &mut [Slot], pos: u32, new_meta: u8, new_rem: u64, sc:
         cur_rem = or;
         p = nxt(p, sc);
     }
+}
+
+// Convenience check-then-commit wrapper for callers (e.g. cqf.rs's
+// duplicate-copy insert path) that have no preparatory mutation to
+// guard -- committing unconditionally on success is safe for them.
+pub fn shift_right(slots: &mut [Slot], pos: u32, new_meta: u8, new_rem: u64, sc: u32) -> bool {
+    if !shift_right_fits(slots, pos, sc) {
+        return false;
+    }
+    shift_right_commit(slots, pos, new_meta, new_rem, sc);
+    true
 }
 
 pub fn extract_all(slots: &[Slot], sc: u32) -> Vec<(u32, u64)> {

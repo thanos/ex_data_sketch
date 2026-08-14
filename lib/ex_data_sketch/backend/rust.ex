@@ -885,6 +885,10 @@ defmodule ExDataSketch.Backend.Rust do
     do: Pure.quotient_member?(state_bin, hash64, opts)
 
   @impl true
+  def quotient_member_many?(state_bin, hashes, opts),
+    do: Pure.quotient_member_many?(state_bin, hashes, opts)
+
+  @impl true
   def quotient_delete(state_bin, hash64, opts), do: Pure.quotient_delete(state_bin, hash64, opts)
 
   @impl true
@@ -916,7 +920,7 @@ defmodule ExDataSketch.Backend.Rust do
   def cqf_put(state_bin, hash64, opts), do: Pure.cqf_put(state_bin, hash64, opts)
 
   @impl true
-  def cqf_put_many(state_bin, [], _opts), do: state_bin
+  def cqf_put_many(state_bin, [], _opts), do: {:ok, state_bin}
 
   def cqf_put_many(state_bin, hashes, opts) do
     q = Keyword.fetch!(opts, :q)
@@ -931,7 +935,11 @@ defmodule ExDataSketch.Backend.Rust do
         Nif.cqf_put_many_nif(state_bin, hashes_bin, q, r)
       end
 
-    unwrap_ok!(result)
+    case result do
+      {:ok, bin} -> {:ok, bin}
+      {:error, "full", bin} -> {:error, :full, bin}
+      {:error, reason} -> raise "Rust NIF error: #{reason}"
+    end
   end
 
   def cqf_put_many_raw(state_bin, items, opts) do
@@ -957,7 +965,11 @@ defmodule ExDataSketch.Backend.Rust do
           Nif.cqf_put_many_raw_h_nif(state_bin, bins, q, r, seed, algo)
       end
 
-    unwrap_ok!(result)
+    case result do
+      {:ok, bin} -> {:ok, bin}
+      {:error, "full", bin} -> {:error, :full, bin}
+      {:error, reason} -> raise "Rust NIF error: #{reason}"
+    end
   end
 
   @impl true

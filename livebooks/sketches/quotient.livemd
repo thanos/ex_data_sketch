@@ -1,9 +1,19 @@
 # Quotient Filter Tutorial
 
 ```elixir
-Mix.install([
-  {:ex_data_sketch, "~> 0.10"}
-])
+# Mix.install([
+#   {:ex_data_sketch, "~> 0.10"}
+# ])
+Mix.install(
+  [
+    {:ex_data_sketch, path: "/Users/thanos/work/ex_data_sketch"},
+    {:rustler, ">= 0.0.0"},
+    {:telemetry_metrics, "~> 1.1"}
+  ],
+  config: [
+    rustler_precompiled: [force_build: [ex_data_sketch: true]]
+  ]
+)
 ```
 
 ## Introduction
@@ -53,7 +63,7 @@ Quotient.member?(filter, hd(inserted))
 ## Safe deletion
 
 ```elixir
-f = Quotient.new(backend: ExDataSketch.Backend.Rust, q: 10, r: 8) |> Quotient.put("real_item")
+f = Quotient.new(q: 10, r: 8) |> Quotient.put("real_item")
 
 # Deleting something never inserted is a safe no-op -- it does not
 # disturb "real_item", unlike a naive Cuckoo-style eviction could.
@@ -74,7 +84,7 @@ IO.puts("False positives: #{false_positives} / #{length(novel)} (#{Float.round(o
 
 ```elixir
 for r <- [4, 8, 12] do
-  f = Quotient.new(q: 19, r: r) |> Quotient.put_many(inserted)
+  f = Quotient.new(backend: ExDataSketch.Backend.Rust, q: 19, r: r) |> Quotient.put_many(inserted)
   observed = Enum.count(Enum.take(novel, 50_000), &Quotient.member?(f, &1)) / 50_000
   IO.puts("r=#{r} (#{Quotient.size_bytes(f)} bytes): observed FPR=#{Float.round(observed * 100, 4)}%")
 end
@@ -95,8 +105,8 @@ Both filters must share identical `q`, `r`, and `seed`:
 half = div(length(inserted), 2)
 {first_half, second_half} = Enum.split(inserted, half)
 
-worker_a = Quotient.new(q: 19, r: 8) |> Quotient.put_many(first_half)
-worker_b = Quotient.new(q: 19, r: 8) |> Quotient.put_many(second_half)
+worker_a = Quotient.new(backend: ExDataSketch.Backend.Rust, q: 19, r: 8) |> Quotient.put_many(first_half)
+worker_b = Quotient.new(backend: ExDataSketch.Backend.Rust, q: 19, r: 8) |> Quotient.put_many(second_half)
 
 merged = Quotient.merge(worker_a, worker_b)
 IO.puts("Merged contains first-half item: #{Quotient.member?(merged, hd(first_half))}")

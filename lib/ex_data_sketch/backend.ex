@@ -325,6 +325,9 @@ defmodule ExDataSketch.Backend do
   @doc "Test membership of a single hash64 value in Quotient state."
   @callback quotient_member?(state_bin(), hash64(), opts()) :: boolean()
 
+  @doc "Test membership of a list of hash64 values in Quotient state, in one pass."
+  @callback quotient_member_many?(state_bin(), [hash64()], opts()) :: [boolean()]
+
   @doc "Delete a single hash64 from Quotient state."
   @callback quotient_delete(state_bin(), hash64(), opts()) :: state_bin()
 
@@ -339,11 +342,13 @@ defmodule ExDataSketch.Backend do
   @doc "Create a new CQF state binary with the given options."
   @callback cqf_new(opts()) :: state_bin()
 
-  @doc "Insert a single hash64 into CQF state, incrementing its count."
-  @callback cqf_put(state_bin(), hash64(), opts()) :: state_bin()
+  @doc "Insert a single hash64 into CQF state, incrementing its count. Returns {:ok, state} or {:error, :full}."
+  @callback cqf_put(state_bin(), hash64(), opts()) ::
+              {:ok, state_bin()} | {:error, :full}
 
-  @doc "Insert a list of hash64 values into CQF state."
-  @callback cqf_put_many(state_bin(), [hash64()], opts()) :: state_bin()
+  @doc "Insert a list of hash64 values into CQF state. Returns {:ok, state} or {:error, :full, state}."
+  @callback cqf_put_many(state_bin(), [hash64()], opts()) ::
+              {:ok, state_bin()} | {:error, :full, state_bin()}
 
   @doc "Test membership of a single hash64 value in CQF state."
   @callback cqf_member?(state_bin(), hash64(), opts()) :: boolean()

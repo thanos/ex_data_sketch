@@ -225,7 +225,7 @@ defmodule ExDataSketch.FilterChainTest do
     end
 
     test "deletes from CQF stage" do
-      cqf = CQF.new(q: 10, r: 8) |> CQF.put("hello")
+      cqf = CQF.new(q: 10, r: 8) |> CQF.put!("hello")
       chain = FilterChain.new() |> FilterChain.add_stage(cqf)
       {:ok, chain} = FilterChain.delete(chain, "hello")
       refute FilterChain.member?(chain, "hello")
@@ -233,7 +233,7 @@ defmodule ExDataSketch.FilterChainTest do
 
     test "deletes from multiple stages" do
       {:ok, cuckoo} = Cuckoo.new() |> Cuckoo.put("hello")
-      cqf = CQF.new(q: 10, r: 8) |> CQF.put("hello")
+      cqf = CQF.new(q: 10, r: 8) |> CQF.put!("hello")
 
       chain =
         FilterChain.new()
@@ -522,7 +522,7 @@ defmodule ExDataSketch.FilterChainTest do
     end
 
     test "CQF stage works" do
-      cqf = CQF.new(q: 10, r: 8) |> CQF.put("hello")
+      cqf = CQF.new(q: 10, r: 8) |> CQF.put!("hello")
       chain = FilterChain.new() |> FilterChain.add_stage(cqf)
       assert FilterChain.member?(chain, "hello")
       refute FilterChain.member?(chain, "world")
@@ -599,7 +599,7 @@ defmodule ExDataSketch.FilterChainTest do
     test "deletes from mixed deletable stages: Cuckoo + Quotient + CQF" do
       {:ok, cuckoo} = Cuckoo.new() |> Cuckoo.put("hello")
       qot = Quotient.new(q: 10, r: 8) |> Quotient.put("hello")
-      cqf = CQF.new(q: 10, r: 8) |> CQF.put("hello")
+      cqf = CQF.new(q: 10, r: 8) |> CQF.put!("hello")
 
       chain =
         FilterChain.new()
@@ -639,7 +639,7 @@ defmodule ExDataSketch.FilterChainTest do
     test "sums across Cuckoo + Quotient + CQF" do
       {:ok, cuckoo} = Cuckoo.new() |> Cuckoo.put("a")
       qot = Quotient.new(q: 10, r: 8) |> Quotient.put("b")
-      cqf = CQF.new(q: 10, r: 8) |> CQF.put("c")
+      cqf = CQF.new(q: 10, r: 8) |> CQF.put!("c")
 
       chain =
         FilterChain.new()
@@ -676,7 +676,7 @@ defmodule ExDataSketch.FilterChainTest do
     test "all stage types contribute" do
       {:ok, cuckoo} = Cuckoo.new() |> Cuckoo.put("a")
       qot = Quotient.new(q: 8, r: 5) |> Quotient.put("b")
-      cqf = CQF.new(q: 8, r: 5) |> CQF.put("c")
+      cqf = CQF.new(q: 8, r: 5) |> CQF.put!("c")
       {:ok, xor} = XorFilter.build(["x", "y"])
       iblt = IBLT.new() |> IBLT.put("z")
 
@@ -714,7 +714,7 @@ defmodule ExDataSketch.FilterChainTest do
     end
 
     test "round-trip with CQF stage" do
-      cqf = CQF.new(q: 10, r: 8) |> CQF.put("hello")
+      cqf = CQF.new(q: 10, r: 8) |> CQF.put!("hello")
       chain = FilterChain.new() |> FilterChain.add_stage(cqf)
       binary = FilterChain.serialize(chain)
       {:ok, recovered} = FilterChain.deserialize(binary)
@@ -735,7 +735,7 @@ defmodule ExDataSketch.FilterChainTest do
       bloom = Bloom.new(capacity: 100) |> Bloom.put("shared")
       {:ok, cuckoo} = Cuckoo.new() |> Cuckoo.put("shared")
       qot = Quotient.new(q: 10, r: 8) |> Quotient.put("shared")
-      cqf = CQF.new(q: 10, r: 8) |> CQF.put("shared")
+      cqf = CQF.new(q: 10, r: 8) |> CQF.put!("shared")
       iblt = IBLT.new() |> IBLT.put("reconcile")
 
       chain =

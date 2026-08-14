@@ -197,7 +197,7 @@ defimpl Collectable, for: ExDataSketch.CQF do
            (ExDataSketch.CQF.t(), :done | :halt | {:cont, term()} -> ExDataSketch.CQF.t())}
   def into(%ExDataSketch.CQF{} = sketch) do
     collector_fn = fn
-      acc, {:cont, item} -> ExDataSketch.CQF.put(acc, item)
+      acc, {:cont, item} -> ExDataSketch.CQF.put!(acc, item)
       acc, :done -> acc
       acc, :halt -> acc
     end

@@ -50,8 +50,8 @@ fn quotient_put_many_impl<'a>(
         let hash64 = u64::from_le_bytes(hashes[off..off + 8].try_into().unwrap());
         let (fq, fr) = qc::qot_split_hash(hash64, q, r);
 
-        if !qc::lookup(&slots, fq, fr, slot_count) {
-            qc::do_insert(&mut slots, fq, fr, slot_count);
+        if !qc::lookup(&slots, fq, fr, slot_count) && qc::do_insert(&mut slots, fq, fr, slot_count)
+        {
             item_count += 1;
         }
     }
@@ -112,8 +112,8 @@ fn quotient_put_many_raw_impl<'a>(
         };
         let (fq, fr) = qc::qot_split_hash(hash64, q, r);
 
-        if !qc::lookup(&slots, fq, fr, slot_count) {
-            qc::do_insert(&mut slots, fq, fr, slot_count);
+        if !qc::lookup(&slots, fq, fr, slot_count) && qc::do_insert(&mut slots, fq, fr, slot_count)
+        {
             item_count += 1;
         }
     }
@@ -193,8 +193,9 @@ fn quotient_merge_impl<'a>(
     let mut item_count: u32 = 0;
 
     for (fq, fr) in &all {
-        qc::do_insert(&mut fresh_slots, *fq, *fr, slot_count);
-        item_count += 1;
+        if qc::do_insert(&mut fresh_slots, *fq, *fr, slot_count) {
+            item_count += 1;
+        }
     }
 
     let new_body = qc::encode_slots(&fresh_slots, slot_bytes, slot_count);
