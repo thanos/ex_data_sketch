@@ -3,7 +3,13 @@
 ```elixir
 Mix.install([
   {:ex_data_sketch, "~> 0.10"}
-])
+],
+config: [
+    ex_data_sketch: [
+      backend: ExDataSketch.Backend.Rust,
+      integrations: [opentelemetry: false]
+    ]
+  ])
 ```
 
 ## Introduction
@@ -51,7 +57,7 @@ IO.puts("#{length(queries)} queries across #{map_size(true_counts)} distinct ter
 ```elixir
 alias ExDataSketch.FrequentItems
 
-sketch = FrequentItems.new(k: 20) |> FrequentItems.update_many(queries)
+sketch = FrequentItems.new(k: 100) |> FrequentItems.update_many(queries)
 
 sketch |> FrequentItems.top_k() |> Enum.take(5)
 ```

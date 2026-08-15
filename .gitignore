@@ -40,8 +40,5 @@ ex_data_sketch-*.tar
 # publish time and would also produce confusing checksum mismatches for
 # users installing from git rather than from Hex.
 /checksum-Elixir.ExDataSketch.Nif.exs
-<<<<<<< HEAD
 .tool-versions
-=======
->>>>>>> f3a90307dfcad2d29404514116b5e8f62273350e
 /baoulo/

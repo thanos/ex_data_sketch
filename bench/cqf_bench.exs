@@ -25,16 +25,16 @@ lookup_miss = Enum.map(100_001..110_000, &"cqf_bench_#{&1}")
 scenarios =
   for {name, backend} <- backends, into: %{} do
     sketch = CQF.new(q: 16, r: 8, backend: backend)
-    sketch_populated = CQF.from_enumerable(items_1k, q: 16, r: 8, backend: backend)
+    {:ok, sketch_populated} = CQF.from_enumerable(items_1k, q: 16, r: 8, backend: backend)
 
     # For estimate_count: insert same item 100 times for multiplicity
     sketch_with_counts =
-      Enum.reduce(1..100, sketch_populated, fn _, acc -> CQF.put(acc, "cqf_bench_1") end)
+      Enum.reduce(1..100, sketch_populated, fn _, acc -> CQF.put!(acc, "cqf_bench_1") end)
 
-    merge_a =
+    {:ok, merge_a} =
       CQF.from_enumerable(Enum.take(items_1k, 500), q: 16, r: 8, backend: backend)
 
-    merge_b =
+    {:ok, merge_b} =
       CQF.from_enumerable(Enum.drop(items_1k, 500), q: 16, r: 8, backend: backend)
 
     binary = CQF.serialize(sketch_populated)

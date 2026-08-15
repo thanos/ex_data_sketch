@@ -36,7 +36,7 @@ defmodule ExDataSketch.IBLT do
   count (i32), key_sum (u64), value_sum (u64), check_sum (u32).
   """
 
-  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash, Telemetry}
+  alias ExDataSketch.{Backend, Binary, Codec, Config, Errors, Hash, Telemetry}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -76,6 +76,7 @@ defmodule ExDataSketch.IBLT do
   """
   @spec new(keyword()) :: t()
   def new(opts \\ []) do
+    opts = Config.merge_defaults(:iblt, opts)
     cell_count = Keyword.get(opts, :cell_count, @default_cell_count)
     hash_count = Keyword.get(opts, :hash_count, @default_hash_count)
     seed = Keyword.get(opts, :seed, @default_seed)

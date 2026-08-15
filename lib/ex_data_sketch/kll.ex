@@ -73,7 +73,7 @@ defmodule ExDataSketch.KLL do
   merge order, though internal state may differ due to compaction parity.
   """
 
-  alias ExDataSketch.{Backend, Binary, Codec, Errors, Telemetry}
+  alias ExDataSketch.{Backend, Binary, Codec, Config, Errors, Telemetry}
   alias ExDataSketch.DataSketches.KLLSketch
 
   @type t :: %__MODULE__{
@@ -110,6 +110,7 @@ defmodule ExDataSketch.KLL do
   """
   @spec new(keyword()) :: t()
   def new(opts \\ []) do
+    opts = Config.merge_defaults(:kll, opts)
     k = Keyword.get(opts, :k, @default_k)
     validate_k!(k)
     backend = Backend.resolve(opts)

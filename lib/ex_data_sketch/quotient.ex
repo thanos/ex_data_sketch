@@ -42,6 +42,24 @@ defmodule ExDataSketch.Quotient do
   non-inserted item is a no-op and does not create false negatives for
   other items.
 
+  ## member?/2 Performance
+
+  `member?/2`, `delete/2`, and `put/2` (single-item) decode only the
+  32-byte header plus whichever slots the lookup actually touches --
+  typically a handful, the length of one run -- rather than the whole
+  slot table. This matters because the table can be large (`2^q` slots),
+  and it's independent of which `:backend` is configured: there's no
+  per-item Rust NIF for these (only `put_many/2` has one), so they always
+  run through this path. Earlier versions of this module decoded the
+  entire table into a tuple on every single call regardless of backend,
+  making `member?/2` cost O(slot_count) per call -- e.g. 300,000
+  sequential `member?/2` calls against a `q: 19` (524,288-slot) filter
+  each re-decoded all 524,288 slots, taking minutes for what should be a
+  near-instant check. Prefer `member_many?/2` over
+  `Enum.map(items, &member?(filter, &1))` when checking many items
+  against one filter -- it still benefits from this fix, but also avoids
+  reconstructing the lookup context on every call.
+
   ## Binary State Layout (QOT1)
 
   32-byte header followed by a packed slot array. Each slot contains
@@ -51,7 +69,7 @@ defmodule ExDataSketch.Quotient do
 
   import Bitwise
 
-  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash, Telemetry}
+  alias ExDataSketch.{Backend, Binary, Codec, Config, Errors, Hash, Telemetry}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -92,6 +110,7 @@ defmodule ExDataSketch.Quotient do
   """
   @spec new(keyword()) :: t()
   def new(opts \\ []) do
+    opts = Config.merge_defaults(:quotient, opts)
     q = Keyword.get(opts, :q, @default_q)
     r = Keyword.get(opts, :r, @default_r)
     seed = Keyword.get(opts, :seed, @default_seed)
@@ -215,6 +234,30 @@ defmodule ExDataSketch.Quotient do
   def member?(%__MODULE__{state: state, opts: opts, backend: backend}, item) do
     hash = hash_item(item, opts)
     backend.quotient_member?(state, hash, opts)
+  end
+
+  @doc """
+  Tests membership for multiple items in a single pass.
+
+  Decodes the filter's header once and checks every item against it,
+  instead of paying `member?/2`'s per-call overhead once per item.
+  Prefer this over `Enum.map(items, &member?(filter, &1))` when checking
+  many items against the same filter (e.g. measuring false-positive rate
+  over a large novel set).
+
+  Returns a list of booleans in the same order as `items`.
+
+  ## Examples
+
+      iex> qf = ExDataSketch.Quotient.new(q: 10, r: 8) |> ExDataSketch.Quotient.put_many(["a", "b"])
+      iex> ExDataSketch.Quotient.member_many?(qf, ["a", "b", "c"])
+      [true, true, false]
+
+  """
+  @spec member_many?(t(), Enumerable.t()) :: [boolean()]
+  def member_many?(%__MODULE__{state: state, opts: opts, backend: backend}, items) do
+    hashes = Enum.map(items, &hash_item(&1, opts))
+    backend.quotient_member_many?(state, hashes, opts)
   end
 
   @doc """

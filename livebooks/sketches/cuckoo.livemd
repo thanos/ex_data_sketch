@@ -3,7 +3,14 @@
 ```elixir
 Mix.install([
   {:ex_data_sketch, "~> 0.10"}
-])
+],
+config: [
+    ex_data_sketch: [
+      backend: ExDataSketch.Backend.Rust,
+      integrations: [opentelemetry: false]
+    ]
+  ])
+
 ```
 
 ## Introduction
@@ -130,9 +137,9 @@ IO.puts("Round-tripped membership check: #{Cuckoo.member?(restored, hd(inserted)
 
 ## See also
 
-- `ExDataSketch.Cuckoo` module documentation -- full API reference.
-- `ExDataSketch.Quotient` -- deletion that's *always* safe (deleting a
+* `ExDataSketch.Cuckoo` module documentation -- full API reference.
+* `ExDataSketch.Quotient` -- deletion that's *always* safe (deleting a
   non-member is a guaranteed no-op, not just usually one) and does
   support `merge/2`; see `livebooks/sketches/quotient.livemd`.
-- `ExDataSketch.Bloom` -- no deletion, but mergeable and simpler; see
+* `ExDataSketch.Bloom` -- no deletion, but mergeable and simpler; see
   `livebooks/sketches/bloom.livemd`.

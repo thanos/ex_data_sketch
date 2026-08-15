@@ -3,7 +3,13 @@
 ```elixir
 Mix.install([
   {:ex_data_sketch, "~> 0.10"}
-])
+],
+config: [
+    ex_data_sketch: [
+      backend: ExDataSketch.Backend.Rust,
+      integrations: [opentelemetry: false]
+    ]
+  ])
 ```
 
 ## Introduction
@@ -81,11 +87,11 @@ end
 ```
 
 | r bits | Theoretical FPR |
-|---|---|
-| 4  | ~6.25%   |
-| 8  | ~0.39%   |
-| 12 | ~0.024%  |
-| 16 | ~0.0015% |
+| ------ | --------------- |
+| 4      | ~6.25%          |
+| 8      | ~0.39%          |
+| 12     | ~0.024%         |
+| 16     | ~0.0015%        |
 
 ## Merging
 
@@ -113,10 +119,10 @@ IO.puts("Round-tripped membership check: #{Quotient.member?(restored, hd(inserte
 
 ## See also
 
-- `ExDataSketch.Quotient` module documentation -- full API reference and
+* `ExDataSketch.Quotient` module documentation -- full API reference and
   the QOT1 binary layout.
-- `ExDataSketch.Cuckoo` -- also supports deletion but not merge, and
+* `ExDataSketch.Cuckoo` -- also supports deletion but not merge, and
   sizes by item capacity rather than bit widths; see
   `livebooks/sketches/cuckoo.livemd`.
-- `ExDataSketch.CQF` -- the same quotient-filter data structure extended
+* `ExDataSketch.CQF` -- the same quotient-filter data structure extended
   with approximate per-item counting; see `livebooks/sketches/cqf.livemd`.

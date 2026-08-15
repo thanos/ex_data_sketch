@@ -10,14 +10,13 @@ defmodule ExDataSketch.CQF do
 
   ## Counter Encoding
 
-  Remainders within a run are stored in strictly increasing order. A slot value
-  that violates this monotonicity is interpreted as a counter for the preceding
-  remainder:
-
-  - Count = 1: no extra slots (absence of counter means count 1).
-  - Count = 2: one extra slot containing the same remainder value (a duplicate).
-  - Count >= 3: the remainder value appears twice (bracketing), with intermediate
-    slots encoding the count value.
+  Remainders within a run are stored in strictly increasing order. A count
+  of N for one remainder is represented as N-1 consecutive duplicate
+  copies of that remainder immediately following the original (count is
+  recovered at read time by counting how many consecutive slots repeat
+  the same value) -- there is no compact run-length/bracketing scheme;
+  every unit of count beyond the first costs one physical slot. See
+  "Sizing `:q`" below for what this means for capacity planning.
 
   ## Parameters
 
@@ -26,11 +25,50 @@ defmodule ExDataSketch.CQF do
     Constraint: q + r <= 64.
   - `:seed` -- hash seed (default: 0).
 
+  ## Sizing `:q`: budget for total occurrences, not distinct keys
+
+  Every occurrence of every item costs one physical slot -- not just
+  distinct keys (see "Counter Encoding" above). Size `2^q` against the
+  *sum* of all expected insert counts (`total_count`, what `count/1`
+  returns), not the number of distinct items you expect to track.
+
+  `put/2` and `put_many/2` return `{:ok, cqf}` / `{:ok, cqf}` |
+  `{:error, :full, partial_cqf}` when the table has no room left for an
+  insert, mirroring `ExDataSketch.Cuckoo` -- `put!/2` and `update/2`/
+  `update_many/2` raise `ExDataSketch.Errors.FilterFullError` instead of
+  returning the error tuple. Before this signal existed, an undersized
+  `:q` failed silently and expensively rather than raising: as the table
+  filled, each insert searched further for a free slot (the shift-right
+  cascade is bounded to `slot_count` steps specifically so it terminates
+  rather than looping forever), and once genuinely full, further inserts
+  were dropped without any error. A table sized at roughly a third of
+  its needed capacity (e.g. `q: 18`, 262,144 slots, for 1,000,000 total
+  occurrences) could take from minutes to hours to build instead of a
+  fraction of a second at a properly-sized `q` (confirmed: `q: 21`,
+  2,097,152 slots, ~2x headroom, builds the same 1,000,000-event dataset
+  in well under a second) -- size generously rather than relying on the
+  error signal alone. See `livebooks/sketches/cqf.livemd`'s "Sizing: q
+  must budget for total occurrences, not distinct keys" section for a
+  worked example.
+
   ## Merge Semantics
 
   CQF merge is a **multiset union**: counts for identical fingerprints are
   **summed**, not OR'd. This enables distributed counting use cases where
   partial counts from multiple workers are combined.
+
+  ## member?/estimate_count/2 Performance
+
+  `member?/2`, `estimate_count/2`, and `delete/2` decode only the 40-byte
+  header plus whichever slots the lookup actually touches -- typically a
+  handful, the length of one run -- rather than the whole slot table.
+  This is independent of which `:backend` is configured: there's no
+  per-item Rust NIF for these (only `put_many/2`/`put_many_raw/2` do),
+  so they always run through this path. Earlier versions of this module
+  decoded the entire table into a tuple on every single call regardless
+  of backend, making these calls cost O(slot_count) per call -- confirmed
+  at roughly 190ms per single call against a `q: 18` (262,144-slot)
+  filter, purely from that decode.
 
   ## Binary State Layout (CQF1)
 
@@ -42,7 +80,7 @@ defmodule ExDataSketch.CQF do
 
   import Bitwise
 
-  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash, Telemetry}
+  alias ExDataSketch.{Backend, Binary, Codec, Config, Errors, Hash, Telemetry}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -83,6 +121,7 @@ defmodule ExDataSketch.CQF do
   """
   @spec new(keyword()) :: t()
   def new(opts \\ []) do
+    opts = Config.merge_defaults(:cqf, opts)
     q = Keyword.get(opts, :q, @default_q)
     r = Keyword.get(opts, :r, @default_r)
     seed = Keyword.get(opts, :seed, @default_seed)
@@ -112,37 +151,72 @@ defmodule ExDataSketch.CQF do
   @doc """
   Inserts a single item into the filter, incrementing its count.
 
+  Returns `{:ok, cqf}`, or `{:error, :full}` if the table has no
+  capacity left for the insertion -- see the "Sizing `:q`" section above.
+  Unlike `put_many/2`, there is no partial state to return on failure:
+  the filter is unchanged. See `put!/2` for a raising, chainable variant.
+
   ## Examples
 
-      iex> cqf = ExDataSketch.CQF.new(q: 10, r: 8) |> ExDataSketch.CQF.put("hello")
+      iex> {:ok, cqf} = ExDataSketch.CQF.new(q: 10, r: 8) |> ExDataSketch.CQF.put("hello")
       iex> ExDataSketch.CQF.member?(cqf, "hello")
       true
 
   """
-  @spec put(t(), term()) :: t()
+  @spec put(t(), term()) :: {:ok, t()} | {:error, :full}
   def put(%__MODULE__{state: state, opts: opts, backend: backend} = cqf, item) do
     hash = hash_item(item, opts)
-    new_state = backend.cqf_put(state, hash, opts)
-    %{cqf | state: new_state}
+
+    case backend.cqf_put(state, hash, opts) do
+      {:ok, new_state} -> {:ok, %{cqf | state: new_state}}
+      {:error, :full} -> {:error, :full}
+    end
+  end
+
+  @doc """
+  Inserts a single item, raising on failure.
+
+  Added for chaining convenience (`new() |> put!(...) |> put!(...)`) --
+  `put/2` remains the family-idiomatic name for callers that want to
+  handle a full table explicitly.
+
+  ## Examples
+
+      iex> cqf = ExDataSketch.CQF.new(q: 10, r: 8) |> ExDataSketch.CQF.put!("hello")
+      iex> ExDataSketch.CQF.member?(cqf, "hello")
+      true
+
+  """
+  @spec put!(t(), term()) :: t()
+  def put!(cqf, item) do
+    case put(cqf, item) do
+      {:ok, updated} -> updated
+      {:error, :full} -> raise Errors.FilterFullError, structure: "CQF"
+    end
   end
 
   @doc """
   Inserts multiple items in a single pass.
 
+  Returns `{:ok, cqf}` if all items were inserted, or
+  `{:error, :full, partial_cqf}` if the table filled up partway through
+  -- `partial_cqf` reflects every item inserted before the one that
+  didn't fit.
+
   ## Examples
 
-      iex> cqf = ExDataSketch.CQF.new(q: 10, r: 8) |> ExDataSketch.CQF.put_many(["a", "b"])
+      iex> {:ok, cqf} = ExDataSketch.CQF.new(q: 10, r: 8) |> ExDataSketch.CQF.put_many(["a", "b"])
       iex> ExDataSketch.CQF.member?(cqf, "a")
       true
 
   """
-  @spec put_many(t(), Enumerable.t()) :: t()
+  @spec put_many(t(), Enumerable.t()) :: {:ok, t()} | {:error, :full, t()}
   def put_many(%__MODULE__{state: state, opts: opts, backend: backend} = cqf, items) do
     use_raw =
       backend == Backend.Rust and Keyword.get(opts, :hash_fn) == nil and
         Keyword.get(opts, :hash_strategy) != :phash2
 
-    new_state =
+    result =
       if use_raw do
         Backend.Rust.cqf_put_many_raw(state, Enum.to_list(items), opts)
       else
@@ -150,16 +224,20 @@ defmodule ExDataSketch.CQF do
         backend.cqf_put_many(state, hashes, opts)
       end
 
-    %{cqf | state: new_state}
+    case result do
+      {:ok, new_state} -> {:ok, %{cqf | state: new_state}}
+      {:error, :full, partial_state} -> {:error, :full, %{cqf | state: partial_state}}
+    end
   end
 
   @doc """
-  Alias for `put/2`, added so `ExDataSketch.CQF` satisfies the
-  `ExDataSketch.Sketch` behaviour's generic `update/2` callback.
+  Alias for `put!/2`, added so `ExDataSketch.CQF` satisfies the
+  `ExDataSketch.Sketch` behaviour's generic `update/2` callback (which
+  returns a bare sketch, not `{:ok, ...} | {:error, ...}`).
 
-  `put/2` remains the family-idiomatic name and the one used throughout this
-  module's own documentation; `update/2` exists purely for cross-family
-  generic code (see `ExDataSketch.update/2`).
+  `put/2`/`put!/2` remain the family-idiomatic names and the ones used
+  throughout this module's own documentation; `update/2` exists purely
+  for cross-family generic code (see `ExDataSketch.update/2`).
 
   ## Examples
 
@@ -169,11 +247,14 @@ defmodule ExDataSketch.CQF do
 
   """
   @spec update(t(), term()) :: t()
-  def update(%__MODULE__{} = cqf, item), do: put(cqf, item)
+  def update(%__MODULE__{} = cqf, item), do: put!(cqf, item)
 
   @doc """
   Alias for `put_many/2`, added so `ExDataSketch.CQF` satisfies the
   `ExDataSketch.Sketch` behaviour's generic `update_many/2` callback.
+  Raises `ExDataSketch.Errors.FilterFullError` if the table fills up
+  partway through -- use `put_many/2` directly to keep the partial
+  result instead.
 
   ## Examples
 
@@ -183,7 +264,12 @@ defmodule ExDataSketch.CQF do
 
   """
   @spec update_many(t(), Enumerable.t()) :: t()
-  def update_many(%__MODULE__{} = cqf, items), do: put_many(cqf, items)
+  def update_many(%__MODULE__{} = cqf, items) do
+    case put_many(cqf, items) do
+      {:ok, updated} -> updated
+      {:error, :full, _partial} -> raise Errors.FilterFullError, structure: "CQF"
+    end
+  end
 
   @doc """
   Tests whether an item may be a member of the multiset.
@@ -193,7 +279,7 @@ defmodule ExDataSketch.CQF do
 
   ## Examples
 
-      iex> cqf = ExDataSketch.CQF.new(q: 10, r: 8) |> ExDataSketch.CQF.put("hello")
+      iex> cqf = ExDataSketch.CQF.new(q: 10, r: 8) |> ExDataSketch.CQF.put!("hello")
       iex> ExDataSketch.CQF.member?(cqf, "hello")
       true
 
@@ -217,7 +303,7 @@ defmodule ExDataSketch.CQF do
   ## Examples
 
       iex> cqf = ExDataSketch.CQF.new(q: 10, r: 8)
-      iex> cqf = cqf |> ExDataSketch.CQF.put("x") |> ExDataSketch.CQF.put("x") |> ExDataSketch.CQF.put("x")
+      iex> cqf = cqf |> ExDataSketch.CQF.put!("x") |> ExDataSketch.CQF.put!("x") |> ExDataSketch.CQF.put!("x")
       iex> ExDataSketch.CQF.estimate_count(cqf, "x")
       3
 
@@ -236,7 +322,7 @@ defmodule ExDataSketch.CQF do
 
   ## Examples
 
-      iex> cqf = ExDataSketch.CQF.new(q: 10, r: 8) |> ExDataSketch.CQF.put("hello")
+      iex> cqf = ExDataSketch.CQF.new(q: 10, r: 8) |> ExDataSketch.CQF.put!("hello")
       iex> cqf = ExDataSketch.CQF.delete(cqf, "hello")
       iex> ExDataSketch.CQF.member?(cqf, "hello")
       false
@@ -257,8 +343,8 @@ defmodule ExDataSketch.CQF do
 
   ## Examples
 
-      iex> a = ExDataSketch.CQF.new(q: 10, r: 8) |> ExDataSketch.CQF.put("x")
-      iex> b = ExDataSketch.CQF.new(q: 10, r: 8) |> ExDataSketch.CQF.put("y")
+      iex> a = ExDataSketch.CQF.new(q: 10, r: 8) |> ExDataSketch.CQF.put!("x")
+      iex> b = ExDataSketch.CQF.new(q: 10, r: 8) |> ExDataSketch.CQF.put!("y")
       iex> merged = ExDataSketch.CQF.merge(a, b)
       iex> ExDataSketch.CQF.member?(merged, "x") and ExDataSketch.CQF.member?(merged, "y")
       true
@@ -280,7 +366,7 @@ defmodule ExDataSketch.CQF do
   ## Examples
 
       iex> filters = Enum.map(1..3, fn i ->
-      ...>   ExDataSketch.CQF.new(q: 10, r: 8) |> ExDataSketch.CQF.put("item_\#{i}")
+      ...>   ExDataSketch.CQF.new(q: 10, r: 8) |> ExDataSketch.CQF.put!("item_\#{i}")
       ...> end)
       iex> merged = ExDataSketch.CQF.merge_many(filters)
       iex> ExDataSketch.CQF.member?(merged, "item_1")
@@ -382,7 +468,7 @@ defmodule ExDataSketch.CQF do
 
   ## Examples
 
-      iex> cqf = ExDataSketch.CQF.new(q: 10, r: 8) |> ExDataSketch.CQF.put("test")
+      iex> cqf = ExDataSketch.CQF.new(q: 10, r: 8) |> ExDataSketch.CQF.put!("test")
       iex> {:ok, recovered} = ExDataSketch.CQF.deserialize(ExDataSketch.CQF.serialize(cqf))
       iex> ExDataSketch.CQF.member?(recovered, "test")
       true
@@ -473,16 +559,17 @@ defmodule ExDataSketch.CQF do
   @doc """
   Creates a CQF from an enumerable of items.
 
-  Equivalent to `new(opts) |> put_many(enumerable)`.
+  Equivalent to `new(opts) |> put_many(enumerable)`. Returns `{:ok, cqf}`
+  or `{:error, :full, partial_cqf}` -- see `put_many/2`.
 
   ## Examples
 
-      iex> cqf = ExDataSketch.CQF.from_enumerable(["a", "b", "c"])
+      iex> {:ok, cqf} = ExDataSketch.CQF.from_enumerable(["a", "b", "c"])
       iex> ExDataSketch.CQF.member?(cqf, "a")
       true
 
   """
-  @spec from_enumerable(Enumerable.t(), keyword()) :: t()
+  @spec from_enumerable(Enumerable.t(), keyword()) :: {:ok, t()} | {:error, :full, t()}
   def from_enumerable(enumerable, opts \\ []) do
     Telemetry.span_with_result(
       Telemetry.event_name(:sketch, :ingest),
@@ -490,12 +577,14 @@ defmodule ExDataSketch.CQF do
       %{sketch_type: :cqf},
       :sketch,
       fn -> new(opts) |> put_many(enumerable) end,
-      fn sketch -> %{size_bytes: size_bytes(sketch)} end
+      fn _result -> %{} end
     )
   end
 
   @doc """
   Returns a 2-arity reducer function for use with `Enum.reduce/3`.
+
+  The reducer calls `put!/2` and raises if the filter becomes full.
 
   ## Examples
 
@@ -505,7 +594,7 @@ defmodule ExDataSketch.CQF do
   """
   @spec reducer() :: (term(), t() -> t())
   def reducer do
-    fn item, cqf -> put(cqf, item) end
+    fn item, cqf -> put!(cqf, item) end
   end
 
   @doc """

@@ -75,6 +75,10 @@ fn cqf_read_counter(slots: &[Slot], pos: u32, remainder_val: u64, sc: u32) -> u6
     }
 }
 
+// Returns true on success, false if the table has no room -- see
+// quotient_core::do_insert's comment for why every branch checks
+// shift_right_fits before applying any preparatory meta-bit mutation,
+// not just before the final shift-right cascade.
 fn cqf_do_insert(
     slots: &mut [Slot],
     fq: u32,
@@ -82,28 +86,34 @@ fn cqf_do_insert(
     sc: u32,
     occupied_count: &mut u32,
     total_count: &mut u64,
-) {
+) -> bool {
     if qc::occ(slots, fq) {
         // Existing quotient
         let run_start = qc::find_run_start(slots, fq, sc);
         match cqf_find_remainder_in_run(slots, run_start, fr, sc) {
             None => {
                 // New remainder in existing run
-                insert_into_run(slots, fq, run_start, fr, sc);
+                if !insert_into_run(slots, fq, run_start, fr, sc) {
+                    return false;
+                }
                 *occupied_count += 1;
                 *total_count += 1;
+                true
             }
             Some(pos) => {
                 // Existing remainder - add duplicate copy
                 let last = cqf_last_copy(slots, pos, fr, sc);
                 let n = qc::nxt(last, sc);
-                qc::shift_right(slots, n, QOT_CON | QOT_SHI, fr, sc);
+                if !qc::shift_right(slots, n, QOT_CON | QOT_SHI, fr, sc) {
+                    return false;
+                }
                 *total_count += 1;
+                true
             }
         }
     } else {
         // New fingerprint
-        cqf_do_insert_new(slots, fq, fr, sc, occupied_count, total_count);
+        cqf_do_insert_new(slots, fq, fr, sc, occupied_count, total_count)
     }
 }
 
@@ -114,33 +124,46 @@ fn cqf_do_insert_new(
     sc: u32,
     occupied_count: &mut u32,
     total_count: &mut u64,
-) {
-    qc::set_meta_bit(slots, fq, QOT_OCC);
-    let had_entry = qc::meta(slots, fq) != QOT_OCC;
+) -> bool {
+    let had_entry = qc::meta(slots, fq) != 0;
 
     if had_entry {
         let run_start = qc::find_run_start(slots, fq, sc);
         let m = if run_start == fq { 0 } else { QOT_SHI };
-        qc::shift_right(slots, run_start, m, fr, sc);
+
+        if !qc::shift_right_fits(slots, run_start, sc) {
+            return false;
+        }
+
+        qc::set_meta_bit(slots, fq, QOT_OCC);
+        qc::shift_right_commit(slots, run_start, m, fr, sc);
     } else {
+        qc::set_meta_bit(slots, fq, QOT_OCC);
         slots[fq as usize] = (QOT_OCC, fr);
     }
 
     *occupied_count += 1;
     *total_count += 1;
+    true
 }
 
-fn insert_into_run(slots: &mut [Slot], fq: u32, run_start: u32, fr: u64, sc: u32) {
+fn insert_into_run(slots: &mut [Slot], fq: u32, run_start: u32, fr: u64, sc: u32) -> bool {
     let (pos, at_start) = sorted_pos(slots, run_start, fr, sc);
+
+    if !qc::shift_right_fits(slots, pos, sc) {
+        return false;
+    }
 
     if at_start {
         qc::set_meta_bit(slots, run_start, QOT_CON);
         let m = if pos == fq { 0 } else { QOT_SHI };
-        qc::shift_right(slots, pos, m, fr, sc);
+        qc::shift_right_commit(slots, pos, m, fr, sc);
     } else {
         let m = QOT_CON | if pos == fq { 0 } else { QOT_SHI };
-        qc::shift_right(slots, pos, m, fr, sc);
+        qc::shift_right_commit(slots, pos, m, fr, sc);
     }
+
+    true
 }
 
 fn sorted_pos(slots: &[Slot], run_start: u32, fr: u64, sc: u32) -> (u32, bool) {
@@ -161,6 +184,14 @@ fn sorted_pos(slots: &[Slot], run_start: u32, fr: u64, sc: u32) -> (u32, bool) {
     }
 }
 
+// Returns true if the initial insert (worth count=1) succeeded. If the
+// table fills up partway through the (count-1) duplicate-copy loop,
+// this stops early with a partial count applied rather than rolling
+// back -- true all-or-nothing atomicity per (fq, fr, count) triple
+// would need to undo already-committed duplicate copies, which isn't
+// worth the complexity for merge/2's silent-stop (no public {:error,
+// :full}) contract. *occupied_count/*total_count only ever reflect
+// what was actually committed.
 fn cqf_insert_with_count(
     slots: &mut [Slot],
     fq: u32,
@@ -169,37 +200,57 @@ fn cqf_insert_with_count(
     sc: u32,
     occupied_count: &mut u32,
     total_count: &mut u64,
-) {
+) -> bool {
     let was_occ = qc::occ(slots, fq);
     let had_entry = qc::meta(slots, fq) != 0;
 
-    qc::set_meta_bit(slots, fq, QOT_OCC);
-
-    if !was_occ && !had_entry {
+    let inserted = if !was_occ && !had_entry {
+        qc::set_meta_bit(slots, fq, QOT_OCC);
         slots[fq as usize] = (QOT_OCC, fr);
+        true
     } else if was_occ {
+        // set_meta_bit is a no-op here (bit already set), safe regardless
+        // of insert_into_run's outcome.
+        qc::set_meta_bit(slots, fq, QOT_OCC);
         let run_start = qc::find_run_start(slots, fq, sc);
-        insert_into_run(slots, fq, run_start, fr, sc);
+        insert_into_run(slots, fq, run_start, fr, sc)
     } else {
         let run_start = qc::find_run_start(slots, fq, sc);
         let m = if run_start == fq { 0 } else { QOT_SHI };
-        qc::shift_right(slots, run_start, m, fr, sc);
+
+        if !qc::shift_right_fits(slots, run_start, sc) {
+            false
+        } else {
+            qc::set_meta_bit(slots, fq, QOT_OCC);
+            qc::shift_right_commit(slots, run_start, m, fr, sc);
+            true
+        }
+    };
+
+    if !inserted {
+        return false;
     }
 
     *occupied_count += 1;
-    *total_count += count;
+    *total_count += 1;
 
-    // Add (count-1) duplicate copies
+    // Add up to (count - 1) duplicate copies; stop early (leaving a
+    // partial count applied) if the table fills up partway through.
     if count > 1 {
         let run_start = qc::find_run_start(slots, fq, sc);
         if let Some(pos) = cqf_find_remainder_in_run(slots, run_start, fr, sc) {
             for _ in 1..count {
                 let last = cqf_last_copy(slots, pos, fr, sc);
                 let n = qc::nxt(last, sc);
-                qc::shift_right(slots, n, QOT_CON | QOT_SHI, fr, sc);
+                if !qc::shift_right(slots, n, QOT_CON | QOT_SHI, fr, sc) {
+                    break;
+                }
+                *total_count += 1;
             }
         }
     }
+
+    true
 }
 
 // Extract all counted fingerprints as (quotient, remainder, count) triples
@@ -307,7 +358,16 @@ fn cqf_put_many_impl<'a>(
         let off = h * 8;
         let hash64 = u64::from_le_bytes(hashes[off..off + 8].try_into().unwrap());
         let (fq, fr) = qc::qot_split_hash(hash64, q, r);
-        cqf_do_insert(&mut slots, fq, fr, slot_count, &mut occupied_count, &mut total_count);
+
+        if !cqf_do_insert(&mut slots, fq, fr, slot_count, &mut occupied_count, &mut total_count) {
+            let new_body = qc::encode_slots(&slots, slot_bytes, slot_count);
+            let mut result = Vec::with_capacity(expected_len);
+            result.extend_from_slice(&state[..CQF_HEADER_SIZE]);
+            result[12..16].copy_from_slice(&occupied_count.to_le_bytes());
+            result[16..24].copy_from_slice(&total_count.to_le_bytes());
+            result.extend_from_slice(&new_body);
+            return error::error_full_binary(env, &result);
+        }
     }
 
     let new_body = qc::encode_slots(&slots, slot_bytes, slot_count);
@@ -367,7 +427,16 @@ fn cqf_put_many_raw_impl<'a>(
             }
         };
         let (fq, fr) = qc::qot_split_hash(hash64, q, r);
-        cqf_do_insert(&mut slots, fq, fr, slot_count, &mut occupied_count, &mut total_count);
+
+        if !cqf_do_insert(&mut slots, fq, fr, slot_count, &mut occupied_count, &mut total_count) {
+            let new_body = qc::encode_slots(&slots, slot_bytes, slot_count);
+            let mut result = Vec::with_capacity(expected_len);
+            result.extend_from_slice(&state[..CQF_HEADER_SIZE]);
+            result[12..16].copy_from_slice(&occupied_count.to_le_bytes());
+            result[16..24].copy_from_slice(&total_count.to_le_bytes());
+            result.extend_from_slice(&new_body);
+            return error::error_full_binary(env, &result);
+        }
     }
 
     let new_body = qc::encode_slots(&slots, slot_bytes, slot_count);
@@ -423,7 +492,11 @@ fn cqf_merge_impl<'a>(
     let mut total_count: u64 = 0;
 
     for (fq, fr, count) in &all {
-        cqf_insert_with_count(
+        // Merge has no public {:error, :full} signal (mirrors Quotient's
+        // merge/2) -- a triple that doesn't fit is simply skipped rather
+        // than halting the whole merge, since other triples elsewhere in
+        // the table may still have room.
+        let _ = cqf_insert_with_count(
             &mut fresh_slots, *fq, *fr, *count, slot_count,
             &mut occupied_count, &mut total_count,
         );

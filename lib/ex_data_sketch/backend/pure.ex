@@ -1609,24 +1609,34 @@ defmodule ExDataSketch.Backend.Pure do
       _rest_header::binary
     >> = header
 
-    # Convert bitset to mutable tuple for O(1) updates
-    bytes_tuple = bitset |> :binary.bin_to_list() |> List.to_tuple()
-
-    new_tuple =
-      Enum.reduce(hashes, bytes_tuple, fn hash64, bt ->
+    # A tuple rebuilt via put_elem/3 inside Enum.reduce/3 does NOT get BEAM's
+    # single-owner destructive-update optimization (the closure/iteration
+    # machinery keeps the tuple's refcount above 1), so each put_elem/3 call
+    # was silently a full O(bit_count) copy -- for a batch of n items with
+    # hash_count hashes each, that's O(n * hash_count * bit_count) total,
+    # asymptotically worse than just looping bloom_put/3. Collecting the
+    # scattered bit positions into a byte_idx => or_mask map first, then
+    # applying it in a single O(bit_count) pass, is genuinely linear.
+    masks =
+      Enum.reduce(hashes, %{}, fn hash64, acc ->
         h1 = hash64 >>> 32
         h2 = hash64 &&& 0xFFFFFFFF
 
-        Enum.reduce(0..(hash_count - 1), bt, fn i, bt2 ->
+        Enum.reduce(0..(hash_count - 1), acc, fn i, acc2 ->
           pos = rem(h1 + i * h2, bit_count)
           byte_idx = div(pos, 8)
           bit_idx = rem(pos, 8)
-          old_byte = elem(bt2, byte_idx)
-          put_elem(bt2, byte_idx, old_byte ||| 1 <<< bit_idx)
+          Map.update(acc2, byte_idx, 1 <<< bit_idx, &(&1 ||| 1 <<< bit_idx))
         end)
       end)
 
-    new_bitset = new_tuple |> Tuple.to_list() |> :binary.list_to_bin()
+    new_bitset =
+      bitset
+      |> :binary.bin_to_list()
+      |> Enum.with_index()
+      |> Enum.map(fn {byte, idx} -> byte ||| Map.get(masks, idx, 0) end)
+      |> :binary.list_to_bin()
+
     <<header::binary, new_bitset::binary>>
   end
 
@@ -1994,7 +2004,7 @@ defmodule ExDataSketch.Backend.Pure do
   end
 
   defp cko_kick_loop(%CkoCtx{} = ctx, bucket, fp, kick_count) do
-    evict_slot = rem(fp + kick_count, ctx.bucket_size)
+    evict_slot = cko_kick_slot(fp, kick_count, ctx.bucket_size)
 
     old_fp = cko_read_slot(ctx, bucket, evict_slot)
     ctx = cko_write_slot(ctx, bucket, evict_slot, fp)
@@ -2009,6 +2019,24 @@ defmodule ExDataSketch.Backend.Pure do
       :full ->
         cko_kick_loop(ctx, alt_bucket, old_fp, kick_count + 1)
     end
+  end
+
+  # Deterministic-but-well-mixed eviction-slot choice. A plain
+  # `rem(fp + kick_count, bucket_size)` is a linear function of both
+  # inputs, and with only 2^fingerprint_size possible fingerprint values
+  # shared across a much larger item count, two colliding fingerprints
+  # that happen to differ by a multiple of `bucket_size` can synchronize
+  # the kick sequence into a short, exactly-repeating cycle between a
+  # handful of buckets -- confirmed via direct trace: a real dataset hit a
+  # 4-step cycle between 3 buckets that burned through every remaining
+  # kick (500, or even 2000) without ever finding an empty slot, well
+  # below the table's designed ~95.5% load factor. Routing (fp,
+  # kick_count) through the existing fingerprint-mixing hash keeps this
+  # fully deterministic -- same inputs always produce the same eviction
+  # sequence, preserving this library's byte-identical-output guarantee --
+  # while avoiding the arithmetic periodicity that caused it.
+  defp cko_kick_slot(fp, kick_count, bucket_size) do
+    rem(cko_fp_hash(bxor(fp, kick_count * 0x9E3779B1)), bucket_size)
   end
 
   # ============================================================
@@ -2293,8 +2321,14 @@ defmodule ExDataSketch.Backend.Pure do
     if qot_lookup?(ctx, q, r) do
       qot_encode(ctx)
     else
-      ctx = qot_do_insert(ctx, q, r)
-      qot_encode(%{ctx | item_count: ctx.item_count + 1})
+      # On :full, ctx (the pre-insert value) is used as-is -- see
+      # qot_do_insert/3's comment. Quotient has no public overflow signal
+      # (unlike Cuckoo/CQF), so this is a safe no-op rather than a
+      # corrupting or hanging one; a full table simply stops growing.
+      case qot_do_insert(ctx, q, r) do
+        {:ok, new_ctx} -> qot_encode(%{new_ctx | item_count: new_ctx.item_count + 1})
+        :full -> qot_encode(ctx)
+      end
     end
   end
 
@@ -2304,41 +2338,60 @@ defmodule ExDataSketch.Backend.Pure do
 
   def quotient_put_many(state_bin, hashes, _opts) do
     ctx = qot_decode(state_bin)
-
-    ctx =
-      Enum.reduce(hashes, ctx, fn hash64, acc ->
-        {q, r} = qot_split_hash(acc, hash64)
-
-        if qot_lookup?(acc, q, r) do
-          acc
-        else
-          new_acc = qot_do_insert(acc, q, r)
-          %{new_acc | item_count: new_acc.item_count + 1}
-        end
-      end)
-
+    ctx = Enum.reduce(hashes, ctx, fn hash64, acc -> qot_maybe_insert(acc, hash64) end)
     qot_encode(ctx)
+  end
+
+  # Inserts hash64 unless already present or the table has no room (in
+  # which case acc is returned unchanged -- see qot_do_insert/3's :full
+  # contract).
+  defp qot_maybe_insert(ctx, hash64) do
+    {q, r} = qot_split_hash(ctx, hash64)
+
+    if qot_lookup?(ctx, q, r) do
+      ctx
+    else
+      case qot_do_insert(ctx, q, r) do
+        {:ok, new_ctx} -> %{new_ctx | item_count: new_ctx.item_count + 1}
+        :full -> ctx
+      end
+    end
   end
 
   @impl true
   @spec quotient_member?(binary(), non_neg_integer(), keyword()) :: boolean()
   def quotient_member?(state_bin, hash64, _opts) do
-    ctx = qot_decode(state_bin)
+    ctx = qot_decode_lazy(state_bin)
     {q, r} = qot_split_hash(ctx, hash64)
     qot_lookup?(ctx, q, r)
   end
 
   @impl true
+  @spec quotient_member_many?(binary(), [non_neg_integer()], keyword()) :: [boolean()]
+  def quotient_member_many?(state_bin, hashes, _opts) do
+    ctx = qot_decode_lazy(state_bin)
+
+    Enum.map(hashes, fn hash64 ->
+      {q, r} = qot_split_hash(ctx, hash64)
+      qot_lookup?(ctx, q, r)
+    end)
+  end
+
+  @impl true
   @spec quotient_delete(binary(), non_neg_integer(), keyword()) :: binary()
   def quotient_delete(state_bin, hash64, _opts) do
-    ctx = qot_decode(state_bin)
-    {q, r} = qot_split_hash(ctx, hash64)
+    lazy_ctx = qot_decode_lazy(state_bin)
+    {q, r} = qot_split_hash(lazy_ctx, hash64)
 
-    case qot_find_slot(ctx, q, r) do
+    case qot_find_slot(lazy_ctx, q, r) do
       nil ->
-        qot_encode(ctx)
+        # Not present -- no mutation needed, so skip the full decode/encode
+        # round-trip entirely (see qot_decode_lazy/1's comment).
+        state_bin
 
-      slot_idx ->
+      _slot_idx ->
+        ctx = qot_decode(state_bin)
+        slot_idx = qot_find_slot(ctx, q, r)
         ctx = qot_do_delete(ctx, q, slot_idx)
         qot_encode(%{ctx | item_count: max(ctx.item_count - 1, 0)})
     end
@@ -2367,8 +2420,10 @@ defmodule ExDataSketch.Backend.Pure do
 
     merged =
       Enum.reduce(all, fresh, fn {fq, fr}, acc ->
-        acc = qot_do_insert(acc, fq, fr)
-        %{acc | item_count: acc.item_count + 1}
+        case qot_do_insert(acc, fq, fr) do
+          {:ok, new_acc} -> %{new_acc | item_count: new_acc.item_count + 1}
+          :full -> acc
+        end
       end)
 
     qot_encode(merged)
@@ -2422,7 +2477,10 @@ defmodule ExDataSketch.Backend.Pure do
 
   defp qot_body_to_list(body, sb, remaining, acc) do
     <<chunk::binary-size(^sb), rest::binary>> = body
+    qot_body_to_list(rest, sb, remaining - 1, [qot_chunk_to_meta_rem(chunk) | acc])
+  end
 
+  defp qot_chunk_to_meta_rem(chunk) do
     raw =
       chunk
       |> :binary.bin_to_list()
@@ -2431,7 +2489,47 @@ defmodule ExDataSketch.Backend.Pure do
 
     meta = raw &&& 0x7
     remainder = raw >>> 3
-    qot_body_to_list(rest, sb, remaining - 1, [{meta, remainder} | acc])
+    {meta, remainder}
+  end
+
+  # Lazy/localized decode: parses only the 32-byte header (O(1)), keeping
+  # the body as a raw binary reference instead of eagerly materializing
+  # every slot into a tuple. Quotient-filter lookups (member?/find_slot)
+  # only ever touch the slots along one run's walk-back + scan (typically
+  # a handful, even under heavy load) -- `qot_get/2` below reads a single
+  # slot directly from `body` at its byte offset on demand, so a lookup
+  # against a lazy ctx costs O(cluster length), not O(slot_count). Eagerly
+  # decoding the full body here (as `qot_decode/1` does) made every single
+  # `member?/2` call pay for a full-table decode regardless of query
+  # count -- e.g. 300,000 sequential `member?` calls against a q=19
+  # (524,288-slot) filter each re-decoded all 524,288 slots. Do not call
+  # `qot_set/3` (a write) against a ctx built this way -- it only handles
+  # the tuple representation from `qot_decode/1`.
+  defp qot_decode_lazy(state_bin) do
+    <<
+      @qot_magic::binary,
+      @qot_version::unsigned-8,
+      q::unsigned-8,
+      r::unsigned-8,
+      _flags::unsigned-8,
+      slot_count::unsigned-little-32,
+      item_count::unsigned-little-32,
+      seed::unsigned-little-32,
+      _reserved::binary-size(12),
+      body::binary
+    >> = state_bin
+
+    sb = div(3 + r + 7, 8)
+
+    %QotCtx{
+      q: q,
+      r: r,
+      slot_count: slot_count,
+      item_count: item_count,
+      seed: seed,
+      slot_bytes: sb,
+      slots: {:qot_lazy, body, sb}
+    }
   end
 
   defp qot_encode(%QotCtx{} = ctx) do
@@ -2475,7 +2573,17 @@ defmodule ExDataSketch.Backend.Pure do
     {quotient, remainder}
   end
 
-  # -- Quotient: slot access via tuple (O(1)) --
+  # -- Quotient/CQF: slot access via tuple (O(1)), or lazily via binary
+  # offset. Matched structurally (`%{slots: ...}`, not `%QotCtx{}`/
+  # `%CqfCtx{}`) so this one clause serves both context structs -- they
+  # share the identical slot layout and only differ in which extra header
+  # fields (occupied_count/total_count for CQF) they carry.
+
+  defp qot_get(%{slots: {:qot_lazy, body, sb}}, i) do
+    offset = i * sb
+    <<_::binary-size(^offset), chunk::binary-size(^sb), _::binary>> = body
+    qot_chunk_to_meta_rem(chunk)
+  end
 
   defp qot_get(ctx, i), do: :erlang.element(i + 1, ctx.slots)
 
@@ -2615,6 +2723,11 @@ defmodule ExDataSketch.Backend.Pure do
   # During shift-right, is_occupied stays at each position while the
   # entry (is_continuation, is_shifted, remainder) moves.
 
+  # Returns {:ok, ctx} | :full -- see qot_shift_right/4's comment. On
+  # :full, the caller must discard whatever ctx this returned (it may
+  # contain a partially-applied, structurally-invalid shift cascade) and
+  # keep using its own pre-call ctx instead; every caller in this module
+  # does so by simply not binding the :full branch's ctx.
   defp qot_do_insert(ctx, fq, fr) do
     was_occ = qot_occ?(ctx, fq)
     had_entry = qot_meta(ctx, fq) != 0
@@ -2624,8 +2737,8 @@ defmodule ExDataSketch.Backend.Pure do
 
     cond do
       not was_occ and not had_entry ->
-        # Fast path: canonical slot was completely empty
-        qot_set(ctx, fq, {@qot_occ, fr})
+        # Fast path: canonical slot was completely empty, always succeeds
+        {:ok, qot_set(ctx, fq, {@qot_occ, fr})}
 
       was_occ ->
         run_start = qot_find_run_start(ctx, fq)
@@ -2678,30 +2791,39 @@ defmodule ExDataSketch.Backend.Pure do
 
   # Shift right: insert {new_meta, new_rem} at pos, pushing existing
   # entries rightward. is_occupied at each position is preserved.
+  #
+  # Returns {:ok, ctx} on success, or :full if the cascade never found an
+  # empty slot within `slot_count` steps -- i.e. the table has no room
+  # left. The budget bound is load-bearing, not defensive: without it,
+  # this recursion has no other termination condition, so a 100%-full
+  # table would make it loop forever (every slot occupied means
+  # `old_meta == 0` never holds) rather than fail cleanly.
   defp qot_shift_right(ctx, pos, new_meta, new_rem) do
     {old_meta, old_rem} = qot_get(ctx, pos)
     occ_here = old_meta &&& @qot_occ
     ctx = qot_set(ctx, pos, {new_meta ||| occ_here, new_rem})
 
     if old_meta == 0 do
-      ctx
+      {:ok, ctx}
     else
       # Strip is_occupied (stays at position), set is_shifted
       entry_meta = (old_meta &&& bnot(@qot_occ)) ||| @qot_shi
-      qot_shift_chain(ctx, qot_nxt(ctx, pos), entry_meta, old_rem)
+      qot_shift_chain(ctx, qot_nxt(ctx, pos), entry_meta, old_rem, ctx.slot_count)
     end
   end
 
-  defp qot_shift_chain(ctx, pos, meta, remainder) do
+  defp qot_shift_chain(_ctx, _pos, _meta, _remainder, 0), do: :full
+
+  defp qot_shift_chain(ctx, pos, meta, remainder, budget) do
     {old_meta, old_rem} = qot_get(ctx, pos)
     occ_here = old_meta &&& @qot_occ
     ctx = qot_set(ctx, pos, {meta ||| occ_here, remainder})
 
     if old_meta == 0 do
-      ctx
+      {:ok, ctx}
     else
       entry_meta = (old_meta &&& bnot(@qot_occ)) ||| @qot_shi
-      qot_shift_chain(ctx, qot_nxt(ctx, pos), entry_meta, old_rem)
+      qot_shift_chain(ctx, qot_nxt(ctx, pos), entry_meta, old_rem, budget - 1)
     end
   end
 
@@ -2881,34 +3003,46 @@ defmodule ExDataSketch.Backend.Pure do
   end
 
   @impl true
-  @spec cqf_put(binary(), non_neg_integer(), keyword()) :: binary()
+  @spec cqf_put(binary(), non_neg_integer(), keyword()) ::
+          {:ok, binary()} | {:error, :full}
   def cqf_put(state_bin, hash64, _opts) do
     ctx = cqf_decode(state_bin)
     {fq, fr} = qot_split_hash(ctx, hash64)
-    ctx = cqf_do_insert(ctx, fq, fr)
-    cqf_encode(ctx)
+
+    case cqf_do_insert(ctx, fq, fr) do
+      {:ok, new_ctx} -> {:ok, cqf_encode(new_ctx)}
+      :full -> {:error, :full}
+    end
   end
 
   @impl true
-  @spec cqf_put_many(binary(), [non_neg_integer()], keyword()) :: binary()
-  def cqf_put_many(state_bin, [], _opts), do: state_bin
+  @spec cqf_put_many(binary(), [non_neg_integer()], keyword()) ::
+          {:ok, binary()} | {:error, :full, binary()}
+  def cqf_put_many(state_bin, [], _opts), do: {:ok, state_bin}
 
   def cqf_put_many(state_bin, hashes, _opts) do
     ctx = cqf_decode(state_bin)
 
-    ctx =
-      Enum.reduce(hashes, ctx, fn hash64, acc ->
+    result =
+      Enum.reduce_while(hashes, {:ok, ctx}, fn hash64, {:ok, acc} ->
         {fq, fr} = qot_split_hash(acc, hash64)
-        cqf_do_insert(acc, fq, fr)
+
+        case cqf_do_insert(acc, fq, fr) do
+          {:ok, new_acc} -> {:cont, {:ok, new_acc}}
+          :full -> {:halt, {:full, acc}}
+        end
       end)
 
-    cqf_encode(ctx)
+    case result do
+      {:ok, final_ctx} -> {:ok, cqf_encode(final_ctx)}
+      {:full, partial_ctx} -> {:error, :full, cqf_encode(partial_ctx)}
+    end
   end
 
   @impl true
   @spec cqf_member?(binary(), non_neg_integer(), keyword()) :: boolean()
   def cqf_member?(state_bin, hash64, _opts) do
-    ctx = cqf_decode(state_bin)
+    ctx = cqf_decode_lazy(state_bin)
     {fq, fr} = qot_split_hash(ctx, hash64)
     cqf_estimate(ctx, fq, fr) > 0
   end
@@ -2916,7 +3050,7 @@ defmodule ExDataSketch.Backend.Pure do
   @impl true
   @spec cqf_estimate_count(binary(), non_neg_integer(), keyword()) :: non_neg_integer()
   def cqf_estimate_count(state_bin, hash64, _opts) do
-    ctx = cqf_decode(state_bin)
+    ctx = cqf_decode_lazy(state_bin)
     {fq, fr} = qot_split_hash(ctx, hash64)
     cqf_estimate(ctx, fq, fr)
   end
@@ -2924,14 +3058,17 @@ defmodule ExDataSketch.Backend.Pure do
   @impl true
   @spec cqf_delete(binary(), non_neg_integer(), keyword()) :: binary()
   def cqf_delete(state_bin, hash64, _opts) do
-    ctx = cqf_decode(state_bin)
-    {fq, fr} = qot_split_hash(ctx, hash64)
+    lazy_ctx = cqf_decode_lazy(state_bin)
+    {fq, fr} = qot_split_hash(lazy_ctx, hash64)
 
-    case cqf_estimate(ctx, fq, fr) do
+    case cqf_estimate(lazy_ctx, fq, fr) do
       0 ->
-        cqf_encode(ctx)
+        # Not present -- no mutation needed, skip the full decode/encode
+        # round-trip (see cqf_decode_lazy/1's comment).
+        state_bin
 
       _count ->
+        ctx = cqf_decode(state_bin)
         ctx = cqf_do_delete(ctx, fq, fr)
         cqf_encode(ctx)
     end
@@ -2960,7 +3097,10 @@ defmodule ExDataSketch.Backend.Pure do
 
     merged =
       Enum.reduce(all, fresh, fn {fq, fr, count}, acc ->
-        cqf_insert_with_count(acc, fq, fr, count)
+        case cqf_insert_with_count(acc, fq, fr, count) do
+          {:ok, new_acc} -> new_acc
+          :full -> acc
+        end
       end)
 
     cqf_encode(merged)
@@ -3008,6 +3148,39 @@ defmodule ExDataSketch.Backend.Pure do
     }
   end
 
+  # Lazy/localized decode -- see qot_decode_lazy/1's comment. Same
+  # motivation, applied to CQF: `member?`/`estimate_count`/`delete`'s
+  # lookup phase only ever walk one run's worth of slots, not the whole
+  # table.
+  defp cqf_decode_lazy(state_bin) do
+    <<
+      @cqf_magic::binary,
+      @cqf_version::unsigned-8,
+      q::unsigned-8,
+      r::unsigned-8,
+      _flags::unsigned-8,
+      slot_count::unsigned-little-32,
+      occupied_count::unsigned-little-32,
+      total_count::unsigned-little-64,
+      seed::unsigned-little-32,
+      _reserved::binary-size(12),
+      body::binary
+    >> = state_bin
+
+    sb = div(3 + r + 7, 8)
+
+    %CqfCtx{
+      q: q,
+      r: r,
+      slot_count: slot_count,
+      occupied_count: occupied_count,
+      total_count: total_count,
+      seed: seed,
+      slot_bytes: sb,
+      slots: {:qot_lazy, body, sb}
+    }
+  end
+
   defp cqf_encode(%CqfCtx{} = ctx) do
     body = qot_tuple_to_body(ctx.slots, ctx.slot_bytes, ctx.slot_count)
 
@@ -3028,6 +3201,8 @@ defmodule ExDataSketch.Backend.Pure do
 
   # -- CQF: insert (always increments count) --
 
+  # Returns {:ok, ctx} | :full -- see qot_do_insert/3's comment; the same
+  # discard-on-:full contract applies here.
   defp cqf_do_insert(ctx, fq, fr) do
     if qot_occ?(ctx, fq) do
       # Existing quotient -- find remainder in run and increment, or insert new
@@ -3042,16 +3217,27 @@ defmodule ExDataSketch.Backend.Pure do
     ctx = qot_set_meta_bit(ctx, fq, @qot_occ)
     had_entry = qot_meta(ctx, fq) != @qot_occ
 
-    ctx =
+    result =
       if had_entry do
         run_start = qot_find_run_start(ctx, fq)
         meta = if run_start == fq, do: 0, else: @qot_shi
         qot_shift_right(ctx, run_start, meta, fr)
       else
-        qot_set(ctx, fq, {@qot_occ, fr})
+        {:ok, qot_set(ctx, fq, {@qot_occ, fr})}
       end
 
-    %{ctx | occupied_count: ctx.occupied_count + 1, total_count: ctx.total_count + 1}
+    case result do
+      {:ok, new_ctx} ->
+        {:ok,
+         %{
+           new_ctx
+           | occupied_count: new_ctx.occupied_count + 1,
+             total_count: new_ctx.total_count + 1
+         }}
+
+      :full ->
+        :full
+    end
   end
 
   defp cqf_do_insert_existing(ctx, fq, fr) do
@@ -3059,28 +3245,46 @@ defmodule ExDataSketch.Backend.Pure do
 
     case cqf_find_remainder_in_run(ctx, run_start, fr) do
       nil ->
-        ctx = qot_insert_into_run(ctx, fq, run_start, fr)
-        %{ctx | occupied_count: ctx.occupied_count + 1, total_count: ctx.total_count + 1}
+        case qot_insert_into_run(ctx, fq, run_start, fr) do
+          {:ok, new_ctx} ->
+            {:ok,
+             %{
+               new_ctx
+               | occupied_count: new_ctx.occupied_count + 1,
+                 total_count: new_ctx.total_count + 1
+             }}
+
+          :full ->
+            :full
+        end
 
       pos ->
         last = cqf_last_copy(ctx, pos, fr)
         nxt = qot_nxt(ctx, last)
-        ctx = qot_shift_right(ctx, nxt, @qot_con ||| @qot_shi, fr)
-        %{ctx | total_count: ctx.total_count + 1}
+
+        case qot_shift_right(ctx, nxt, @qot_con ||| @qot_shi, fr) do
+          {:ok, new_ctx} -> {:ok, %{new_ctx | total_count: new_ctx.total_count + 1}}
+          :full -> :full
+        end
     end
   end
 
   # Inserts the remainder once, then adds (count-1) duplicate copies.
+  # Returns {:ok, ctx} | :full; on :full, none of this item's count
+  # (neither the initial insert nor any duplicate copies) is applied --
+  # used only by merge/2, which currently keeps a bare-ctx-on-:full
+  # (silent stop) contract like Quotient's, not a public {:error, :full}
+  # signal.
   defp cqf_insert_with_count(ctx, fq, fr, count) do
     was_occ = qot_occ?(ctx, fq)
     had_entry = qot_meta(ctx, fq) != 0
 
     ctx = qot_set_meta_bit(ctx, fq, @qot_occ)
 
-    ctx =
+    result =
       cond do
         not was_occ and not had_entry ->
-          qot_set(ctx, fq, {@qot_occ, fr})
+          {:ok, qot_set(ctx, fq, {@qot_occ, fr})}
 
         was_occ ->
           run_start = qot_find_run_start(ctx, fq)
@@ -3092,20 +3296,38 @@ defmodule ExDataSketch.Backend.Pure do
           qot_shift_right(ctx, run_start, meta, fr)
       end
 
-    ctx = %{ctx | occupied_count: ctx.occupied_count + 1, total_count: ctx.total_count + count}
+    case result do
+      :full -> :full
+      {:ok, ctx} -> cqf_add_duplicate_copies(ctx, fq, fr, count)
+    end
+  end
 
-    # Add (count-1) duplicate copies after the remainder
-    if count <= 1 do
+  defp cqf_add_duplicate_copies(ctx, fq, fr, count) do
+    ctx = %{
       ctx
+      | occupied_count: ctx.occupied_count + 1,
+        total_count: ctx.total_count + count
+    }
+
+    if count <= 1 do
+      {:ok, ctx}
     else
       run_start = qot_find_run_start(ctx, fq)
       pos = cqf_find_remainder_in_run(ctx, run_start, fr)
 
-      Enum.reduce(1..(count - 1), ctx, fn _i, acc ->
-        last = cqf_last_copy(acc, pos, fr)
-        nxt = qot_nxt(acc, last)
-        qot_shift_right(acc, nxt, @qot_con ||| @qot_shi, fr)
+      Enum.reduce_while(1..(count - 1), {:ok, ctx}, fn _i, {:ok, acc} ->
+        cqf_shift_in_duplicate(acc, pos, fr)
       end)
+    end
+  end
+
+  defp cqf_shift_in_duplicate(ctx, pos, fr) do
+    last = cqf_last_copy(ctx, pos, fr)
+    nxt = qot_nxt(ctx, last)
+
+    case qot_shift_right(ctx, nxt, @qot_con ||| @qot_shi, fr) do
+      {:ok, new_ctx} -> {:cont, {:ok, new_ctx}}
+      :full -> {:halt, :full}
     end
   end
 
@@ -4573,13 +4795,21 @@ defmodule ExDataSketch.Backend.Pure do
     # LRA: compact (halve) the UPPER portion, keep LOWER intact at this level
     half = div(n, 2)
 
+    # As with KLL (see kll_compact_level/2's comment), promoting exactly
+    # half a portion at double the weight only preserves total weight when
+    # that portion has an even length. `half = div(n, 2)` is frequently
+    # odd, so hold back one item from the portion being compacted -- it
+    # rejoins the `stay` side unweighted, for a future compaction -- so
+    # the actually-compacted subset always has even length.
     {stay, promoted} =
       if state.hra do
         {lower, upper} = Enum.split(sorted, half)
-        {upper, kll_select_half(lower, parity)}
+        {to_compact, held_back} = req_split_for_compaction(lower)
+        {held_back ++ upper, kll_select_half(to_compact, parity)}
       else
         {lower, upper} = Enum.split(sorted, n - half)
-        {lower, kll_select_half(upper, parity)}
+        {to_compact, held_back} = req_split_for_compaction(upper)
+        {lower ++ held_back, kll_select_half(to_compact, parity)}
       end
 
     new_compaction_bits = kll_flip_parity(state.compaction_bits, level)
@@ -4600,6 +4830,15 @@ defmodule ExDataSketch.Backend.Pure do
     }
 
     req_compact_if_needed(state, level + 1)
+  end
+
+  defp req_split_for_compaction(sorted_sublist) do
+    if rem(length(sorted_sublist), 2) == 1 do
+      [last | rest] = Enum.reverse(sorted_sublist)
+      {Enum.reverse(rest), [last]}
+    else
+      {sorted_sublist, []}
+    end
   end
 
   defp req_build_sorted_view(state) do

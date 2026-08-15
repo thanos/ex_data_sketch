@@ -3,7 +3,13 @@
 ```elixir
 Mix.install([
   {:ex_data_sketch, "~> 0.10"}
-])
+],
+config: [
+    ex_data_sketch: [
+      backend: ExDataSketch.Backend.Rust,
+      integrations: [opentelemetry: false]
+    ]
+  ])
 ```
 
 ## Introduction
@@ -118,12 +124,12 @@ versa.
 
 ## See also
 
-- `ExDataSketch.Theta` module documentation -- full API reference.
-- `ExDataSketch.HLL`/`ExDataSketch.ULL` -- cardinality-only estimators
+* `ExDataSketch.Theta` module documentation -- full API reference.
+* `ExDataSketch.HLL`/`ExDataSketch.ULL` -- cardinality-only estimators
   with no set-operation support; use these instead when you only need a
   single count and want the ~30% better accuracy ULL offers at the same
   memory. See `livebooks/sketches/hll.livemd` and
   `livebooks/sketches/ull.livemd`.
-- `guides/distributed_merge_semantics.md`,
+* `guides/distributed_merge_semantics.md`,
   `livebooks/distributed_merges.livemd` -- associativity/commutativity
   properties merge relies on.

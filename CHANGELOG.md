@@ -5,7 +5,267 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.10.2] - 2026-08-14
+
+Started as post-release fixes found via the same manual livebook-
+verification process used for v0.10.1 (`Cuckoo` eviction cycling,
+`Quotient`/`CQF` full-table decode on every call, `CQF` silent
+overflow, `REQ`'s KLL-shared compaction bug); grew to include
+Application-config-driven per-family defaults and a `FilterChain`
+batching fix.
+
+### Added
+
+- **`ExDataSketch.Config`** -- per-family default option overrides via a
+  single flat Application config key, mirroring the existing
+  `config :ex_data_sketch, backend: ...` pattern:
+
+  ```elixir
+  config :ex_data_sketch,
+    defaults: [
+      hll: [p: 16],
+      cqf: [q: 20, r: 10],
+      bloom: [capacity: 50_000]
+    ]
+  ```
+
+  Every family's `new/1` (or `build/2` for `ExDataSketch.XorFilter`) now
+  merges its configured defaults underneath whatever options are
+  explicitly passed -- explicit options always win. `FilterChain.new/0`
+  takes no options at all, so it has no corresponding `:filter_chain`
+  entry. See the "Configuring Per-Family Defaults" section of
+  `guides/usage_guide.md` and `ExDataSketch.Config`'s moduledoc.
+
+- **`ExDataSketch.Quotient.member_many?/2`** -- tests membership for
+  multiple items in a single pass, decoding the filter's header once
+  instead of once per item (mirrors the existing `put_many/2` batch
+  shape). Prefer this over `Enum.map(items, &member?(filter, &1))` when
+  checking many items against the same filter, e.g. measuring
+  false-positive rate over a large novel set.
+
+- **`ExDataSketch.CQF.put!/2`** -- inserts a single item, raising
+  `ExDataSketch.Errors.FilterFullError` on overflow instead of returning
+  an error tuple. Added for chaining convenience
+  (`new() |> put!(...) |> put!(...)`), mirroring `ExDataSketch.Cuckoo`.
+
+- **`ExDataSketch.FilterChain.put_many/2`** -- batches an insert through
+  each stage's own `put_many/2` (Rust-accelerated where that stage's
+  backend supports it) instead of looping single-item `put/2` calls.
+  Returns `{:ok, chain}` or `{:error, :full, partial_chain}` (stages
+  before the failure fully applied). `update_many/2` now delegates to
+  it (see Changed below). Added `:put_many` to `capabilities/0`.
+
+### Changed
+
+- **BREAKING: `ExDataSketch.FilterChain.delete/2` now returns a bare
+  `t()` instead of `{:ok, t()}`.** It never had a real error case to
+  report -- a per-stage "item not found" is already absorbed as a no-op
+  by `delete_stage/2`, and a stage that doesn't support deletion raises
+  `UnsupportedOperationError` upfront rather than returning an error
+  tuple. Existing callers doing `{:ok, chain} = FilterChain.delete(...)`
+  need to drop the pattern match: `chain = FilterChain.delete(...)`.
+- **`ExDataSketch.FilterChain.update_many/2` now delegates to the new
+  `put_many/2`** instead of reducing over single-item `update/2` calls.
+  The old implementation forced every stage onto the Pure backend
+  (no family has a per-item Rust NIF) and reconstructed each stage's
+  entire state binary per item, making a large `update_many/2` call
+  orders of magnitude slower than necessary regardless of the
+  configured `:backend`; behavior (raises `FilterFullError` on overflow)
+  is unchanged, only the cost.
+
+- **BREAKING: `ExDataSketch.CQF.put/2` and `put_many/2` now return
+  `{:ok, cqf}` / `{:ok, cqf} | {:error, :full, partial_cqf}` instead of
+  a bare `cqf`**, mirroring `ExDataSketch.Cuckoo`'s existing contract.
+  This is the other half of the fix described below -- detecting
+  overflow requires a way to report it. `update/2` and `update_many/2`
+  (the generic `ExDataSketch.Sketch` behaviour callbacks, which must
+  return a bare sketch) now raise `ExDataSketch.Errors.FilterFullError`
+  on overflow instead, matching Cuckoo's `update/2`/`update_many/2`.
+  `from_enumerable/2` likewise now returns `{:ok, cqf} | {:error, :full,
+  partial_cqf}`. Existing callers using `|>` chains with `put/2` or
+  `put_many/2` need to switch to `put!/2` or explicit `{:ok, cqf} = ...`
+  pattern matching.
+
+### Fixed
+
+- **`ExDataSketch.CQF` silently dropped inserts once its table filled
+  up, in both backends, discovered while investigating why a livebook's
+  `put_many/2` call over a 1,000,000-event dataset was taking far longer
+  than expected (see the sizing fix below for that side of the
+  investigation).** CQF shares its slot layout and shift-right insertion
+  machinery with `ExDataSketch.Quotient`; that machinery's cascade loop
+  was bounded (to `slot_count` steps, so it always terminates rather
+  than looping forever on a full table) but had no way to report back
+  that it hadn't found room -- it just stopped, silently leaving the
+  requested item uninserted. Unlike `ExDataSketch.Cuckoo`, which already
+  had `{:error, :full}` for exactly this situation, CQF (and Quotient)
+  had no such signal at all. Fixed for CQF by threading a success/failure
+  result through the insertion call chain in both the Pure backend
+  (immutable, so a failed attempt's partial mutations are simply never
+  bound and thus discarded automatically) and the Rust NIF (mutates
+  `Vec<Slot>` in place, so each insertion path now checks whether its
+  shift-right cascade would fit *before* applying any mutation --
+  including preparatory metadata-bit changes -- rather than mutating
+  first and discovering failure partway through, which would have left
+  the table in a structurally inconsistent state for other entries, not
+  just failed the one insert cleanly). Verified: Pure and Rust report
+  `:full` at the identical point and produce byte-identical partial
+  state for the same over-capacity input; every item inserted before the
+  failure point remains a correctly-retrievable member; round-tripping
+  the partial state through serialize/deserialize preserves it exactly.
+  `ExDataSketch.Quotient`'s equivalent internal fix is present too (same
+  shared machinery), but surfaces as a safe no-op (a full table simply
+  stops growing) rather than a public `{:error, :full}`, since Quotient's
+  `put/2`/`put_many/2` API wasn't part of this change -- previously,
+  Quotient's Pure backend could genuinely hang forever inserting into an
+  exactly-100%-full table (no bound existed on that loop at all); it now
+  terminates safely. See `ExDataSketch.CQF`'s and
+  `ExDataSketch.Quotient`'s moduledocs for details.
+
+- **`ExDataSketch.CQF.put_many/2` (and the tutorial's other full-dataset
+  cells) could take minutes to hours because the demo's `q: 18` sized
+  the table for 50,000 *distinct* keys when it needed to be sized for
+  1,000,000 total occurrences -- CQF spends one physical slot per
+  occurrence of an item, not per distinct item (see `ExDataSketch.CQF`'s
+  "Counter Encoding" and "Sizing `:q`" moduledoc sections, the latter
+  also corrected here: it previously described a compact "bracketing"
+  counter scheme that was never actually implemented in either backend
+  -- the real representation is, and always was, one physical slot per
+  duplicate occurrence).** Confirmed: `q: 18` (262,144 slots, ~25% of
+  the 1,000,000 occurrences the demo dataset needs) ran for over 60
+  minutes without finishing `put_many/2`; `q: 21` (2,097,152 slots, ~2x
+  headroom) finishes the identical call in under a second. Fixed the
+  livebook's `q` values and added a "Sizing: q must budget for total
+  occurrences, not distinct keys" section explaining why, with a worked
+  example.
+
+- **`ExDataSketch.REQ` had the same compaction weight-preservation bug as
+  `ExDataSketch.KLL`'s v0.10.1 fix, independently discovered via the same
+  manual livebook-verification process.** `req_compact_level`'s biased
+  compaction promotes half of whichever portion (upper for LRA, lower for
+  HRA) is being compacted, at double the weight; that only preserves
+  total weight when the portion being halved has an even length. Portion
+  length is `div(n, 2)`, frequently odd, so -- exactly as with KLL --
+  every odd-length compaction silently gained or lost one item's worth of
+  weight, corrupting the `sum(retained_weight) == n` invariant that
+  `quantile/2` depends on. Confirmed via the same weight-invariant check
+  used for the KLL fix (drift growing with `n`, both HRA and LRA
+  affected identically since the bug is in the shared halving step, not
+  the HRA/LRA bias itself). Symptom: HRA and LRA modes could produce
+  visibly wrong relative behavior (e.g. HRA -- which is supposed to bias
+  accuracy toward high ranks -- performing *worse* than LRA at p99.9).
+  Fixed with the same technique as KLL: hold back one item (unweighted,
+  for a future compaction) whenever the portion being compacted has an
+  odd length. Verified the weight invariant now holds exactly, and that
+  HRA is measurably more accurate than LRA at high ranks once again
+  (previously, at small `k`, the bug made the two modes nearly
+  indistinguishable). No binary format change -- old serialized sketches
+  still decode and work. See `ExDataSketch.REQ`'s moduledoc for why,
+  similarly to KLL, *value* error at a specific query can still be large
+  near a sharp change in data density even with this fixed -- that part
+  is inherent to rank-approximate sketches, not a bug.
+
+- **`ExDataSketch.Cuckoo` could spuriously return `{:error, :full, ...}`
+  well below its designed ~95.5% load factor, in both the Pure and Rust
+  backends, discovered via the same manual livebook-verification
+  process.** The kick-eviction loop chose which slot within a bucket to
+  evict with a plain `rem(fingerprint + kick_count, bucket_size)` -- a
+  linear function of both inputs. With only `2^fingerprint_size` possible
+  fingerprint values (256 for the default 8-bit size) shared across a much
+  larger item count, two colliding fingerprints that happened to differ by
+  a multiple of `bucket_size` could synchronize the kick sequence into a
+  short, exactly-repeating cycle among a handful of buckets, burning
+  through every remaining kick without ever finding an empty slot.
+  Confirmed via direct source-level tracing: a real dataset (500,000
+  sequential `"session_N"` keys into `Cuckoo.new(capacity: 500_000)`) hit
+  a 4-step cycle between 3 buckets that exhausted `:max_kicks` every time,
+  well below the table's intended capacity. Fixed by routing the evicted
+  fingerprint and kick count through the same hash already used for
+  fingerprint mixing before reducing mod `bucket_size`, which keeps slot
+  choice fully deterministic (same input sequence still always produces
+  the same sketch state) while eliminating the arithmetic periodicity
+  that caused the cycling. Ported identically to the Rust NIF backend;
+  confirmed the two backends still produce byte-identical serialized
+  state for identical input. Because the eviction-slot formula changed,
+  any Cuckoo filter build that exercises kick-eviction now produces a
+  different (but now non-cyclic) final state than before -- this is a
+  behavior change, not a binary format change; old serialized sketches
+  still decode and work. See `ExDataSketch.Cuckoo`'s moduledoc for
+  details.
+
+- **`ExDataSketch.Quotient.member?/2` (and `delete/2`'s lookup phase)
+  could take minutes for what should be a near-instant check, discovered
+  via the same manual livebook-verification process.** Both always
+  decoded the *entire* slot table (`2^q` slots) into a tuple before
+  reading the one run they actually needed, regardless of which
+  `:backend` was configured -- there is no per-item Rust NIF for these
+  (only `put_many/2` has one), so every call paid this cost. Confirmed:
+  300,000 sequential `member?/2` calls against a `q: 19` (524,288-slot)
+  filter took roughly 40 minutes. Fixed by adding a lazy decode path that
+  parses only the 32-byte header and reads individual slots directly
+  from the binary at their byte offset on demand, so a lookup now costs
+  O(run length) -- typically a handful of slots -- instead of
+  O(slot_count). `delete/2` additionally now skips the encode round-trip
+  entirely when the item isn't present. Confirmed: the same 300,000
+  calls now take ~0.13s total. No format or behavior change -- same
+  results, just fast. See `ExDataSketch.Quotient`'s moduledoc for
+  details.
+
+- **`ExDataSketch.CQF.member?/2`, `estimate_count/2`, and `delete/2` had
+  the identical bug**, found while investigating the same class of issue
+  for `ExDataSketch.Quotient` above (CQF shares Quotient's slot layout
+  and decode/encode machinery). Confirmed: ~190ms per single `member?/2`
+  call against a `q: 18` (262,144-slot) filter, purely from the
+  full-table decode. Fixed the same way. See `ExDataSketch.CQF`'s
+  moduledoc for details.
+
+- `livebooks/sketches/.verify_extract.exs`, the harness that
+  automatically re-runs every tutorial livebook's cells to catch
+  regressions, extracted every cell except the `Mix.install` cell
+  itself -- so a livebook's own `config:` block (e.g. `backend:
+  ExDataSketch.Backend.Rust`) was silently never applied during
+  verification, and every livebook ran on the Pure backend regardless
+  of what it configured. This is how the `FilterChain.put_many/2`
+  slowness above went unnoticed by the harness. Fixed by parsing the
+  `Mix.install` cell's `config:` option via `Code.string_to_quoted/1`
+  and applying it via `Application.put_env/3` before the remaining
+  cells run.
+
+- `ExDataSketch.REQ`'s moduledoc now documents that it has no NIF
+  acceleration (`ExDataSketch.Backend.Rust`'s `req_*` functions are a
+  thin pass-through to `ExDataSketch.Backend.Pure`), matching the note
+  `ExDataSketch.MisraGries` already carried -- previously undocumented,
+  so `:backend` silently had no effect on REQ's performance either way.
+
+- **`ExDataSketch.Bloom.put_many/2`'s Pure backend was asymptotically
+  *slower* than looping single-item `put/2`, not faster, for any batch
+  small relative to the filter's bit-array size -- caught by the new
+  `FilterChain.put_many/2` performance-regression test flaking on CI
+  (passed locally, intermittently exceeded its bound on GitHub's slower
+  runners) rather than by a functional test, since the output was
+  always correct.** The implementation converted the bitset to an
+  Erlang tuple with the stated intent of getting O(1) destructive
+  updates via `put_elem/3` in a reduce loop -- but that optimization
+  requires the tuple to have a single owner at the point of update, a
+  condition `Enum.reduce/3`'s closure-based iteration does not reliably
+  preserve. Each `put_elem/3` call was silently a full O(bit_array_size)
+  tuple copy, making a batch of `n` items with `hash_count` hashes each
+  cost O(n * hash_count * bit_array_size) instead of the intended
+  O(n * hash_count). Confirmed: 1,000 items into a 500,000-capacity
+  Bloom (~300,000-byte bitset) took 1.8-2.6s -- slower than the 1,000
+  single-item `put/2` calls it was meant to beat (~0.25s). Fixed by
+  collecting the scattered bit positions into a `byte_index => or_mask`
+  map first, then applying it in a single linear pass over the bitset,
+  which is genuinely O(n * hash_count + bit_array_size): the same
+  1,000-item batch now takes ~80ms, both well under the single-item
+  loop and, unlike the tuple approach, actually scales as intended.
+  Verified byte-identical output to the pre-fix implementation and to
+  an equivalent single-item `put/2` loop. This bug predates v0.10.2 (it
+  shipped with the original Bloom filter in v0.4.0); it was only
+  surfaced now because `FilterChain.put_many/2` (new in this release)
+  is the first caller to exercise `Bloom.put_many/2` at a capacity
+  large enough, with a batch small enough relative to it, to make the
+  quadratic-ish cost visible in a timed test.
 
 ## [0.10.1] - 2026-08-11
 
@@ -283,8 +543,6 @@ sketch family.
 
       config :ex_data_sketch, :storage, backend: ExDataSketch.Storage.ETS
 
-  Each backend module's own API is unchanged. See
-  `baoulo/plans/0.10.0_phase2_stub_review.md` for the full design.
 - `ExDataSketch.Window` -- a ring of tumbling sub-sketches for "in the last
   N" questions without a hand-rolled timer:
 

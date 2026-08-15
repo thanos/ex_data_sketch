@@ -88,12 +88,13 @@ defmodule ExDataSketch.BackendTest.StubBackend do
   def quotient_put(s, _h, _o), do: s
   def quotient_put_many(s, _h, _o), do: s
   def quotient_member?(_s, _h, _o), do: false
+  def quotient_member_many?(_s, hashes, _o), do: Enum.map(hashes, fn _ -> false end)
   def quotient_delete(s, _h, _o), do: s
   def quotient_merge(s, _b, _o), do: s
   def quotient_count(_s, _o), do: 0
   def cqf_new(_opts), do: <<>>
-  def cqf_put(s, _h, _o), do: s
-  def cqf_put_many(s, _h, _o), do: s
+  def cqf_put(s, _h, _o), do: {:ok, s}
+  def cqf_put_many(s, _h, _o), do: {:ok, s}
   def cqf_member?(_s, _h, _o), do: false
   def cqf_estimate_count(_s, _h, _o), do: 0
   def cqf_delete(s, _h, _o), do: s
@@ -432,7 +433,7 @@ defmodule ExDataSketch.BackendTest do
       opts = [q: 8, r: 5, slot_count: 256, backend: Rust]
       state = Rust.cqf_new(opts)
       result = Rust.cqf_put_many(state, [], opts)
-      assert result == state
+      assert result == {:ok, state}
     end
 
     @tag :rust_nif
@@ -527,7 +528,8 @@ defmodule ExDataSketch.BackendTest do
       state = Rust.cqf_new(opts)
       hashes = Enum.map(1..5, &ExDataSketch.Hash.hash64/1)
       result = Rust.cqf_put_many(state, hashes, Keyword.put(opts, :dirty_threshold, 0))
-      assert is_binary(result)
+      assert {:ok, bin} = result
+      assert is_binary(bin)
     end
 
     @tag :rust_nif

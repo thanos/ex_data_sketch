@@ -1,7 +1,7 @@
 defmodule ExDataSketch.MixProject do
   use Mix.Project
 
-  @version "0.10.1"
+  @version "0.10.2"
   @source_url "https://github.com/thanos/ex_data_sketch"
 
   def project do
@@ -177,8 +177,6 @@ defmodule ExDataSketch.MixProject do
 
         # -- Case Studies --
         {"livebooks/ai_token_analytics.livemd", [filename: "livebook_ai_token_analytics"]},
-        {"livebooks/sketching_one_billion_rows.livemd",
-         [filename: "livebook_sketching_one_billion_rows"]},
 
         # -- Interop & Compatibility --
         "guides/apache_interop.md",
@@ -255,8 +253,7 @@ defmodule ExDataSketch.MixProject do
           "livebooks/distributed_merges.livemd"
         ],
         "Case Studies": [
-          "livebooks/ai_token_analytics.livemd",
-          "livebooks/sketching_one_billion_rows.livemd"
+          "livebooks/ai_token_analytics.livemd"
         ],
         "Interop & Compatibility": [
           "guides/apache_interop.md",

@@ -51,7 +51,7 @@ defmodule ExDataSketch.Theta do
 
   import Bitwise, only: [<<<: 2, &&&: 2]
 
-  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash, Telemetry}
+  alias ExDataSketch.{Backend, Binary, Codec, Config, Errors, Hash, Telemetry}
   alias ExDataSketch.DataSketches.CompactSketch
 
   @type t :: %__MODULE__{
@@ -93,6 +93,7 @@ defmodule ExDataSketch.Theta do
   """
   @spec new(keyword()) :: t()
   def new(opts \\ []) do
+    opts = Config.merge_defaults(:theta, opts)
     k = Keyword.get(opts, :k, @default_k)
     validate_k!(k)
     backend = Backend.resolve(opts)

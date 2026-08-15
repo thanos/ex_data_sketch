@@ -42,7 +42,7 @@ defmodule ExDataSketch.Bloom do
   can merge only if they have identical `bit_count`, `hash_count`, and `seed`.
   """
 
-  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash, Telemetry}
+  alias ExDataSketch.{Backend, Binary, Codec, Config, Errors, Hash, Telemetry}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -83,6 +83,7 @@ defmodule ExDataSketch.Bloom do
   """
   @spec new(keyword()) :: t()
   def new(opts \\ []) do
+    opts = Config.merge_defaults(:bloom, opts)
     capacity = Keyword.get(opts, :capacity, @default_capacity)
     fpr = Keyword.get(opts, :false_positive_rate, @default_fpr)
     seed = Keyword.get(opts, :seed, @default_seed)

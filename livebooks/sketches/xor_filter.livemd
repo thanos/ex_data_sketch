@@ -3,7 +3,13 @@
 ```elixir
 Mix.install([
   {:ex_data_sketch, "~> 0.10"}
-])
+],
+config: [
+    ex_data_sketch: [
+      backend: ExDataSketch.Backend.Rust,
+      integrations: [opentelemetry: false]
+    ]
+  ])
 ```
 
 ## Introduction
@@ -116,10 +122,10 @@ IO.puts("Round-tripped membership check: #{XorFilter.member?(restored, hd(blockl
 
 ## See also
 
-- `ExDataSketch.XorFilter` module documentation -- full API reference
+* `ExDataSketch.XorFilter` module documentation -- full API reference
   and the hypergraph-peeling construction algorithm.
-- `ExDataSketch.Bloom` -- mutable and mergeable, for data that changes
+* `ExDataSketch.Bloom` -- mutable and mergeable, for data that changes
   incrementally; see `livebooks/sketches/bloom.livemd`.
-- `ExDataSketch.FilterChain` -- XorFilter can be one stage in a chain
+* `ExDataSketch.FilterChain` -- XorFilter can be one stage in a chain
   (as a static, precise second-pass filter behind a cheap mutable
   first pass); see `livebooks/sketches/filter_chain.livemd`.

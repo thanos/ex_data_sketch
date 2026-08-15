@@ -99,7 +99,7 @@ defmodule ExDataSketch.ULL do
   same result, making ULL safe for parallel and distributed aggregation.
   """
 
-  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash, Telemetry}
+  alias ExDataSketch.{Backend, Binary, Codec, Config, Errors, Hash, Telemetry}
   alias ExDataSketch.Errors.DeserializationError
 
   @type t :: %__MODULE__{
@@ -138,6 +138,7 @@ defmodule ExDataSketch.ULL do
   """
   @spec new(keyword()) :: t()
   def new(opts \\ []) do
+    opts = Config.merge_defaults(:ull, opts)
     p = Keyword.get(opts, :p, @default_p)
     validate_p!(p)
     backend = Backend.resolve(opts)

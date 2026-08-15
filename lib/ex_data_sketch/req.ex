@@ -21,6 +21,31 @@ defmodule ExDataSketch.REQ do
   relative error guarantees where the error on a returned value v is
   proportional to v itself.
 
+  Compaction promotes half of the compacted portion at double the weight,
+  which only preserves the sum-of-retained-weights invariant (`== n`) when
+  that portion has an even length; since portion lengths are frequently
+  odd, one item is held back (left in place, unweighted, for a future
+  compaction) whenever this happens, exactly mirroring `ExDataSketch.KLL`'s
+  compaction fix -- see its moduledoc for the mechanism in more detail.
+
+  Like `ExDataSketch.KLL`, REQ's accuracy guarantee bounds *rank* error;
+  the *value* error at a specific query can still be large when that rank
+  sits right at a sharp change in the data's density (few distinct values
+  clustered around the query point), even with a correct implementation.
+  If your data is heavily discretized (few distinct values carrying most
+  of the mass, e.g. latencies rounded to whole milliseconds) and you need
+  reliable tail accuracy, prefer a larger `k` than the default -- see
+  `livebooks/sketches/req.livemd`'s "HRA vs LRA" section for a worked
+  example where `k=12` fails to differentiate the two modes at all, but
+  `k=800`+ does.
+
+  ## No NIF acceleration is available for this family
+
+  Unlike most other `ExDataSketch` sketches, `ExDataSketch.Backend.Rust`'s
+  `req_*` functions are a thin pass-through to `ExDataSketch.Backend.Pure`
+  -- there is no compiled fast path to fall back on, so `:backend` has no
+  effect on REQ's performance either way.
+
   ## Binary State Layout (REQ1)
 
   All multi-byte fields are little-endian.
@@ -52,7 +77,7 @@ defmodule ExDataSketch.REQ do
   have the same HRA/LRA mode to merge.
   """
 
-  alias ExDataSketch.{Backend, Binary, Codec, Errors, Telemetry}
+  alias ExDataSketch.{Backend, Binary, Codec, Config, Errors, Telemetry}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -86,6 +111,7 @@ defmodule ExDataSketch.REQ do
   """
   @spec new(keyword()) :: t()
   def new(opts \\ []) do
+    opts = Config.merge_defaults(:req, opts)
     k = Keyword.get(opts, :k, @default_k)
     hra = Keyword.get(opts, :hra, true)
     validate_k!(k)

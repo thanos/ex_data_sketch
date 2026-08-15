@@ -588,4 +588,58 @@ defmodule ExDataSketch.QuotientTest do
       end
     end
   end
+
+  # ============================================================
+  # Regression: member?/2 must not decode the entire table per call
+  # ============================================================
+
+  describe "member?/2 performance regression" do
+    test "1000 calls against a large table complete quickly" do
+      # q=18 -> 262,144 slots. Only a handful of items are inserted --
+      # what this guards against is slot_count, not occupancy: the fixed
+      # bug decoded the whole table on every member?/2 call regardless
+      # of how full it was. Before the fix, this took several minutes;
+      # the fix makes it near-instant. A generous 5s bound leaves huge
+      # margin over CI variance while still catching a real regression
+      # back to the O(slot_count)-per-call behavior.
+      qf = Quotient.new(q: 18, r: 8) |> Quotient.put_many(["hello", "world"])
+
+      {time_us, _} =
+        :timer.tc(fn ->
+          Enum.each(1..1000, fn i -> Quotient.member?(qf, "item_#{i}") end)
+        end)
+
+      assert time_us < 5_000_000,
+             "1000 member?/2 calls took #{time_us / 1000}ms -- did the O(slot_count) " <>
+               "decode-per-call regress?"
+    end
+  end
+
+  # ============================================================
+  # Regression: inserting past 100% capacity must not hang
+  # ============================================================
+
+  describe "capacity overflow regression" do
+    test "put_many/2 well past 100% capacity terminates instead of hanging" do
+      # q=4 -> 16 slots. 200 distinct items is 12.5x the table's physical
+      # capacity. Before the fix, qot_shift_chain had no bound at all: on
+      # a 100%-full table, the shift cascade could never find an empty
+      # slot to stop on, looping forever. The fix bounds the cascade to
+      # slot_count steps and stops growing once full (Quotient's public
+      # API keeps its existing silent-no-op contract -- see
+      # ExDataSketch.Quotient's moduledoc). This test would hang
+      # indefinitely (rather than just fail) if that regressed, so
+      # ExUnit's test timeout is the actual backstop here.
+      items = for i <- 1..200, do: "item_#{i}"
+      qf = Quotient.new(q: 4, r: 4) |> Quotient.put_many(items)
+
+      assert Quotient.count(qf) == 16
+      assert Quotient.count(qf) <= 16
+
+      # The (possibly-over-capacity-attempted) state must still be valid.
+      binary = Quotient.serialize(qf)
+      assert {:ok, recovered} = Quotient.deserialize(binary)
+      assert Quotient.count(recovered) == Quotient.count(qf)
+    end
+  end
 end

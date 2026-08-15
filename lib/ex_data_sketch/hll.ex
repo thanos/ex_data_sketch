@@ -66,7 +66,7 @@ defmodule ExDataSketch.HLL do
   same result, making HLL safe for parallel and distributed aggregation.
   """
 
-  alias ExDataSketch.{Backend, Binary, Codec, Errors, Hash, Telemetry}
+  alias ExDataSketch.{Backend, Binary, Codec, Config, Errors, Hash, Telemetry}
 
   @type t :: %__MODULE__{
           state: binary(),
@@ -107,6 +107,7 @@ defmodule ExDataSketch.HLL do
   """
   @spec new(keyword()) :: t()
   def new(opts \\ []) do
+    opts = Config.merge_defaults(:hll, opts)
     p = Keyword.get(opts, :p, @default_p)
     validate_p!(p)
     backend = Backend.resolve(opts)
