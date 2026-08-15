@@ -237,6 +237,36 @@ batching fix.
   `ExDataSketch.MisraGries` already carried -- previously undocumented,
   so `:backend` silently had no effect on REQ's performance either way.
 
+- **`ExDataSketch.Bloom.put_many/2`'s Pure backend was asymptotically
+  *slower* than looping single-item `put/2`, not faster, for any batch
+  small relative to the filter's bit-array size -- caught by the new
+  `FilterChain.put_many/2` performance-regression test flaking on CI
+  (passed locally, intermittently exceeded its bound on GitHub's slower
+  runners) rather than by a functional test, since the output was
+  always correct.** The implementation converted the bitset to an
+  Erlang tuple with the stated intent of getting O(1) destructive
+  updates via `put_elem/3` in a reduce loop -- but that optimization
+  requires the tuple to have a single owner at the point of update, a
+  condition `Enum.reduce/3`'s closure-based iteration does not reliably
+  preserve. Each `put_elem/3` call was silently a full O(bit_array_size)
+  tuple copy, making a batch of `n` items with `hash_count` hashes each
+  cost O(n * hash_count * bit_array_size) instead of the intended
+  O(n * hash_count). Confirmed: 1,000 items into a 500,000-capacity
+  Bloom (~300,000-byte bitset) took 1.8-2.6s -- slower than the 1,000
+  single-item `put/2` calls it was meant to beat (~0.25s). Fixed by
+  collecting the scattered bit positions into a `byte_index => or_mask`
+  map first, then applying it in a single linear pass over the bitset,
+  which is genuinely O(n * hash_count + bit_array_size): the same
+  1,000-item batch now takes ~80ms, both well under the single-item
+  loop and, unlike the tuple approach, actually scales as intended.
+  Verified byte-identical output to the pre-fix implementation and to
+  an equivalent single-item `put/2` loop. This bug predates v0.10.2 (it
+  shipped with the original Bloom filter in v0.4.0); it was only
+  surfaced now because `FilterChain.put_many/2` (new in this release)
+  is the first caller to exercise `Bloom.put_many/2` at a capacity
+  large enough, with a batch small enough relative to it, to make the
+  quadratic-ish cost visible in a timed test.
+
 ## [0.10.1] - 2026-08-11
 
 Started as post-release fixes from a full code review of the v0.10.0 diff

@@ -1609,24 +1609,34 @@ defmodule ExDataSketch.Backend.Pure do
       _rest_header::binary
     >> = header
 
-    # Convert bitset to mutable tuple for O(1) updates
-    bytes_tuple = bitset |> :binary.bin_to_list() |> List.to_tuple()
-
-    new_tuple =
-      Enum.reduce(hashes, bytes_tuple, fn hash64, bt ->
+    # A tuple rebuilt via put_elem/3 inside Enum.reduce/3 does NOT get BEAM's
+    # single-owner destructive-update optimization (the closure/iteration
+    # machinery keeps the tuple's refcount above 1), so each put_elem/3 call
+    # was silently a full O(bit_count) copy -- for a batch of n items with
+    # hash_count hashes each, that's O(n * hash_count * bit_count) total,
+    # asymptotically worse than just looping bloom_put/3. Collecting the
+    # scattered bit positions into a byte_idx => or_mask map first, then
+    # applying it in a single O(bit_count) pass, is genuinely linear.
+    masks =
+      Enum.reduce(hashes, %{}, fn hash64, acc ->
         h1 = hash64 >>> 32
         h2 = hash64 &&& 0xFFFFFFFF
 
-        Enum.reduce(0..(hash_count - 1), bt, fn i, bt2 ->
+        Enum.reduce(0..(hash_count - 1), acc, fn i, acc2 ->
           pos = rem(h1 + i * h2, bit_count)
           byte_idx = div(pos, 8)
           bit_idx = rem(pos, 8)
-          old_byte = elem(bt2, byte_idx)
-          put_elem(bt2, byte_idx, old_byte ||| 1 <<< bit_idx)
+          Map.update(acc2, byte_idx, 1 <<< bit_idx, &(&1 ||| 1 <<< bit_idx))
         end)
       end)
 
-    new_bitset = new_tuple |> Tuple.to_list() |> :binary.list_to_bin()
+    new_bitset =
+      bitset
+      |> :binary.bin_to_list()
+      |> Enum.with_index()
+      |> Enum.map(fn {byte, idx} -> byte ||| Map.get(masks, idx, 0) end)
+      |> :binary.list_to_bin()
+
     <<header::binary, new_bitset::binary>>
   end
 

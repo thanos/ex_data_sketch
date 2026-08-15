@@ -292,9 +292,12 @@ defmodule ExDataSketch.FilterChainTest do
       # binary -- O(state size) per call. Confirmed: 10,000 items into a
       # [Bloom, Cuckoo] chain (500,000 capacity each) took ~2.3s via the
       # old loop; put_many/2 (batching through each stage's own
-      # put_many/2) takes under a millisecond for the same input. A
-      # generous 5s bound leaves huge margin over CI variance while still
-      # catching a real regression back to the item-by-item loop.
+      # put_many/2) takes well under 100ms for the same input, on either
+      # backend. (This also caught a real, separate bug: Bloom.put_many/2's
+      # Pure implementation used to be asymptotically slower than the loop
+      # it replaced -- see CHANGELOG.md's v0.10.2 entry.) A generous 5s
+      # bound leaves huge margin over CI variance while still catching a
+      # real regression back to the item-by-item loop.
       chain =
         FilterChain.new()
         |> FilterChain.add_stage(Bloom.new(capacity: 500_000, false_positive_rate: 0.05))
