@@ -14,33 +14,52 @@ config: [
 
 ## Introduction
 
-`ExDataSketch.XorFilter` answers the same "have I seen this" question as
-`ExDataSketch.Bloom`, but for **static** data known up front -- a
-blocklist you refresh nightly, a compiled dictionary, a fixed allowlist
--- and is more space-efficient per item at a comparable false-positive
-rate in exchange for giving up mutability entirely: no `put/2`,
-`delete/2`, `merge/2`, or even an empty starting state. You build it once
-from a complete collection via `build/2` and only ever query it after
-that.
+`ExDataSketch.XorFilter` answers the same "have I seen this" question
+as `ExDataSketch.Bloom`, for **static** data known up front. Building
+it runs a peeling algorithm over the whole input at once (repeatedly
+finding items whose 3 hash positions currently have only one free
+slot, assigning that slot, and removing the item) to arrive at a
+fingerprint table where every stored item's fingerprint equals the XOR
+of its 3 slots -- which is what makes a query just 3 memory reads and
+an XOR, no probing or chaining:
+
+```mermaid
+flowchart LR
+    A[item] --> B["3 hash positions\nh0, h1, h2"]
+    B --> C{"fingerprint(item) ==\ntable[h0] XOR table[h1]\nXOR table[h2]?"}
+    C -->|yes| D["probably present"]
+    C -->|no| E["definitely not present"]
+```
+
+Needing the whole input up front for that peeling step is exactly why
+there's no `put/2`, `delete/2`, `merge/2`, or even an empty starting
+state -- you build it once from a complete collection via `build/2`
+and only ever query it after that.
+
+**Use it for:** static or refresh-cycle data -- a blocklist you rebuild
+nightly, a compiled dictionary, a fixed allowlist shipped with a
+release -- anything built once from a complete collection and queried
+many times between refreshes.
+
+**Don't use it for:** anything that changes between refreshes -- there
+is no incremental update at all; use `ExDataSketch.Bloom` or
+`ExDataSketch.Cuckoo` if items arrive continuously. Also not for
+combining two filters -- there's no `merge/2`; rebuild from the
+combined item set instead.
+
+**What it buys you:** Xor8 (the default) costs ~9.84 bits/item for a
+~0.39% false-positive rate -- close to Bloom's bits/item at 1% FPR, but
+noticeably more accurate at essentially the same memory:
+
+| Approach                    | Memory (500,000 domains) | Bits/item | FPR    |
+| ------------------------------ | --------------------------- | ----------- | -------- |
+| `ExDataSketch.Bloom` (1% FPR) | ~585 KB                      | ~9.6        | 1%       |
+| `ExDataSketch.XorFilter` (Xor8) | ~600 KB                     | ~9.84       | ~0.39%   |
 
 ## Sample data (cached locally)
 
 ```elixir
-cache_path = Path.join(System.tmp_dir!(), "ex_data_sketch_livebook_cache/xor_filter_sample.bin")
-
-{blocklist, novel} =
-  if File.exists?(cache_path) do
-    IO.puts("Loading cached sample data from #{cache_path}")
-    cache_path |> File.read!() |> :erlang.binary_to_term()
-  else
-    IO.puts("Generating sample data (this takes a few seconds)...")
-    blocklist = for i <- 1..500_000, do: "malicious-domain-#{i}.example"
-    novel = for i <- 500_001..1_000_000, do: "malicious-domain-#{i}.example"
-    File.mkdir_p!(Path.dirname(cache_path))
-    File.write!(cache_path, :erlang.term_to_binary({blocklist, novel}))
-    {blocklist, novel}
-  end
-
+{blocklist, novel} = ExDataSketch.SampleData.xor_filter_domains()
 IO.puts("#{length(blocklist)} blocklisted domains, #{length(novel)} novel (safe) domains")
 ```
 

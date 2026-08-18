@@ -13,42 +13,59 @@ config: [
 
 ## Introduction
 
-`ExDataSketch.REQ` is a quantile sketch purpose-built for **tail
-accuracy** -- p99, p99.9 -- at the cost of accuracy elsewhere. It has an
-asymmetric accuracy mode: **HRA** (High Rank Accuracy, the default)
-biases its retained data toward high quantiles, ideal for SLO/tail-latency
-monitoring where "how bad is our worst 1%" matters more than the median;
-**LRA** (Low Rank Accuracy) does the opposite.
+`ExDataSketch.REQ` uses the same level-and-compaction shape as
+`ExDataSketch.KLL`, but with one deliberate asymmetry: compaction
+doesn't discard a random half uniformly -- it *prefers* to discard the
+half that matters least. In **HRA** mode (High Rank Accuracy, the
+default), that means preferentially discarding low-value detail and
+keeping high-quantile detail; **LRA** does the opposite. The result is
+a sketch that spends its entire error budget where you told it to
+care, instead of spreading it evenly like KLL does:
+
+```mermaid
+flowchart LR
+    A[value] --> B["level 0 buffer"]
+    B --> C{"level full?"}
+    C -->|no| D[stored]
+    C -->|yes| E["HRA: discard low half,\nkeep high-rank detail"]
+    E --> F["level 1 buffer\n(promoted at 2x weight)"]
+    F --> G["... more levels"]
+    G --> H["quantile/rank query:\nweighted merge across levels"]
+```
+
+**Use it for:** SLO/tail-latency monitoring where "how bad is our
+worst 1%" (p99, p99.9) matters far more than the median -- HRA
+concentrates accuracy exactly there. LRA does the mirror-image job for
+low-tail questions (p1, p5).
+
+**Don't use it for:** anywhere you need *uniform* accuracy across the
+whole distribution, median included -- that's what
+`ExDataSketch.KLL`'s unbiased compaction is for; REQ's tail accuracy is
+bought by deliberately sacrificing accuracy at the other end. Also
+worth knowing: unlike most families here, REQ has no Rust NIF
+acceleration at all (see its moduledoc) -- fine at REQ's typically
+small `k`, but a factor at very high ingest rates.
+
+**What it buys you:** aggressive biased compaction makes REQ very
+compact at its typically-small `k`. A `k: 12`, HRA sketch (the library
+default) over 1,000,000 latency samples measured __524 bytes__ --
+against ~7.6 MB to store every raw value, roughly __14,500x smaller__
+-- while still resolving p99.9 accurately, which is the one number a
+uniform-error sketch of similar size would blur:
+
+| Approach                          | Memory (1M samples) | Where accuracy lives     |
+| ------------------------------------ | ---------------------- | ---------------------------- |
+| Exact (sorted array of `f64`)       | ~7.6 MB                 | Everywhere (exact)            |
+| `ExDataSketch.REQ` (k=12, HRA)      | 524 bytes                | Concentrated at high ranks    |
 
 ## Sample data (cached locally)
 
+1,000,000 latencies (ms): tight and boring in the bulk (10-30ms),
+with a long, important tail (a few requests taking seconds) --
+exactly the shape where p99.9 accuracy matters more than p50 accuracy.
+
 ```elixir
-cache_path = Path.join(System.tmp_dir!(), "ex_data_sketch_livebook_cache/req_sample.bin")
-
-latencies =
-  if File.exists?(cache_path) do
-    IO.puts("Loading cached sample data from #{cache_path}")
-    cache_path |> File.read!() |> :erlang.binary_to_term()
-  else
-    IO.puts("Generating sample data (this takes a few seconds)...")
-
-    # 1,000,000 latencies (ms): tight and boring in the bulk (10-30ms),
-    # with a long, important tail (a few requests taking seconds) --
-    # exactly the shape where p99.9 accuracy matters more than p50 accuracy.
-    latencies =
-      for _ <- 1..1_000_000 do
-        if :rand.uniform(1000) == 1 do
-          500 + :rand.uniform(4500) * 1.0
-        else
-          10 + :rand.uniform(20) * 1.0
-        end
-      end
-
-    File.mkdir_p!(Path.dirname(cache_path))
-    File.write!(cache_path, :erlang.term_to_binary(latencies))
-    latencies
-  end
-
+latencies = ExDataSketch.SampleData.req_latencies()
 sorted = Enum.sort(latencies)
 IO.puts("#{length(latencies)} latency samples ready")
 ```

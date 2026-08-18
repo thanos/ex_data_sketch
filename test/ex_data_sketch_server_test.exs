@@ -204,7 +204,10 @@ defmodule ExDataSketch.ServerTest do
       :ets.delete(table)
       send(pid, :snapshot_tick)
 
-      assert_receive {:snapshot_failed, meta}, 200
+      # A generous bound: this only needs to catch a genuine regression
+      # (snapshot_failed never firing at all), not race a tight window
+      # against however loaded the machine running the suite happens to be.
+      assert_receive {:snapshot_failed, meta}, 2000
       assert meta.backend == Storage.ETS
       assert Process.alive?(pid)
       assert_in_delta Server.estimate(pid), 1.0, 0.5
@@ -296,6 +299,10 @@ defmodule ExDataSketch.ServerTest do
       # "b" (written after the last periodic snapshot) is lost; "a" survives.
       assert_in_delta Server.estimate(pid2), 1.0, 0.5
 
+      # Regression: pid2 was built with every: 50 -- stop it synchronously
+      # so its recurring snapshot timer can't keep draining a backlog (and
+      # touching `table`) after this test returns.
+      GenServer.stop(pid2)
       :ets.delete(table)
     end
 
@@ -369,6 +376,8 @@ defmodule ExDataSketch.ServerTest do
       assert_receive {:flushed, estimate}, 200
       assert estimate > 0.0
       assert Server.estimate(pid) == 0.0
+
+      GenServer.stop(pid)
     end
   end
 end

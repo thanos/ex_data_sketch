@@ -10,41 +10,63 @@ config: [
       integrations: [opentelemetry: false]
     ]
   ])
-
 ```
 
 ## Introduction
 
-`ExDataSketch.Bloom` answers "have I seen this before" -- deduplication,
-"is this URL on the blocklist," "should I even bother checking the
-database for this key" -- in fixed memory, with **no false negatives**
-(if it says "no," the item was definitely never inserted) but a tunable
-rate of **false positives** (if it says "yes," it's probably right, but
-might be wrong). It's the simplest and most widely used of the membership
-filters here.
+`ExDataSketch.Bloom` is a bit array plus `k` independent hash functions.
+Inserting an item sets `k` bits (one per hash function); checking an
+item passes if *all* `k` of its bits are set. Bits are shared across
+every item, so a bit being set never proves any *specific* item set it
+-- which is exactly why membership checks can occasionally lie in one
+direction (say "yes" for an item never inserted) but never the other
+(say "no" for one that was):
+
+```mermaid
+flowchart LR
+    A[item] --> B["k hash functions"]
+    B --> C{"all k bits\nset?"}
+    C -->|no| D["definitely not\npresent"]
+    C -->|yes| E["probably present\n(maybe a false positive)"]
+```
+
+**No false negatives** (if it says "no," the item was definitely never
+inserted) but a tunable rate of **false positives** (if it says "yes,"
+it's probably right, but might be wrong). It's the simplest and most
+widely used of the membership filters here.
+
+**Use it for:** deduplication, "is this URL on the blocklist," "should
+I even bother checking the database for this key" -- any cheap
+first-pass membership check where an occasional false "yes" is
+tolerable (worst case, you do one unnecessary real lookup) but a false
+"no" would silently drop something real.
+
+**Don't use it for:** anywhere a false positive is unacceptable (use
+an exact `MapSet`/database lookup, or see `ExDataSketch.Cuckoo` if you
+also need deletion); anywhere you need to remove items later -- Bloom
+has no `delete/2` at all, since clearing a bit could un-set it for
+other items that share it; iterating or listing what's stored -- a
+Bloom filter can only answer "is this specific item probably in here,"
+never "what's in here."
+
+**What it buys you:** each item costs a fixed number of *bits*,
+independent of the item's own size. At the default `false_positive_rate:
+0.01` (1%), that's about __9.6 bits/item__ -- 500,000 URLs (used
+throughout this tutorial) cost a fixed __~585 KB__, whichever way you
+tune it that's dramatically less than storing the URLs themselves:
+
+| Approach                      | Memory (500,000 URLs)         | Answer                         |
+| ----------------------------- | ----------------------------- | ------------------------------ |
+| Exact set (raw URL strings)   | 15+ MB (grows with item size) | Exact                          |
+| `ExDataSketch.Bloom` (1% FPR) | ~585 KB, fixed bits/item      | Maybe (1% false positive rate) |
 
 ## Sample data (cached locally)
 
+500,000 URLs we've "crawled" (to insert), and 500,000 different URLs
+we haven't (to test the false-positive rate against).
+
 ```elixir
-cache_path = Path.join(System.tmp_dir!(), "ex_data_sketch_livebook_cache/bloom_sample.bin")
-
-{inserted, novel} =
-  if File.exists?(cache_path) do
-    IO.puts("Loading cached sample data from #{cache_path}")
-    cache_path |> File.read!() |> :erlang.binary_to_term()
-  else
-    IO.puts("Generating sample data (this takes a few seconds)...")
-
-    # 500,000 URLs we've "crawled" (to insert), and 500,000 different URLs
-    # we haven't (to test the false-positive rate against).
-    inserted = for i <- 1..500_000, do: "https://example.com/page/#{i}"
-    novel = for i <- 500_001..1_000_000, do: "https://example.com/page/#{i}"
-
-    File.mkdir_p!(Path.dirname(cache_path))
-    File.write!(cache_path, :erlang.term_to_binary({inserted, novel}))
-    {inserted, novel}
-  end
-
+{inserted, novel} = ExDataSketch.SampleData.bloom_urls()
 IO.puts("#{length(inserted)} inserted URLs, #{length(novel)} novel URLs to test against")
 ```
 

@@ -1,0 +1,589 @@
+# Sketching One Billion Rows
+
+```elixir
+Mix.install([
+  {:ex_data_sketch, "~> 0.10"},
+  # Integration modules in recent releases expect these at compile time:
+  {:gen_stage, "~> 1.2"},
+  {:ecto, "~> 3.12"}
+])
+```
+
+## Learning objectives
+
+By the end of this Livebook you will:
+
+* stream delimited weather rows without materializing a billion-element list;
+* maintain exact per-station min / mean / max / count;
+* estimate quantiles with `ExDataSketch.KLL`;
+* estimate distinct stations with `ExDataSketch.HLL`;
+* find approximate heavy hitters with `ExDataSketch.FrequentItems`;
+* merge partition-local summaries with `Task.async_stream/3`;
+* measure approximation error and sketch size.
+
+We use the public [1BRC](https://github.com/gunnarmorling/1brc) record shape (`station;temperature`) and [`ex_data_sketch`](https://hex.pm/packages/ex_data_sketch) `~> 0.10`. Docs: [HexDocs](https://ex-data-sketch.hexdocs.pm/).
+
+**Setup notes:** Elixir 1.18+ recommended. A small inline fixture is enough. Optionally point at a local `measurements.txt` later; never require a 12 GB download to finish the tutorial.
+
+## Shared aliases and helpers
+
+```elixir
+alias ExDataSketch.{CMS, FrequentItems, HLL, KLL}
+
+defmodule WeatherParser do
+  @moduledoc false
+
+  @spec parse_line(binary()) :: {:ok, {String.t(), integer()}} | {:error, term()}
+  def parse_line(line) when is_binary(line) do
+    line =
+      line
+      |> String.trim_trailing("\n")
+      |> String.trim_trailing("\r")
+
+    case String.split(line, ";", parts: 2) do
+      [station, temp] when station != "" ->
+        case Float.parse(temp) do
+          {value, ""} ->
+            {:ok, {station, round(value * 10)}}
+
+          _ ->
+            {:error, {:malformed_temperature, line}}
+        end
+
+      _ ->
+        {:error, {:malformed_record, line}}
+    end
+  end
+
+  @spec format_tenths(integer()) :: String.t()
+  def format_tenths(tenths) when is_integer(tenths) do
+    sign = if tenths < 0, do: "-", else: ""
+    abs_t = abs(tenths)
+    "#{sign}#{div(abs_t, 10)}.#{rem(abs_t, 10)}"
+  end
+
+  @spec stream_path(Path.t()) :: Enumerable.t()
+  def stream_path(path) do
+    path
+    |> File.stream!([], :line)
+    |> Stream.map(&parse_line/1)
+  end
+end
+
+:ok
+```
+
+## Deterministic fixture
+
+Integer tenths avoid float ambiguity when summing. `"Hamburg;12.3"` → `{"Hamburg", 123}`.
+
+```elixir
+fixture = """
+Hamburg;12.3
+Bulawayo;8.9
+Palembang;38.8
+St. John's;-5.5
+Cracow;12.6
+Hamburg;12.1
+Bulawayo;9.0
+Palembang;38.7
+Zürich;10.0
+北京;15.2
+"""
+
+{:ok, rows} =
+  fixture
+  |> String.split("\n", trim: true)
+  |> Enum.reduce_while({:ok, []}, fn line, {:ok, acc} ->
+    case WeatherParser.parse_line(line) do
+      {:ok, row} -> {:cont, {:ok, [row | acc]}}
+      {:error, reason} -> {:halt, {:error, reason}}
+    end
+  end)
+  |> then(fn
+    {:ok, list} -> {:ok, Enum.reverse(list)}
+    other -> other
+  end)
+
+rows
+```
+
+## Parser assertions
+
+```elixir
+assertions = [
+  WeatherParser.parse_line("Hamburg;12.3\n") == {:ok, {"Hamburg", 123}},
+  WeatherParser.parse_line("St. John's;-5.5") == {:ok, {"St. John's", -55}},
+  WeatherParser.parse_line("北京;15.2") == {:ok, {"北京", 152}},
+  WeatherParser.parse_line("Zürich;10.0") == {:ok, {"Zürich", 100}},
+  match?({:error, _}, WeatherParser.parse_line("not-a-row")),
+  match?({:error, _}, WeatherParser.parse_line("NoTemp;")),
+  WeatherParser.format_tenths(123) == "12.3",
+  WeatherParser.format_tenths(-55) == "-5.5",
+  WeatherParser.format_tenths(0) == "0.0"
+]
+
+false in assertions && raise("parser assertions failed: #{inspect(assertions)}")
+{:parser_ok, assertions}
+```
+
+## Optional file input
+
+Set `measurements_path` to a local 1BRC-style file if you have one. Leave `nil` to keep using the fixture. Partitioning real files must keep complete lines; this cell only streams whole lines via `File.stream!/3`.
+
+```elixir
+measurements_path = nil
+# measurements_path = "/absolute/path/to/measurements.txt"
+
+source_rows =
+  case measurements_path do
+    nil ->
+      rows
+
+    path when is_binary(path) ->
+      path
+      |> WeatherParser.stream_path()
+      |> Stream.take(50_000)
+      |> Enum.map(fn
+        {:ok, row} -> row
+        {:error, reason} -> raise "bad row: #{inspect(reason)}"
+      end)
+  end
+
+length(source_rows)
+```
+
+## Exact per-station accumulator
+
+These statistics use constant memory per station. They do not need a probabilistic sketch.
+
+```elixir
+defmodule ExactStation do
+  defstruct count: 0, sum: 0, min: nil, max: nil
+
+  def new, do: %__MODULE__{}
+
+  def update(%__MODULE__{count: 0}, {_station, temp}) do
+    %__MODULE__{count: 1, sum: temp, min: temp, max: temp}
+  end
+
+  def update(%__MODULE__{} = s, {_station, temp}) do
+    %{
+      s
+      | count: s.count + 1,
+        sum: s.sum + temp,
+        min: min(s.min, temp),
+        max: max(s.max, temp)
+    }
+  end
+
+  def merge(%__MODULE__{count: 0}, right), do: right
+  def merge(left, %__MODULE__{count: 0}), do: left
+
+  def merge(%__MODULE__{} = left, %__MODULE__{} = right) do
+    %__MODULE__{
+      count: left.count + right.count,
+      sum: left.sum + right.sum,
+      min: min(left.min, right.min),
+      max: max(left.max, right.max)
+    }
+  end
+
+  def mean(%__MODULE__{count: 0}), do: nil
+  def mean(%__MODULE__{count: c, sum: sum}), do: sum / c
+end
+
+exact_stations =
+  Enum.reduce(source_rows, %{}, fn {station, _} = row, acc ->
+    Map.update(acc, station, ExactStation.update(ExactStation.new(), row), fn s ->
+      ExactStation.update(s, row)
+    end)
+  end)
+
+exact_stations
+|> Enum.map(fn {station, s} ->
+  %{
+    station: station,
+    count: s.count,
+    mean: WeatherParser.format_tenths(round(ExactStation.mean(s))),
+    min: WeatherParser.format_tenths(s.min),
+    max: WeatherParser.format_tenths(s.max)
+  }
+end)
+|> Enum.sort_by(& &1.station)
+```
+
+## Exact quantiles on the fixture
+
+Nearest-rank method: index `ceil(rank * n) - 1`, clamped to the sorted list. This is exact for the small sample, not a streaming algorithm.
+
+```elixir
+exact_quantile = fn values, rank when rank >= 0.0 and rank <= 1.0 ->
+  sorted = Enum.sort(values)
+  n = length(sorted)
+
+  cond do
+    n == 0 ->
+      nil
+
+    true ->
+      idx = min(n - 1, max(0, trunc(Float.ceil(rank * n) - 1)))
+      Enum.at(sorted, idx)
+  end
+end
+
+temps_c = Enum.map(source_rows, fn {_s, tenths} -> tenths / 10.0 end)
+
+exact_quantiles = %{
+  p50: exact_quantile.(temps_c, 0.50),
+  p90: exact_quantile.(temps_c, 0.90),
+  p99: exact_quantile.(temps_c, 0.99)
+}
+```
+
+## KLL approximate quantiles
+
+KLL approximates rank; it does not retain every observation. Larger `k` uses more memory and improves rank accuracy. Exact min/max stay in `ExactStation`.
+
+```elixir
+kll =
+  Enum.reduce(temps_c, KLL.new(k: 50), fn temp, sketch ->
+    KLL.update(sketch, temp)
+  end)
+
+kll_quantiles = %{
+  p50: KLL.quantile(kll, 0.50),
+  p90: KLL.quantile(kll, 0.90),
+  p99: KLL.quantile(kll, 0.99)
+}
+
+kll_comparison =
+  for key <- [:p50, :p90, :p99] do
+    exact = exact_quantiles[key]
+    estimate = kll_quantiles[key]
+    abs_err = abs(estimate - exact)
+
+    %{
+      quantile: key,
+      exact: exact,
+      estimate: estimate,
+      abs_error: abs_err,
+      rel_error: if(exact == 0.0, do: nil, else: abs_err / abs(exact)),
+      size_bytes: KLL.size_bytes(kll),
+      serialized_bytes: byte_size(KLL.serialize(kll))
+    }
+  end
+```
+
+Merging compatible KLL sketches (same `k`):
+
+```elixir
+{left_temps, right_temps} = Enum.split(temps_c, div(length(temps_c), 2))
+
+left_kll = Enum.reduce(left_temps, KLL.new(k: 50), &KLL.update(&2, &1))
+right_kll = Enum.reduce(right_temps, KLL.new(k: 50), &KLL.update(&2, &1))
+merged_kll = KLL.merge(left_kll, right_kll)
+
+%{
+  direct_count: KLL.count(kll),
+  merged_count: KLL.count(merged_kll),
+  direct_p50: KLL.quantile(kll, 0.50),
+  merged_p50: KLL.quantile(merged_kll, 0.50)
+}
+```
+
+## HLL distinct stations
+
+The 1BRC generator uses relatively few station names, so exact counting is practical. HLL prepares you for high-cardinality production keys.
+
+```elixir
+stations = Enum.map(source_rows, &elem(&1, 0))
+exact_distinct = stations |> MapSet.new() |> MapSet.size()
+
+hll =
+  Enum.reduce(stations, HLL.new(p: 10), fn station, sketch ->
+    HLL.update(sketch, station)
+  end)
+
+estimate = HLL.estimate(hll)
+abs_err = abs(estimate - exact_distinct)
+
+hll_report = %{
+  exact: exact_distinct,
+  estimate: estimate,
+  abs_error: abs_err,
+  rel_error: abs_err / exact_distinct,
+  size_bytes: HLL.size_bytes(hll),
+  serialized_bytes: byte_size(HLL.serialize(hll))
+}
+```
+
+## FrequentItems on a skewed stream
+
+Capacity `k` limits tracked counters. Rare items may be evicted; estimates can overcount within the reported error.
+
+```elixir
+skewed_stations =
+  List.duplicate("Hamburg", 50) ++
+    List.duplicate("Bulawayo", 20) ++
+    List.duplicate("Cracow", 5) ++
+    Enum.map(1..15, &"Rare#{&1}")
+
+exact_freq =
+  Enum.reduce(skewed_stations, %{}, fn s, acc ->
+    Map.update(acc, s, 1, &(&1 + 1))
+  end)
+
+fi =
+  FrequentItems.new(k: 5)
+  |> FrequentItems.update_many(skewed_stations)
+
+fi_top = FrequentItems.top_k(fi)
+
+fi_report = %{
+  exact_top: exact_freq |> Enum.sort_by(fn {_k, v} -> -v end) |> Enum.take(5),
+  approx_top: fi_top,
+  size_bytes: FrequentItems.size_bytes(fi),
+  serialized_bytes: byte_size(FrequentItems.serialize(fi)),
+  note: "Cracow may vanish at k: 5 while inflated rare keys remain — expected SpaceSaving behavior"
+}
+```
+
+CMS is better for point-frequency queries on known keys:
+
+```elixir
+cms =
+  CMS.new(width: 256, depth: 3)
+  |> CMS.update_many(skewed_stations)
+
+%{
+  hamburg_exact: exact_freq["Hamburg"],
+  hamburg_cms: CMS.estimate(cms, "Hamburg"),
+  rare1_exact: exact_freq["Rare1"],
+  rare1_cms: CMS.estimate(cms, "Rare1"),
+  size_bytes: CMS.size_bytes(cms)
+}
+```
+
+## WeatherSketch combined summary
+
+```elixir
+defmodule WeatherSketch do
+  @moduledoc false
+
+  alias ExDataSketch.{FrequentItems, HLL, KLL}
+
+  defstruct stations: %{}, kll: nil, hll: nil, frequent: nil, opts: []
+
+  def new(opts \\ []) do
+    kll_k = Keyword.get(opts, :kll_k, 50)
+    hll_p = Keyword.get(opts, :hll_p, 10)
+    frequent_k = Keyword.get(opts, :frequent_k, 8)
+
+    %__MODULE__{
+      stations: %{},
+      kll: KLL.new(k: kll_k),
+      hll: HLL.new(p: hll_p),
+      frequent: FrequentItems.new(k: frequent_k),
+      opts: [kll_k: kll_k, hll_p: hll_p, frequent_k: frequent_k]
+    }
+  end
+
+  def update(%__MODULE__{} = summary, {station, tenths} = row) do
+    stations =
+      Map.update(summary.stations, station, ExactStation.update(ExactStation.new(), row), fn s ->
+        ExactStation.update(s, row)
+      end)
+
+    %{
+      summary
+      | stations: stations,
+        kll: KLL.update(summary.kll, tenths / 10.0),
+        hll: HLL.update(summary.hll, station),
+        frequent: FrequentItems.update(summary.frequent, station)
+    }
+  end
+
+  def merge(%__MODULE__{opts: opts} = left, %__MODULE__{opts: opts} = right) do
+    stations =
+      Map.merge(left.stations, right.stations, fn _key, a, b -> ExactStation.merge(a, b) end)
+
+    %{
+      left
+      | stations: stations,
+        kll: KLL.merge(left.kll, right.kll),
+        hll: HLL.merge(left.hll, right.hll),
+        frequent: FrequentItems.merge(left.frequent, right.frequent)
+    }
+  end
+
+  def merge(%__MODULE__{}, %__MODULE__{}) do
+    raise ArgumentError, message: "incompatible WeatherSketch options; refuse to merge"
+  end
+
+  def report(%__MODULE__{} = summary) do
+    %{
+      station_count: map_size(summary.stations),
+      exact_rows: summary.stations |> Map.values() |> Enum.reduce(0, &(&1.count + &2)),
+      quantiles: %{
+        p50: KLL.quantile(summary.kll, 0.50),
+        p90: KLL.quantile(summary.kll, 0.90),
+        p99: KLL.quantile(summary.kll, 0.99)
+      },
+      distinct_estimate: HLL.estimate(summary.hll),
+      heavy_hitters: FrequentItems.top_k(summary.frequent, limit: 5),
+      sizes: %{
+        kll: KLL.size_bytes(summary.kll),
+        hll: HLL.size_bytes(summary.hll),
+        frequent: FrequentItems.size_bytes(summary.frequent),
+        kll_serialized: byte_size(KLL.serialize(summary.kll)),
+        hll_serialized: byte_size(HLL.serialize(summary.hll)),
+        frequent_serialized: byte_size(FrequentItems.serialize(summary.frequent))
+      }
+    }
+  end
+end
+
+single = Enum.reduce(source_rows, WeatherSketch.new(), &WeatherSketch.update(&2, &1))
+WeatherSketch.report(single)
+```
+
+Incompatible options must fail clearly:
+
+```elixir
+try do
+  WeatherSketch.merge(WeatherSketch.new(kll_k: 50), WeatherSketch.new(kll_k: 100))
+catch
+  kind, reason -> {kind, reason}
+end
+```
+
+## Partition merge equivalence
+
+Split parsed rows into line-preserving chunks (already whole records). Each worker owns private state; merge afterward.
+
+```elixir
+partitions = Enum.chunk_every(source_rows, 3)
+
+partitioned =
+  partitions
+  |> Enum.map(fn chunk ->
+    Enum.reduce(chunk, WeatherSketch.new(), &WeatherSketch.update(&2, &1))
+  end)
+  |> Enum.reduce(&WeatherSketch.merge/2)
+
+%{
+  single_stations: map_size(single.stations),
+  partitioned_stations: map_size(partitioned.stations),
+  stations_equal?: single.stations == partitioned.stations,
+  single_p50: KLL.quantile(single.kll, 0.50),
+  partitioned_p50: KLL.quantile(partitioned.kll, 0.50),
+  single_hll: HLL.estimate(single.hll),
+  partitioned_hll: HLL.estimate(partitioned.hll)
+}
+```
+
+## Bounded concurrency with Task.async_stream
+
+Do not send one message per row to a shared process. Merge private summaries instead.
+
+```elixir
+lazy_rows =
+  Stream.unfold(0, fn
+    10_000 -> nil
+    i ->
+      station = "Station#{rem(i, 50)}"
+      temp = rem(i * 7, 401) - 100
+      {{station, temp}, i + 1}
+  end)
+
+{micros, concurrent} =
+  :timer.tc(fn ->
+    lazy_rows
+    |> Stream.chunk_every(500)
+    |> Task.async_stream(
+      fn chunk ->
+        Enum.reduce(chunk, WeatherSketch.new(), &WeatherSketch.update(&2, &1))
+      end,
+      max_concurrency: System.schedulers_online(),
+      ordered: false,
+      timeout: :infinity
+    )
+    |> Enum.reduce(WeatherSketch.new(), fn
+      {:ok, part}, acc -> WeatherSketch.merge(acc, part)
+      {:exit, reason}, _acc -> exit(reason)
+    end)
+  end)
+
+{micros_single, sequential} =
+  :timer.tc(fn ->
+    Enum.reduce(lazy_rows, WeatherSketch.new(), &WeatherSketch.update(&2, &1))
+  end)
+
+%{
+  elapsed_ms_concurrent: micros / 1000,
+  elapsed_ms_sequential: micros_single / 1000,
+  rows: WeatherSketch.report(concurrent).exact_rows,
+  stations_match?: concurrent.stations == sequential.stations,
+  max_concurrency: System.schedulers_online(),
+  elixir: System.version(),
+  otp: :erlang.system_info(:otp_release),
+  schedulers: System.schedulers_online(),
+  note: "Timings are observations for this session only"
+}
+```
+
+## Accuracy and size table
+
+```elixir
+comparison_table = [
+  %{
+    kind: "HLL distinct",
+    exact: hll_report.exact,
+    estimate: hll_report.estimate,
+    abs_error: hll_report.abs_error,
+    rel_error: hll_report.rel_error,
+    size_bytes: hll_report.size_bytes,
+    serialized_bytes: hll_report.serialized_bytes
+  },
+  %{
+    kind: "KLL p50 (°C)",
+    exact: exact_quantiles.p50,
+    estimate: kll_quantiles.p50,
+    abs_error: abs(kll_quantiles.p50 - exact_quantiles.p50),
+    rel_error: abs(kll_quantiles.p50 - exact_quantiles.p50) / abs(exact_quantiles.p50),
+    size_bytes: KLL.size_bytes(kll),
+    serialized_bytes: byte_size(KLL.serialize(kll))
+  },
+  %{
+    kind: "FrequentItems Hamburg",
+    exact: exact_freq["Hamburg"],
+    estimate: hd(fi_top).estimate,
+    abs_error: abs(hd(fi_top).estimate - exact_freq["Hamburg"]),
+    rel_error: abs(hd(fi_top).estimate - exact_freq["Hamburg"]) / exact_freq["Hamburg"],
+    size_bytes: FrequentItems.size_bytes(fi),
+    serialized_bytes: byte_size(FrequentItems.serialize(fi))
+  }
+]
+```
+
+## Decision guide
+
+* Exact accumulators for min, max, count, and mean.
+* KLL for rank-based temperature questions.
+* HLL for high-cardinality distinct counts.
+* FrequentItems for retrieving heavy hitters.
+* CMS for querying approximate frequency of specified items.
+* Mergeable summaries when raw data movement is expensive.
+
+A billion-row analysis does not require a billion-row data structure.
+
+## Exercises
+
+1. Add per-station KLL sketches only for keys returned by `FrequentItems.top_k/2`.
+2. Compare `CMS.estimate/2` and `FrequentItems.estimate/2` for `"Cracow"` on the skewed stream.
+3. Build two `ExDataSketch.Theta` sketches over even/odd station names and estimate union cardinality.
+4. Replace KLL with `ExDataSketch.DDSketch` and compare p99 on `Stream.iterate/2` heavy-tailed synthetic temps.
+5. Write `KLL.serialize/1` output to a temp file, then reload with `{:ok, sketch} = KLL.deserialize(binary)`.
+
+Expected direction: keep exact state for cheap questions; reach for a sketch only when cardinality, rank queries, or mergeable shipping force the trade-off.

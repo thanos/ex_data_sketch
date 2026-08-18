@@ -13,6 +13,7 @@ mod fi;
 mod hash;
 mod hll;
 mod kll;
+mod sample_data;
 mod theta;
 mod ull;
 

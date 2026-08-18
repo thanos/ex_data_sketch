@@ -14,44 +14,65 @@ config: [
 
 ## Introduction
 
-`ExDataSketch.HLL` estimates the number of *distinct* items in a stream --
-"how many unique visitors," "how many distinct IPs" -- in a __fixed, tiny__
-amount of memory, regardless of how many events you feed it. A __precision-14__
-HLL is about __16KB__ whether it has seen a __thousand__ events or a __billion__.
+Every event that arrives gets hashed. `ExDataSketch.HLL` looks at the
+*pattern* of that hash -- specifically, how long a run of leading zero
+bits it has -- and keeps only the longest run it has ever seen, per
+bucket. Long runs are exponentially rare, so if you've observed a very
+long one, you've probably hashed a lot of distinct items. That's the
+whole trick: no set, no list, no per-item bookkeeping, just `2^p`
+single-byte counters updated in place, forever:
 
-The trade is accuracy: HLL gives you an *estimate*, typically within __1-2%__
-of the true count at default precision, not an exact number. If you need
-exact counts, use a `MapSet`; if a few percent of error is fine in exchange
-for constant memory, HLL is the tool.
+```mermaid
+flowchart LR
+    A[event] --> B["hash(event)"]
+    B --> C["first p bits\n= register index"]
+    B --> D["remaining bits\n= leading-zero run length"]
+    C --> E["registers[index] =\nmax(current, run length)"]
+    D --> E
+    E --> F["harmonic mean\nacross 2^p registers"]
+    F --> G["cardinality\nestimate"]
+```
+
+**Use it for:** "how many unique visitors," "how many distinct IPs hit
+this endpoint," "how many distinct users touched this feature this
+month" -- any question where the *count* of distinct items matters but
+you don't need to know *which* items they were, at a scale where
+holding every item in memory would be wasteful or impossible.
+
+**Don't use it for:** exact counts (HLL is inherently probabilistic --
+reach for a `MapSet` or a database `COUNT(DISTINCT ...)` when the
+number must be precise), membership testing ("was X one of the items
+I've seen?" -- HLL can't answer that at all; see `ExDataSketch.Bloom`
+or `ExDataSketch.Cuckoo`), or per-item frequency ("how many times did X
+occur?" -- see `ExDataSketch.CMS`).
+
+**What it buys you:** a precision-14 HLL is a fixed __16 KB__ (`4 + 2^p`
+bytes, see the moduledoc's "Binary State Layout"), whether it has
+counted a thousand events or a billion -- with roughly __0.8%__ expected
+error at that precision (the formula is `~1.04/sqrt(2^p)`; see
+"Precision Range" below for the full table). An exact set holding a
+billion identifiers keeps growing without bound; the sketch does not:
+
+| Approach                  | Memory (billion-event stream) | Answer      |
+| ------------------------- | ----------------------------- | ----------- |
+| Exact set (`MapSet`, DB)  | Grows unbounded (GBs, and up) | Exact       |
+| `ExDataSketch.HLL` (p=14) | 16 KB, fixed                  | ~0.8% error |
+
+If a fraction of a percent of error is an acceptable trade for constant,
+tiny memory, HLL is usually the right first reach for a distinct-count
+problem.
 
 ## Sample data (cached locally)
 
-Generating a few million semi-realistic events takes a moment, so this
-cell caches the result to a local file and only regenerates it if that
-file doesn't exist yet -- re-running this livebook later (or re-running
-just this cell) is instant after the first time.
+2,000,000 page-view events from a pool of 500,000 distinct visitors --
+so the *true* distinct count is 500,000, even though there are 4x as
+many events. This mismatch (events != distinct visitors) is exactly
+what HLL is for. `ExDataSketch.SampleData` generates and caches this
+(and every other tutorial's sample data) to a local file, so re-running
+this livebook later is instant after the first time.
 
 ```elixir
-cache_path = Path.join(System.tmp_dir!(), "ex_data_sketch_livebook_cache/hll_sample.bin")
-
-events =
-  if File.exists?(cache_path) do
-    IO.puts("Loading cached sample data from #{cache_path}")
-    cache_path |> File.read!() |> :erlang.binary_to_term()
-  else
-    IO.puts("Generating sample data (this takes a few seconds)...")
-
-    # 2,000,000 page-view events from a pool of 500,000 distinct visitors --
-    # so the *true* distinct count is 500,000, even though there are 4x as
-    # many events. This mismatch (events != distinct visitors) is exactly
-    # what HLL is for.
-    events = for _ <- 1..2_000_000, do: "visitor_#{:rand.uniform(500_000)}"
-
-    File.mkdir_p!(Path.dirname(cache_path))
-    File.write!(cache_path, :erlang.term_to_binary(events))
-    events
-  end
-
+events = ExDataSketch.SampleData.hll_events()
 IO.puts("#{length(events)} events ready (true distinct count: 500,000)")
 ```
 

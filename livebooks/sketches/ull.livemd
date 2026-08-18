@@ -14,33 +14,56 @@ config: [
 
 ## Introduction
 
-`ExDataSketch.ULL` is a newer (Ertl, 2023) alternative to HLL for the exact
-same job -- distinct-count estimation -- with about 30% better accuracy at
-the same memory footprint (same `2^p` register array, one byte per
-register either way). If you're choosing a cardinality estimator today
-with no existing HLL data to stay compatible with, ULL is usually the
-better default; use HLL specifically when you need Apache DataSketches
-interop or you're reading/writing sketches an existing HLL-based system
-already produced.
+`ExDataSketch.ULL` (UltraLogLog, Ertl 2023) solves the same problem as
+HLL the same basic way -- hash each event, track the longest
+leading-zero run per bucket -- but squeezes more signal out of each
+byte. Where HLL keeps one plain rank per register, ULL packs a
+geometric rank *and* a 2-bit sub-bucket refinement into the same byte,
+and combines all `2^p` registers with the `OptimalFGRAEstimator`
+instead of a harmonic mean. Same register count, same byte-per-register
+footprint, more accurate estimate:
+
+```mermaid
+flowchart LR
+    A[event] --> B["hash(event)"]
+    B --> C["first p bits\n= register index"]
+    B --> D["remaining bits\n= geometric rank +\n2-bit sub-bucket"]
+    C --> E["registers[index] =\nmax(current, packed byte)"]
+    D --> E
+    E --> F["OptimalFGRAEstimator\nacross 2^p registers"]
+    F --> G["cardinality\nestimate"]
+```
+
+**Use it for:** exactly what you'd use HLL for -- distinct-count
+questions at fixed memory -- when you're starting fresh with no
+existing HLL data to stay compatible with. It's a drop-in: same `new/1`,
+`update/2`, `merge/2`, `size_bytes/1` API as `ExDataSketch.HLL`.
+
+**Don't use it for:** anywhere you need Apache DataSketches HLL
+interop, or you're reading/writing sketches an existing HLL-based
+system already produced -- use `ExDataSketch.HLL` there instead (see
+`guides/apache_interop.md`). Same non-uses as HLL otherwise: not for
+exact counts, membership testing, or per-item frequency.
+
+**What it buys you:** at equal memory, lower error. The measured
+relative standard error is `~0.70/sqrt(m)` for ULL versus `~1.04/sqrt(m)`
+for HLL (`m = 2^p` registers) -- about 30% tighter, for the same byte
+count:
+
+| Approach                  | Memory (p=14) | Error (RSE) |
+| -------------------------- | -------------- | ------------ |
+| `ExDataSketch.HLL` (p=14) | 16 KB          | ~0.81%       |
+| `ExDataSketch.ULL` (p=14) | 16 KB          | ~0.55%       |
+
+If you have no HLL-compatibility constraint, ULL is usually the better
+default for a new distinct-count problem.
 
 ## Sample data (cached locally)
 
+2,000,000 session events from 300,000 distinct sessions.
+
 ```elixir
-cache_path = Path.join(System.tmp_dir!(), "ex_data_sketch_livebook_cache/ull_sample.bin")
-
-events =
-  if File.exists?(cache_path) do
-    IO.puts("Loading cached sample data from #{cache_path}")
-    cache_path |> File.read!() |> :erlang.binary_to_term()
-  else
-    IO.puts("Generating sample data (this takes a few seconds)...")
-    # 2,000,000 session events from 300,000 distinct sessions.
-    events = for _ <- 1..2_000_000, do: "session_#{:rand.uniform(300_000)}"
-    File.mkdir_p!(Path.dirname(cache_path))
-    File.write!(cache_path, :erlang.term_to_binary(events))
-    events
-  end
-
+events = ExDataSketch.SampleData.ull_events()
 IO.puts("#{length(events)} events ready (true distinct count: 300,000)")
 ```
 

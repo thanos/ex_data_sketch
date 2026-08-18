@@ -14,37 +14,59 @@ config: [
 
 ## Introduction
 
-`ExDataSketch.CQF` is `ExDataSketch.Quotient`'s data structure extended
-to track **multiplicity** -- how many times each item was inserted, not
-just whether it was inserted at all. It's a multiset membership filter:
-`member?/2` for presence, `estimate_count/2` for (an over-estimate of,
-never under) how many times, `delete/2` to decrement.
+`ExDataSketch.CQF` is `ExDataSketch.Quotient`'s data structure with one
+change: every *occurrence* of an item gets its own slot in that item's
+sorted run, not just its first. Inserting the same item three times
+adds three slots; `estimate_count/2` just counts how many slots are in
+the run. It's a multiset membership filter: `member?/2` for presence,
+`estimate_count/2` for (an over-estimate of, never under) how many
+times, `delete/2` to decrement:
+
+```mermaid
+flowchart LR
+    A[item] --> B["hash(item)"]
+    B --> C["quotient (upper q bits)\n= slot region"]
+    B --> D["remainder (next r bits)\n= stored value"]
+    C --> E["insert one slot per\noccurrence into the\nsorted run"]
+    D --> E
+    E --> F["estimate_count =\nslots in this item's run"]
+```
+
+**Use it for:** rate limiting or abuse detection over a large or
+untrusted key space, where you need "how many times has X happened"
+*and* a hard cap on total memory regardless of how many distinct X's
+show up. Because CQF spends one slot per occurrence, not per distinct
+key, its memory is bounded by the total event volume you provisioned
+`:q` for -- an attacker sending a million different bogus keys can't
+grow it past that the way they'd grow an exact `Map` one entry at a
+time; they just hit `{:error, :full}` once the table's out of room, a
+clear signal rather than unbounded growth.
+
+**Don't use it for:** a small, trusted, bounded key space, where an
+exact counter map is simpler and no more expensive; pure "how many
+times" queries with no membership semantics needed at all --
+`ExDataSketch.CMS` is simpler there and doesn't need occurrence-level
+slot budgeting (see `ExDataSketch.CQF`'s "Sizing `:q`" section below --
+sizing for *total occurrences*, not distinct keys, is the one thing to
+get right).
+
+**What it buys you:** at `q: 21, r: 8` (2,097,152 slots, sized for this
+tutorial's 1,000,000 events), the sketch measured __~4 MB__ -- fixed
+by the occurrence volume `:q` was provisioned for, not by the 50,000
+distinct keys actually observed:
+
+| Approach                         | Memory ceiling                | Grows with...                          |
+| ------------------------------------ | -------------------------------- | ------------------------------------------ |
+| Exact counter map                   | Unbounded                          | Distinct key count (attacker-controlled if keys aren't trusted) |
+| `ExDataSketch.CQF` (q=21,r=8)      | ~4 MB, provisioned upfront          | Total occurrence count `:q` budgets for    |
 
 ## Sample data (cached locally)
 
+1,000,000 rate-limit-check events over 50,000 distinct API keys,
+skewed (some keys are far more active than others).
+
 ```elixir
-cache_path = Path.join(System.tmp_dir!(), "ex_data_sketch_livebook_cache/cqf_sample.bin")
-
-events =
-  if File.exists?(cache_path) do
-    IO.puts("Loading cached sample data from #{cache_path}")
-    cache_path |> File.read!() |> :erlang.binary_to_term()
-  else
-    IO.puts("Generating sample data (this takes a few seconds)...")
-
-    # 1,000,000 rate-limit-check events over 50,000 distinct API keys,
-    # skewed (some keys are far more active than others).
-    events =
-      for _ <- 1..1_000_000 do
-        rank = trunc(:math.pow(:rand.uniform(), 2) * 49_999) + 1
-        "api_key_#{rank}"
-      end
-
-    File.mkdir_p!(Path.dirname(cache_path))
-    File.write!(cache_path, :erlang.term_to_binary(events))
-    events
-  end
-
+events = ExDataSketch.SampleData.cqf_events()
 true_counts = Enum.frequencies(events)
 IO.puts("#{length(events)} events across #{map_size(true_counts)} distinct keys")
 ```

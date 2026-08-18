@@ -15,30 +15,56 @@ config: [
 
 ## Introduction
 
-`ExDataSketch.Cuckoo` is a membership filter like `ExDataSketch.Bloom`,
-with two things Bloom can't do: **deletion**, and a filter that can
-report when it's genuinely **full** rather than silently degrading. The
-trade-off is that Cuckoo has no `merge/2` -- its per-bucket fingerprint
-layout isn't associatively mergeable the way Bloom's bit array is.
+`ExDataSketch.Cuckoo` stores a short *fingerprint* of each item (not
+bits shared across everything, the way Bloom does) in one of two
+candidate buckets. If both candidate buckets are full, it *kicks* an
+existing fingerprint out to its own alternate bucket and tries again,
+up to `:max_kicks` times -- the same relocate-on-collision idea cuckoo
+hashing uses for hash tables. Because each fingerprint lives in one
+specific slot rather than being smeared across shared bits, it can be
+found and cleared again later:
+
+```mermaid
+flowchart LR
+    A[item] --> B["fingerprint(item),\ni1 = hash(item)"]
+    B --> C["i2 = i1 XOR hash(fingerprint)"]
+    C --> D{"empty slot in\nbucket i1 or i2?"}
+    D -->|yes| E["store fingerprint"]
+    D -->|no| F["kick a resident\nfingerprint to its\nalternate bucket,\nrepeat"]
+```
+
+That gives Cuckoo two things Bloom can't do: **deletion**, and a
+filter that can report when it's genuinely **full** (kicked out of
+kicks) rather than silently degrading its false-positive rate past
+capacity. The trade-off is that Cuckoo has no `merge/2` -- its
+per-bucket fingerprint layout isn't associatively mergeable the way
+Bloom's bit array is.
+
+**Use it for:** the same "have I seen this" role as Bloom, specifically
+when you also need to delete items later (session/cache eviction,
+"unban this IP"), or need a hard, honest signal that the filter is
+full instead of accuracy quietly degrading.
+
+**Don't use it for:** anywhere you need to `merge/2` two independently
+built filters -- use `ExDataSketch.Bloom` there; extremely tight
+false-positive targets at minimal memory, where Bloom's plain bit
+array has a slight edge (Cuckoo's fixed per-slot fingerprint width is
+less granular than Bloom's tunable bit count).
+
+**What it buys you:** at the default `fingerprint_size: 8`,
+`bucket_size: 4` (FPR `~= 2 * bucket_size / 2^fingerprint_size`, about
+3.1%), 500,000 sessions (used throughout this tutorial) measured
+__~512 KB__ -- close to Bloom's per-item cost, but now deletable:
+
+| Approach                        | Memory (500,000 sessions) | Delete? | FPR   |
+| ---------------------------------- | ---------------------------- | --------- | ------- |
+| Exact set (raw session strings)   | 7+ MB (grows with item size)  | Yes       | 0%      |
+| `ExDataSketch.Cuckoo` (fp=8)     | ~512 KB, fixed bits/item       | Yes       | ~3.1%   |
 
 ## Sample data (cached locally)
 
 ```elixir
-cache_path = Path.join(System.tmp_dir!(), "ex_data_sketch_livebook_cache/cuckoo_sample.bin")
-
-{inserted, novel} =
-  if File.exists?(cache_path) do
-    IO.puts("Loading cached sample data from #{cache_path}")
-    cache_path |> File.read!() |> :erlang.binary_to_term()
-  else
-    IO.puts("Generating sample data (this takes a few seconds)...")
-    inserted = for i <- 1..500_000, do: "session_#{i}"
-    novel = for i <- 500_001..1_000_000, do: "session_#{i}"
-    File.mkdir_p!(Path.dirname(cache_path))
-    File.write!(cache_path, :erlang.term_to_binary({inserted, novel}))
-    {inserted, novel}
-  end
-
+{inserted, novel} = ExDataSketch.SampleData.cuckoo_sessions()
 IO.puts("#{length(inserted)} inserted sessions, #{length(novel)} novel sessions")
 ```
 
