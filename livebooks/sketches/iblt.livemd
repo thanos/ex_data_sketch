@@ -16,45 +16,59 @@ config: [
 
 `ExDataSketch.IBLT` answers a different question than the other filters
 here: not "is this item in the set," but **"what's different between two
-sets"** -- without transferring either set. Two parties each build an
-IBLT of their own (potentially huge) set, exchange just the IBLT (small,
-proportional to `cell_count`, not to the set size), `subtract/2` them,
-and `list_entries/1` the result to recover exactly the items that differ.
-This is the classic use case for syncing two replicas, or diffing two
-nodes' key sets, when most of the data already matches.
+sets"** -- without transferring either set. Inserting an item touches
+`hash_count` cells, each XOR-accumulating the item's key into a running
+`key_sum` and bumping a `count`. Two IBLTs built from mostly-overlapping
+sets can be `subtract/2`'d cell-by-cell (also just XOR); every cell
+where the sets agreed cancels out to zero, and any cell left with
+`count = +-1` holds exactly one surviving key -- which `list_entries/1`
+peels off, repeating until nothing's left to peel:
 
-The catch: `cell_count` must be sized to the **expected difference**, not
-the total set size -- an IBLT with too few cells for the actual diff
-fails to decode (`{:error, :decode_failed}`) rather than silently giving
-a wrong answer. That's the whole point demonstrated below.
+```mermaid
+flowchart LR
+    A[item] --> B["hash_count cells"]
+    B --> C["count += 1,\nkey_sum ^= key"]
+    D[Party A IBLT] --> F["subtract/2\n(XOR cell-by-cell)"]
+    E[Party B IBLT] --> F
+    F --> G["list_entries/1:\npeel cells with\ncount = +-1"]
+```
+
+This is the classic use case for syncing two replicas, or diffing two
+nodes' key sets, when most of the data already matches -- exchange
+just the IBLT (small, proportional to `cell_count`, not to the set
+size) instead of either full set.
+
+**Use it for:** reconciling two mostly-agreeing sets -- replica sync,
+"what changed since the last checkpoint," diffing two nodes' key sets
+-- when you have a reasonable estimate of how *many* items differ,
+even if you have no idea *which* ones.
+
+**Don't use it for:** plain membership testing (not what this answers
+at all -- see `ExDataSketch.Bloom`/`ExDataSketch.Cuckoo`); cases where
+the actual difference could exceed what `:cell_count` was sized for --
+decode then fails cleanly (`{:error, :decode_failed}`, never a silently
+wrong answer) but you get nothing back, so `:cell_count` needs a real
+estimate of the expected diff size, not the total set size.
+
+**What it buys you:** an IBLT's size is proportional to `:cell_count`
+(the *expected difference*), never to the sets themselves. At
+`cell_count: 100` (used throughout this tutorial), each IBLT is a
+fixed __~2.4 KB__ -- whether the underlying sets have 200 keys or
+200,000:
+
+| Approach                         | Data to diff two 200K-key sets | Answer                              |
+| ------------------------------------ | --------------------------------- | -------------------------------------- |
+| Transfer both full sets              | 2+ MB                              | Exact                                  |
+| `ExDataSketch.IBLT` (cell_count=100) | ~2.4 KB, fixed                     | Exact diff, if it fits `:cell_count`   |
 
 ## Sample data (cached locally)
 
+Two servers' key sets, 200,000 keys in common, each with a handful
+of keys the other doesn't have -- realistic for "two replicas that
+mostly agree, but drifted slightly."
+
 ```elixir
-cache_path = Path.join(System.tmp_dir!(), "ex_data_sketch_livebook_cache/iblt_sample.bin")
-
-{server_a_keys, server_b_keys, only_in_a, only_in_b} =
-  if File.exists?(cache_path) do
-    IO.puts("Loading cached sample data from #{cache_path}")
-    cache_path |> File.read!() |> :erlang.binary_to_term()
-  else
-    IO.puts("Generating sample data (this takes a few seconds)...")
-
-    # Two servers' key sets, 200,000 keys in common, each with a handful
-    # of keys the other doesn't have -- realistic for "two replicas that
-    # mostly agree, but drifted slightly."
-    shared = for i <- 1..200_000, do: "key_#{i}"
-    only_in_a = for i <- 1..7, do: "server_a_only_#{i}"
-    only_in_b = for i <- 1..5, do: "server_b_only_#{i}"
-
-    server_a_keys = shared ++ only_in_a
-    server_b_keys = shared ++ only_in_b
-
-    File.mkdir_p!(Path.dirname(cache_path))
-    File.write!(cache_path, :erlang.term_to_binary({server_a_keys, server_b_keys, only_in_a, only_in_b}))
-    {server_a_keys, server_b_keys, only_in_a, only_in_b}
-  end
-
+{server_a_keys, server_b_keys, only_in_a, only_in_b} = ExDataSketch.SampleData.iblt_keys()
 IO.puts("Server A: #{length(server_a_keys)} keys, Server B: #{length(server_b_keys)} keys")
 IO.puts("True diff: #{length(only_in_a)} keys only in A, #{length(only_in_b)} keys only in B")
 ```

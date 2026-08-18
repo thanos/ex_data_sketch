@@ -1,7 +1,7 @@
 defmodule ExDataSketch.MixProject do
   use Mix.Project
 
-  @version "0.10.2"
+  @version "0.10.3"
   @source_url "https://github.com/thanos/ex_data_sketch"
 
   def project do
@@ -124,7 +124,7 @@ defmodule ExDataSketch.MixProject do
 
   defp docs do
     [
-      main: "ExDataSketch",
+      main: "quick_start",
       extras: [
         # -- Getting Started --
         "guides/quick_start.md",
@@ -194,6 +194,11 @@ defmodule ExDataSketch.MixProject do
         "CHANGELOG.md"
       ],
       groups_for_extras: [
+        "Core Concepts": [
+          "guides/aggregation_wall.md",
+          "guides/distributed_merge_semantics.md",
+          "guides/hash_strategies.md"
+        ],
         "Getting Started": [
           "guides/quick_start.md",
           "guides/usage_guide.md",
@@ -227,11 +232,6 @@ defmodule ExDataSketch.MixProject do
         ],
         "Tutorials: Set Reconciliation": [
           "livebooks/sketches/iblt.livemd"
-        ],
-        "Core Concepts": [
-          "guides/aggregation_wall.md",
-          "guides/distributed_merge_semantics.md",
-          "guides/hash_strategies.md"
         ],
         "Production & Operations": [
           "guides/persistence.md",

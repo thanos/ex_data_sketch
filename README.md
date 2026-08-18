@@ -73,7 +73,7 @@ Add `ex_data_sketch` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:ex_data_sketch, "~> 0.10.2"}
+    {:ex_data_sketch, "~> 0.10.3"}
   ]
 end
 ```
@@ -111,7 +111,7 @@ ExDataSketch.Bloom.member?(bloom, 42)      # true
 ExDataSketch.Bloom.member?(bloom, 99_999)  # false (probably)
 ```
 
-See the [Quick Start Guide](guides/quick_start.md) for more examples.
+See the [Quick Start Guide](https://hexdocs.pm/ex_data_sketch/quick_start.html) for more examples.
 
 ## Livebooks
 
@@ -119,7 +119,7 @@ See the [Quick Start Guide](guides/quick_start.md) for more examples.
 per-family tutorial for all 16 sketches (each generating and caching its
 own sample data), plus 7 cross-cutting guides covering stream
 consumption, distributed merge semantics, framework integration, and a
-1-billion-row-style case study. See [Livebooks Guide](guides/livebooks.md)
+1-billion-row-style case study. See [Livebooks Guide](https://hexdocs.pm/ex_data_sketch/livebooks.html)
 for the recommended reading order and what each Livebook teaches.
 
 ## Documentation
@@ -191,6 +191,7 @@ mix docs
 | v0.10.0 | Production Ergonomics -- unified sketch contract & facade dispatch, storage behaviour, windowing, supervised sketches (Server/Sketches), Telemetry.Metrics + LiveDashboard, filter NIF raw-hashing, Apache KLL interop, v1 serialization escape hatch for every family | Released |
 | v0.10.1 | Correctness and polish -- `ULL` rewritten to the real UltraLogLog algorithm (was an HLL-derived approximation; binary format bumped v1->v2), `KLL` compaction weight-invariant fix, `HLL` precision range widened to p=4..26, 16 new per-family tutorial Livebooks, `phoenix_demo/` sample app, plus the original post-review fixes (Server graceful-shutdown snapshotting, storage merge crash-safety, filter `:hash_strategy` build/round-trip fix, hardened `opencode.yml` workflow) | Released |
 | v0.10.2 | Application-config-driven per-family defaults (`ExDataSketch.Config`), `FilterChain.put_many/2` batching (with a simplified `delete/2` return), plus correctness fixes found via manual livebook verification -- `Cuckoo` eviction-slot cycling, `Quotient`/`CQF` O(table size) lookups, `CQF` silent overflow, and a `REQ` compaction weight-invariant bug matching v0.10.1's `KLL` fix | Released |
+| v0.10.3 | `ExDataSketch.SampleData` (Rust-accelerated tutorial sample-data generators), richer front matter for all 16 tutorial livebooks (mechanism diagrams, use-for/don't-use-for, measured benefits), hexdocs.pm/Hex.pm doc-site fixes, and two flaky-test fixes | Released |
 | v0.11.0 | Apache HLL Interoperability & New Sketch Families -- full cross-language HLL exchange, CPC (Compressed Probabilistic Counting), Tuple Sketch (weighted distinct counting) | Planned |
 | v0.12.0 | Similarity & Sampling -- MinHash, Weighted MinHash, VarOpt sampling | Planned |
 | v1.0.0 | Stable Binary Contract -- locked EXSK format, full benchmark suite, Nx / Arrow ecosystem integrations | Planned |

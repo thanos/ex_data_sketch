@@ -14,40 +14,60 @@ config: [
 ## Introduction
 
 `ExDataSketch.MisraGries` is another top-K heavy-hitter sketch, like
-`ExDataSketch.FrequentItems`, but a different algorithm with a different
-guarantee shape: Misra-Gries counters can *undercount* a tracked item by
-up to `n / (k + 1)` (where `n` is the total items seen), and it reports
-no per-item error bound the way SpaceSaving's `:lower`/`:upper` do --
-`estimate/2` is just a plain integer. What it guarantees instead is a
-classic result: any item whose true frequency exceeds `n / (k + 1)` is
-*guaranteed* to still be tracked when you query it.
+`ExDataSketch.FrequentItems`, but a blunter algorithm with a sharper
+guarantee. A tracked item just increments; a new item takes a free
+slot if one exists. Once all `k` slots are full and the new item isn't
+tracked, there's no min-count replacement -- instead *every* counter
+gets decremented by one, and anything that hits zero is dropped:
+
+```mermaid
+flowchart LR
+    A[item] --> B{"already\ntracked?"}
+    B -->|yes| C["count += 1"]
+    B -->|no| D{"free slot\n(< k tracked)?"}
+    D -->|yes| E["insert,\ncount = 1"]
+    D -->|no| F["decrement ALL counters,\nremove any at zero"]
+```
+
+Decrementing everything (not just the minimum) is what buys the
+guarantee: any item whose true frequency exceeds `n / (k + 1)` (where
+`n` is the total items seen) is *mathematically guaranteed* to still
+be tracked when you query it, and `estimate/2` returns a lower bound
+with error at most `n / (k + 1)` -- no probability, no per-item
+`:lower`/`:upper` range the way SpaceSaving reports.
+
+**Use it for:** contexts where a deterministic, provable guarantee
+matters more than tight per-item error bounds -- "prove that any item
+above this frequency threshold cannot be missed" is a stronger claim
+than SpaceSaving's probabilistic error bars.
+
+**Don't use it for:** everyday top-K extraction where you want items
+that are frequent-but-below-guarantee-threshold to actually survive in
+practice -- decrement-all evicts those just as readily as one-off
+noise (see the moduledoc's measured comparison); `ExDataSketch.FrequentItems`
+is the better default there. Also not for cases needing a per-item
+error range rather than a bare lower-bound count.
+
+**What it buys you:** state size scales with retained entries (bounded
+by `k`) at roughly 21-22 bytes/entry for typical string keys. A `k:
+100` sketch over the same 1,000,000-query / 5,000-distinct-term sample
+`ExDataSketch.FrequentItems` uses measured __~1,977 bytes__ -- and even
+`k: 5000` (tracking every distinct item in that universe) measured only
+~109 KB in the same class of workload:
+
+| Approach                            | Memory (1M events, 5K distinct) | Guarantee                       |
+| -------------------------------------- | ---------------------------------- | ------------------------------------ |
+| Exact counter map                     | Grows with distinct key count       | Exact                                |
+| `ExDataSketch.MisraGries` (k=100)     | ~2.0 KB, fixed                      | Deterministic: freq > n/(k+1) tracked |
 
 ## Sample data (cached locally)
 
+Same shape as the FrequentItems tutorial's sample (cached separately),
+so the two are directly comparable: 1,000,000 search queries over
+5,000 distinct terms, power-law distributed.
+
 ```elixir
-cache_path = Path.join(System.tmp_dir!(), "ex_data_sketch_livebook_cache/misra_gries_sample.bin")
-
-queries =
-  if File.exists?(cache_path) do
-    IO.puts("Loading cached sample data from #{cache_path}")
-    cache_path |> File.read!() |> :erlang.binary_to_term()
-  else
-    IO.puts("Generating sample data (this takes a few seconds)...")
-
-    # Same shape as the FrequentItems tutorial's sample, so the two are
-    # directly comparable: 1,000,000 search queries over 5,000 distinct
-    # terms, power-law distributed.
-    queries =
-      for _ <- 1..1_000_000 do
-        rank = trunc(:math.pow(:rand.uniform(), 3) * 4_999) + 1
-        "query_#{rank}"
-      end
-
-    File.mkdir_p!(Path.dirname(cache_path))
-    File.write!(cache_path, :erlang.term_to_binary(queries))
-    queries
-  end
-
+queries = ExDataSketch.SampleData.misra_gries_queries()
 true_counts = Enum.frequencies(queries)
 IO.puts("#{length(queries)} queries across #{map_size(true_counts)} distinct terms")
 ```

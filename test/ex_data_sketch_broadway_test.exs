@@ -1,5 +1,11 @@
 defmodule ExDataSketch.BroadwayTest do
-  use ExUnit.Case, async: true
+  # async: false -- this module's telemetry tests listen on
+  # [:ex_data_sketch, :pipeline, :periodic_flush], a process-wide event bus
+  # with no per-instance identifier in its metadata to filter by. Running
+  # concurrently with any other async module that happens to emit the same
+  # event (now or in the future) is a real, hard-to-scope cross-test race;
+  # running this module alone removes that risk entirely.
+  use ExUnit.Case, async: false
 
   alias ExDataSketch.Broadway
 
@@ -144,6 +150,14 @@ defmodule ExDataSketch.BroadwayTest do
 
       assert_receive :periodic_flush_fired, 500
 
+      # Regression: `agg`'s 20ms timer fires [:ex_data_sketch, :pipeline,
+      # :periodic_flush] globally, so under load its message-processing
+      # backlog can keep draining (and keep firing) for a little while
+      # after this test itself returns -- landing in whatever other test
+      # happens to be listening on that same event next. Stopping
+      # synchronously, here, guarantees the timer is fully cancelled and
+      # the backlog fully drained before that can happen.
+      GenServer.stop(agg)
       :telemetry.detach("periodic-flush-auto-test")
     end
 

@@ -14,40 +14,60 @@ config: [
 
 ## Introduction
 
-`ExDataSketch.FrequentItems` finds the **top-K most frequent items** in a
-stream -- "what are the trending search terms," "which endpoints get the
-most traffic" -- using the SpaceSaving algorithm: at most `k` counters,
-each tracking one candidate item plus a bounded overcount error. Unlike
-`ExDataSketch.CMS`, which answers "what's the count for *this* item" and
-requires you to already know which items to ask about, FrequentItems
-directly hands you the ranked list.
+`ExDataSketch.FrequentItems` implements SpaceSaving: at most `k`
+counters, each tracking one candidate item. A tracked item just
+increments its counter. A new item takes a free slot if one exists;
+once all `k` slots are full, the new item *evicts* whichever tracked
+item currently has the lowest count, inheriting that count plus one --
+and remembers the evicted count as its error bound. Frequent items
+naturally survive (their counts stay high enough to never be the
+minimum); items that showed up once and never again get evicted
+almost immediately:
+
+```mermaid
+flowchart LR
+    A[item] --> B{"already\ntracked?"}
+    B -->|yes| C["count += 1"]
+    B -->|no| D{"free slot\n(< k tracked)?"}
+    D -->|yes| E["insert,\ncount = 1"]
+    D -->|no| F["evict min-count entry,\nreplace: count = min+1,\nerror = min"]
+```
+
+Unlike `ExDataSketch.CMS`, which answers "what's the count for *this*
+item" and requires you to already know which items to ask about,
+FrequentItems directly hands you the ranked list.
+
+**Use it for:** top-K questions directly -- "what are the trending
+search terms," "which endpoints get the most traffic" -- where you
+want the ranked list itself, not just a count for items you already
+suspect are hot.
+
+**Don't use it for:** point queries on arbitrary items ("what's the
+count for *this specific* item," whether or not it's a heavy hitter --
+`ExDataSketch.CMS` is simpler and cheaper for that); data with no real
+heavy hitters (SpaceSaving's error bound is only tight when a few
+items dominate; near-uniform frequency data gives you a ranked list
+with a much looser guarantee); an exact top-K list with zero error
+tolerance -- use a full counter map and sort it.
+
+**What it buys you:** memory is bounded by `k`, not by how many
+distinct keys the stream actually contains. A `k: 100` sketch over
+1,000,000 queries drawn from 5,000 distinct terms measured __~2.9 KB__
+-- and critically, that number doesn't change if the distinct-term
+count were 5 million instead of 5,000, unlike an exact counter map:
+
+| Approach                             | Memory (any distinct-key count) | What you get                  |
+| --------------------------------------- | ---------------------------------- | -------------------------------- |
+| Exact counter map                      | Grows with distinct key count       | Every key's exact count           |
+| `ExDataSketch.FrequentItems` (k=100)   | ~2.9 KB, fixed                      | Top-K ranked list, error-bounded  |
 
 ## Sample data (cached locally)
 
+1,000,000 search queries over 5,000 distinct terms, power-law
+distributed -- a handful of terms dominate, most appear rarely.
+
 ```elixir
-cache_path =
-  Path.join(System.tmp_dir!(), "ex_data_sketch_livebook_cache/frequent_items_sample.bin")
-
-queries =
-  if File.exists?(cache_path) do
-    IO.puts("Loading cached sample data from #{cache_path}")
-    cache_path |> File.read!() |> :erlang.binary_to_term()
-  else
-    IO.puts("Generating sample data (this takes a few seconds)...")
-
-    # 1,000,000 search queries over 5,000 distinct terms, power-law
-    # distributed -- a handful of terms dominate, most appear rarely.
-    queries =
-      for _ <- 1..1_000_000 do
-        rank = trunc(:math.pow(:rand.uniform(), 3) * 4_999) + 1
-        "query_#{rank}"
-      end
-
-    File.mkdir_p!(Path.dirname(cache_path))
-    File.write!(cache_path, :erlang.term_to_binary(queries))
-    queries
-  end
-
+queries = ExDataSketch.SampleData.frequent_items_queries()
 true_counts = Enum.frequencies(queries)
 IO.puts("#{length(queries)} queries across #{map_size(true_counts)} distinct terms")
 ```

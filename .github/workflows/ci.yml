@@ -285,6 +285,10 @@ jobs:
           key: rust-target-${{ hashFiles('native/ex_data_sketch_nif/Cargo.lock') }}
           restore-keys: rust-target-
 
+      - name: Run native crate tests
+        run: cargo test
+        working-directory: native/ex_data_sketch_nif
+
       - run: mix deps.get
       - run: mix compile --warnings-as-errors
       - run: mix coveralls.json

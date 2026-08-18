@@ -14,40 +14,64 @@ config: [
 
 ## Introduction
 
-`ExDataSketch.CMS` estimates *how many times* each item has occurred in a
-stream -- "how many requests hit this endpoint," "how many times was this
-error logged" -- in fixed memory, without storing a counter per distinct
-item. CMS estimates are always **over-estimates, never under** (hash
-collisions can only add extra weight to a counter, never subtract), and
-the amount of over-estimation shrinks as `width`/`depth` grow.
+`ExDataSketch.CMS` estimates *how many times* each item has occurred in
+a stream, without keeping a counter per distinct item. Every item is
+hashed by `depth` independent hash functions into `depth` rows of a
+`width`-wide counter grid, incrementing one counter per row. To read a
+count back out, take the *minimum* across that item's `depth` counters
+-- collisions from other items can only push a counter up, never down,
+so the true count is never above what you stored, and the minimum is
+the row least corrupted by collisions:
+
+```mermaid
+flowchart LR
+    A[item] --> B["depth hash functions"]
+    B --> C["row 1: counters[h1] += 1"]
+    B --> D["row 2: counters[h2] += 1"]
+    B --> E["... row depth"]
+    C --> F["estimate(item) =\nmin across rows"]
+    D --> F
+    E --> F
+```
+
+**Use it for:** "how many times did X occur" at a key cardinality too
+large to keep an exact counter per key -- rate limiting, traffic/error
+frequency analytics, or as a cheap pre-filter before a more expensive
+exact lookup for candidates that look frequent.
+
+**Don't use it for:** anything where over-counting is unacceptable
+(billing, quotas that must never trigger early -- use an exact counter
+map), membership testing ("have I seen X at all" -- see
+`ExDataSketch.Bloom`), or extracting the top-K most frequent items
+directly -- `ExDataSketch.FrequentItems` and `ExDataSketch.MisraGries`
+are purpose-built for that and track *which* items are heavy, not just
+counts.
+
+**What it buys you:** CMS estimates are always over-estimates, never
+under, and the error shrinks as `width`/`depth` grow. At the library's
+default `width: 2048, depth: 5`, error is bounded by `e * N / width`
+(`e` is Euler's number, `N` the total count seen) with probability at
+least `1 - (1/2)^depth` -- about __0.13% of N__, ~97% of the time --
+in a fixed __~40 KB__ regardless of how many distinct keys exist:
+
+| Approach                    | Memory (any key cardinality) | Per-item error         |
+| ---------------------------- | ------------------------------ | ------------------------ |
+| Exact counter map            | Grows with distinct key count  | 0                         |
+| `ExDataSketch.CMS` (2048x5)  | ~40 KB, fixed                  | <=0.13% of N, ~97% conf. |
+
+If a small, one-sided error is acceptable in exchange for memory that
+doesn't grow with your key space, CMS is the standard tool for
+approximate frequency counting.
 
 ## Sample data (cached locally)
 
+2,000,000 page-view events over 10,000 distinct pages, power-law
+distributed (a few pages get most of the traffic, a long tail gets
+almost none) -- realistic for request/error/page-view frequency data,
+and the skew is exactly what makes frequency estimation interesting.
+
 ```elixir
-cache_path = Path.join(System.tmp_dir!(), "ex_data_sketch_livebook_cache/cms_sample.bin")
-
-events =
-  if File.exists?(cache_path) do
-    IO.puts("Loading cached sample data from #{cache_path}")
-    cache_path |> File.read!() |> :erlang.binary_to_term()
-  else
-    IO.puts("Generating sample data (this takes a few seconds)...")
-
-    # 2,000,000 page-view events over 10,000 distinct pages, power-law
-    # distributed (a few pages get most of the traffic, a long tail gets
-    # almost none) -- realistic for request/error/page-view frequency data,
-    # and the skew is exactly what makes frequency estimation interesting.
-    events =
-      for _ <- 1..2_000_000 do
-        rank = trunc(:math.pow(:rand.uniform(), 2) * 9_999) + 1
-        "page_#{rank}"
-      end
-
-    File.mkdir_p!(Path.dirname(cache_path))
-    File.write!(cache_path, :erlang.term_to_binary(events))
-    events
-  end
-
+events = ExDataSketch.SampleData.cms_events()
 true_counts = Enum.frequencies(events)
 IO.puts("#{length(events)} events across #{map_size(true_counts)} distinct pages")
 ```

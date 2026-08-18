@@ -14,32 +14,58 @@ config: [
 
 ## Introduction
 
-`ExDataSketch.Quotient` is a membership filter with both of the things
-`ExDataSketch.Cuckoo` trades off against each other: **safe deletion**
-(deleting a non-inserted item is guaranteed to be a no-op, never
-introducing a false negative for something else) *and* `merge/2`. The
-trade is sizing: capacity is set via `:q`/`:r` bit widths (`2^q` slots)
-rather than a plain item count, and false-positive rate is a function of
-`:r` alone.
+`ExDataSketch.Quotient` splits each item's hash into two parts: the
+upper `q` bits (the *quotient*, which slot it belongs near) and the
+next `r` bits (the *remainder*, what actually gets stored). Items are
+kept in sorted order within their slot region, using three metadata
+bits per slot (`is_occupied`, `is_continuation`, `is_shifted`) to
+encode collisions without tombstones or chaining -- which is what
+makes both deletion and merging safe: a slot's neighbors always know
+exactly where they *should* be, so removing or combining entries can't
+silently orphan someone else's data:
+
+```mermaid
+flowchart LR
+    A[item] --> B["hash(item)"]
+    B --> C["quotient (upper q bits)\n= slot region"]
+    B --> D["remainder (next r bits)\n= stored value"]
+    C --> E["insert/find remainder in\nsorted run (metadata bits\ntrack occupied/shifted)"]
+    D --> E
+```
+
+That structure gives Quotient both of the things `ExDataSketch.Cuckoo`
+trades off against each other: **safe deletion** (deleting a
+non-inserted item is guaranteed to be a no-op, never introducing a
+false negative for something else) *and* `merge/2`. The trade is
+sizing: capacity is set via `:q`/`:r` bit widths (`2^q` slots) rather
+than a plain item count, and false-positive rate is a function of `:r`
+alone.
+
+**Use it for:** the one membership filter here that needs *both* safe
+deletion and `merge/2` in the same structure -- Cuckoo has deletion
+but no merge; Bloom has merge but no deletion.
+
+**Don't use it for:** cases needing the tightest possible bits per
+item -- Bloom and Cuckoo both pack tighter, since Quotient spends
+extra bits on the sorted-run metadata that makes deletion/merge safe.
+Also not for cases where you'd rather size by a plain expected item
+count -- Quotient's capacity is a `2^q` slot-table bit-width choice,
+not a `:capacity` option the way Bloom/Cuckoo take directly.
+
+**What it buys you:** at `q: 19, r: 8` (524,288 slots, used throughout
+this tutorial), 300,000 API keys measured __~1 MB__ -- less dramatic
+savings than Bloom or Cuckoo's raw bits/item, but with a capability
+neither of them offers alone:
+
+| Approach                        | Memory (300,000 keys) | Delete?    | Merge? |
+| ---------------------------------- | ------------------------ | ------------ | -------- |
+| Exact set (raw key strings)      | 4+ MB (grows with item size) | Yes          | N/A      |
+| `ExDataSketch.Quotient` (q=19,r=8) | ~1 MB, fixed              | Yes, safely  | Yes      |
 
 ## Sample data (cached locally)
 
 ```elixir
-cache_path = Path.join(System.tmp_dir!(), "ex_data_sketch_livebook_cache/quotient_sample.bin")
-
-{inserted, novel} =
-  if File.exists?(cache_path) do
-    IO.puts("Loading cached sample data from #{cache_path}")
-    cache_path |> File.read!() |> :erlang.binary_to_term()
-  else
-    IO.puts("Generating sample data (this takes a few seconds)...")
-    inserted = for i <- 1..300_000, do: "api_key_#{i}"
-    novel = for i <- 300_001..600_000, do: "api_key_#{i}"
-    File.mkdir_p!(Path.dirname(cache_path))
-    File.write!(cache_path, :erlang.term_to_binary({inserted, novel}))
-    {inserted, novel}
-  end
-
+{inserted, novel} = ExDataSketch.SampleData.quotient_api_keys()
 IO.puts("#{length(inserted)} inserted keys, #{length(novel)} novel keys")
 ```
 

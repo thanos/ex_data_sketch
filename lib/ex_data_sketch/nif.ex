@@ -327,5 +327,13 @@ defmodule ExDataSketch.Nif do
   def fi_count_nif(_state_bin), do: :erlang.nif_error(:not_loaded)
   def fi_entry_count_nif(_state_bin), do: :erlang.nif_error(:not_loaded)
 
+  # Sample data (livebook tutorial generators, see ExDataSketch.SampleData)
+  def sample_data_string_events_nif(_prefix, _count, _pool_size, _exponent),
+    do: :erlang.nif_error(:not_loaded)
+
+  def sample_data_kll_latencies_nif(_count), do: :erlang.nif_error(:not_loaded)
+  def sample_data_ddsketch_durations_nif(_count), do: :erlang.nif_error(:not_loaded)
+  def sample_data_req_latencies_nif(_count), do: :erlang.nif_error(:not_loaded)
+
   # coveralls-ignore-stop
 end

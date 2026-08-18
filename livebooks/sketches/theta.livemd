@@ -14,41 +14,59 @@ config: [
 
 ## Introduction
 
-`ExDataSketch.Theta` estimates cardinality like `HLL`/`ULL`, but its real
-distinguishing feature is that it supports **set operations** -- union,
-intersection, and difference between two sketches -- so you can answer
-"how many users used *both* feature A and feature B" or "how many users
-are in set A but not set B" without ever materializing either full set.
+`ExDataSketch.Theta` keeps the `k` *smallest* hash values it has seen
+below a moving threshold ("theta"). Once more than `k` items pass the
+threshold, theta drops and the largest retained hashes are evicted --
+so the sketch always holds a uniform random sample of the full hashed
+item space below theta, and `cardinality ~= retained_count / theta`.
+Because that sample *is* a real subset of the input's hashes, two
+sketches' samples can be combined directly -- that's what makes set
+operations possible where HLL/ULL can only merge (union):
 
-Only `merge/2` (union) is a dedicated function; intersection and
-difference are derived by combining `estimate/1` calls via the
-inclusion-exclusion principle, which is exact math on the *estimates*
-(not the sets themselves) -- shown below.
+```mermaid
+flowchart LR
+    A[item] --> B["hash(item)"]
+    B --> C{"hash < theta\nthreshold?"}
+    C -->|no| D[discard]
+    C -->|yes| E["add to retained set"]
+    E --> F{"retained > k?"}
+    F -->|yes| G["lower theta,\nevict largest hashes"]
+    F -->|no| H["estimate =\nretained_count / theta"]
+    G --> H
+```
+
+**Use it for:** distinct-count *plus* set operations between sketches
+-- "how many users used both feature A and feature B," "how many users
+are in set A but not set B" -- via `merge/2` (union) and the
+inclusion-exclusion combinations shown below, without ever
+materializing either full set.
+
+**Don't use it for:** plain distinct-count with no set-operation need
+-- `ExDataSketch.HLL`/`ExDataSketch.ULL` pack far more accuracy per
+byte for that alone, since Theta retains a full 8-byte hash per entry
+rather than a compact one-byte register. Also not for exact set
+operations -- intersection/difference here are still estimates, with
+the same error budget as the underlying cardinality estimate.
+
+**What it buys you:** at the default `k: 4096`, a sketch retains at
+most 4096 8-byte hashes (__~32 KB__ fixed) with roughly __1.6%__
+relative error (`~1/sqrt(k)`, the standard bound for this sketch
+family) -- and unlike two independently-built exact sets, you never
+need to hold either input in full to compute the overlap:
+
+| Approach                     | Memory (per sketch, k=4096) | Set ops                | Error |
+| ------------------------------ | ------------------------------ | ------------------------- | ------- |
+| Exact sets (two `MapSet`s)    | Grows with input size          | Exact                     | 0       |
+| `ExDataSketch.Theta` (k=4096) | ~32 KB, fixed                  | union/intersect/difference | ~1.6%   |
 
 ## Sample data (cached locally)
 
+Set A: users 1..600,000 (600K users). Set B: users 400,001..1,000,000
+(600K users). True intersection: users 400,001..600,000 (200K users).
+True union: users 1..1,000,000 (1,000,000 users).
+
 ```elixir
-cache_path = Path.join(System.tmp_dir!(), "ex_data_sketch_livebook_cache/theta_sample.bin")
-
-{users_a, users_b} =
-  if File.exists?(cache_path) do
-    IO.puts("Loading cached sample data from #{cache_path}")
-    cache_path |> File.read!() |> :erlang.binary_to_term()
-  else
-    IO.puts("Generating sample data (this takes a few seconds)...")
-
-    # Set A: users 1..600,000 (600K users).
-    # Set B: users 400,001..1,000,000 (600K users).
-    # True intersection: users 400,001..600,000 (200K users).
-    # True union: users 1..1,000,000 (1,000,000 users).
-    users_a = for i <- 1..600_000, do: "user_#{i}"
-    users_b = for i <- 400_001..1_000_000, do: "user_#{i}"
-
-    File.mkdir_p!(Path.dirname(cache_path))
-    File.write!(cache_path, :erlang.term_to_binary({users_a, users_b}))
-    {users_a, users_b}
-  end
-
+{users_a, users_b} = ExDataSketch.SampleData.theta_sets()
 IO.puts("Set A: #{length(users_a)} users, Set B: #{length(users_b)} users")
 IO.puts("True union: 1,000,000; true intersection: 200,000")
 ```

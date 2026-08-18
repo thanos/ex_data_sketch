@@ -14,37 +14,58 @@ config: [
 
 ## Introduction
 
-`ExDataSketch.KLL` estimates **quantiles** (median, p90, p99, ...) and
-**ranks** over a numeric stream -- "what's the p99 request latency," "what
-fraction of orders were under $50" -- in fixed memory, without storing
-every value. KLL (Karnin-Lang-Liberty) gives uniform relative accuracy
-across the whole distribution, controlled by a single parameter `k`.
+`ExDataSketch.KLL` (Karnin-Lang-Liberty) keeps a hierarchy of small
+buffers instead of every value. New items land in level 0; once a
+level fills up, it's sorted and randomly halved, with the survivors
+promoted to the next level at *double* weight -- so higher levels
+represent more of the stream with fewer retained samples. A
+quantile/rank query walks every level's weighted samples together.
+Randomized halving (not "keep the biggest" or "keep the smallest")
+is what gives KLL a *rank*-error guarantee that's uniform across the
+whole distribution, not just at the extremes:
+
+```mermaid
+flowchart LR
+    A[value] --> B["level 0 buffer"]
+    B --> C{"level full?"}
+    C -->|no| D[stored]
+    C -->|yes| E["sort, keep random half\n(promote at 2x weight)"]
+    E --> F["level 1 buffer"]
+    F --> G["... more levels,\ndoubling weight each time"]
+    G --> H["quantile/rank query:\nweighted merge across levels"]
+```
+
+**Use it for:** "what's the p99 request latency," "what fraction of
+orders were under $50" -- streaming quantile/rank estimation with a
+rank-error bound that holds uniformly across the whole distribution,
+when storing and sorting every value isn't practical.
+
+**Don't use it for:** cases that specifically need tight *value* error
+concentrated at one tail -- SLA monitoring that only cares about
+p99.9, say -- `ExDataSketch.REQ` trades KLL's uniform-rank guarantee
+for accuracy concentrated at one end instead; if you need a guaranteed
+*relative value* error across the whole range (not rank error), see
+`ExDataSketch.DDSketch`. Not for exact medians/percentiles where
+correctness must be exact -- sort the data.
+
+**What it buys you:** the rank error bound is `~1.65/k`; storing every
+one of a million raw `f64` latency samples costs about __7.6 MB__,
+while a `k: 100` KLL sketch over the same million samples measures
+__~1.7 KB__ -- roughly __4,500x smaller__ -- with about __1.65%__ rank
+error (the library default, `k: 200`, tightens that to ~0.8%):
+
+| Approach                       | Memory (1M samples) | Guarantee        |
+| -------------------------------- | ---------------------- | ------------------- |
+| Exact (sorted array of `f64`)   | ~7.6 MB                | Exact               |
+| `ExDataSketch.KLL` (k=100)      | ~1.7 KB                | ~1.65% rank error   |
 
 ## Sample data (cached locally)
 
+1,000,000 simulated request latencies (ms): mostly fast, with a
+realistic long tail -- like real production latency distributions.
+
 ```elixir
-cache_path = Path.join(System.tmp_dir!(), "ex_data_sketch_livebook_cache/kll_sample.bin")
-
-latencies =
-  if File.exists?(cache_path) do
-    IO.puts("Loading cached sample data from #{cache_path}")
-    cache_path |> File.read!() |> :erlang.binary_to_term()
-  else
-    IO.puts("Generating sample data (this takes a few seconds)...")
-
-    # 1,000,000 simulated request latencies (ms): mostly fast, with a
-    # realistic long tail -- like real production latency distributions.
-    latencies =
-      for _ <- 1..1_000_000 do
-        base = :rand.uniform() * :rand.uniform() * 200
-        if :rand.uniform(100) == 1, do: base + :rand.uniform(2000), else: base
-      end
-
-    File.mkdir_p!(Path.dirname(cache_path))
-    File.write!(cache_path, :erlang.term_to_binary(latencies))
-    latencies
-  end
-
+latencies = ExDataSketch.SampleData.kll_latencies()
 sorted = Enum.sort(latencies)
 IO.puts("#{length(latencies)} latency samples ready")
 ```

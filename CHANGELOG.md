@@ -5,6 +5,94 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+
+
+## [0.10.3] - 2026-08-17
+
+Adds `ExDataSketch.SampleData` (with a Rust-accelerated fast path) so
+every tutorial livebook's "Sample data" section is a single function
+call, gives all 16 tutorials a richer front-matter section (mechanism
+explainer, diagram, use-for/don't-use-for, measured benefits/numbers),
+fixes two doc-site issues (Hex.pm package-page links resolving to raw
+markdown; hexdocs.pm defaulting to the Modules tab instead of Pages),
+and fixes two flaky tests found via repeated full-suite runs.
+
+### Added
+
+- **`ExDataSketch.SampleData`** -- one sample-data generator per tutorial
+  livebook under `livebooks/sketches/`, replacing the ~20-line
+  cache-path/generate/cache-write block each livebook used to duplicate
+  in its own "Sample data" cell with a single function call (e.g.
+  `ExDataSketch.SampleData.hll_events()`). Randomized generators (the
+  ones producing 1-2 million items) use a new `ExDataSketch.Backend.Rust`
+  NIF when available for speed, added as `native/ex_data_sketch_nif/src/sample_data.rs`
+  (new `rand` crate dependency); deterministic range-based generators are
+  plain Elixir, since there's nothing for a NIF to accelerate in a linear
+  string-formatting pass. Every generator accepts real size overrides
+  (`:count`, `:pool_size`, `:half_count`, or a couple of Theta/IBLT-specific
+  keys) on top of its tutorial-matching default -- caching only applies to
+  the default (no-override) call, so a small overridden call (as used by
+  this module's own test suite) never reads stale-shaped data from, or
+  overwrites, the real livebook cache. Covered by
+  `test/ex_data_sketch_sample_data_test.exs` (Elixir, using small overridden
+  counts) and `#[cfg(test)]` unit tests in `sample_data.rs` (Rust, now run
+  in CI's `test-rust` job via a new `cargo test` step). Not part of the
+  sketch API -- this exists purely to make the tutorials shorter and
+  easier to read. **Note:** livebooks pinned to `{:ex_data_sketch, "~>
+  0.10"}` from Hex will not have this module until a release including it
+  ships; running the updated tutorials against the current published
+  package will raise `UndefinedFunctionError` until then.
+
+### Changed
+
+- Every tutorial livebook under `livebooks/sketches/` gained a richer
+  "Introduction" section: a short mechanism explainer (with a Mermaid
+  diagram for most families), explicit "Use it for" / "Don't use it
+  for" guidance, and a benefits/numbers table comparing the sketch
+  against the exact/naive alternative it replaces (memory, error rate,
+  or the specific capability trade being made). Numbers are measured
+  against this library's own implementation, not taken from external
+  sources.
+- `mix.exs`'s ExDoc config: `main` now points at the Quick Start guide
+  instead of the `ExDataSketch` module page, so the hexdocs.pm homepage
+  lands on the "Pages" sidebar tab instead of "Modules." "Core Concepts"
+  (`aggregation_wall.md`, `distributed_merge_semantics.md`,
+  `hash_strategies.md`) moved to the first position in `groups_for_extras`,
+  ahead of "Getting Started."
+- `README.md`'s links to the Quick Start and Livebooks guides now point
+  at their hexdocs.pm URLs instead of repo-relative `guides/*.md` paths
+  -- the relative form rendered correctly on GitHub but resolved to a
+  raw-markdown preview link (not the generated HTML page) on the Hex.pm
+  package page, since Hex.pm renders `README.md` independently of the
+  ExDoc-generated site.
+
+### Fixed
+
+- **Two flaky tests in the test suite, both caused by tests leaving a
+  GenServer with an active fast recurring timer running after the test
+  itself returned.** `test/ex_data_sketch_broadway_test.exs`'s
+  "the automatic timer-driven flush does emit periodic_flush" test built a
+  `Broadway.PeriodicAggregator` with a 20ms flush interval and never
+  stopped it; under load its message backlog could keep draining (and
+  keep firing `[:ex_data_sketch, :pipeline, :periodic_flush]`, a
+  process-wide `:telemetry` event with no per-instance identifier in its
+  metadata) after the test returned, landing a stray message in whatever
+  other test was next listening on that same event -- observed as
+  `test/ex_data_sketch_broadway_test.exs`'s "manual flush/1 does not emit
+  periodic_flush telemetry" test intermittently failing with "Unexpectedly
+  received message :periodic_flush_fired". Fixed by stopping the
+  aggregator synchronously at the end of its own test, and by moving
+  `ExDataSketch.BroadwayTest` to `async: false` -- this module
+  fundamentally tests a global, unscoped side-channel that any other
+  `async: true` module could in principle also emit on, so it no longer
+  races the rest of the suite at all. Two similar leaks in
+  `test/ex_data_sketch_server_test.exs` (both using a 50ms snapshot
+  interval) fixed the same way. Also widened
+  `test/ex_data_sketch_server_test.exs`'s "a backend that raises during
+  snapshot..." test's `assert_receive` bound from 200ms to 2000ms -- a
+  genuinely tight bound for a busy machine, independent of the leaks
+  above.
+
 ## [0.10.2] - 2026-08-14
 
 Started as post-release fixes found via the same manual livebook-

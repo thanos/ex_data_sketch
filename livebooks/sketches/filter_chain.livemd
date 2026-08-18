@@ -15,36 +15,60 @@ config: [
 ## Introduction
 
 `ExDataSketch.FilterChain` composes multiple membership filters into a
-single query pipeline -- a cheap, larger first-pass filter to reject most
-non-members fast, backed by a smaller, more precise second-pass filter
-for the items that survive the first check. It's not a new sketch
-algorithm; it's a capability-aware wrapper around the filters covered in
-the other tutorials here (`Bloom`, `Cuckoo`, `Quotient`, `CQF`,
-`XorFilter`) plus `IBLT` as a non-queryable "adjunct."
+single query pipeline -- a cheap, larger first-pass filter to reject
+most non-members fast, backed by a smaller, more precise second-pass
+filter for the items that survive the first check. It's not a new
+sketch algorithm; it's a capability-aware wrapper around the filters
+covered in the other tutorials here (`Bloom`, `Cuckoo`, `Quotient`,
+`CQF`, `XorFilter`) plus `IBLT` as a non-queryable "adjunct." `member?/2`
+short-circuits on the first stage that says "definitely not":
 
-`member?/2` short-circuits on the first stage that says "definitely not,"
-`put/2` fans an insert out to every stage that supports writes (skipping
-static `XorFilter` stages), and `delete/2` requires *every* stage to
-support deletion or it raises.
+```mermaid
+flowchart LR
+    A[item] --> B["Stage 1\n(cheap, looser FPR)"]
+    B -->|no| C["definitely\nnot present"]
+    B -->|maybe| D["Stage 2\n(pricier, tighter FPR)"]
+    D -->|no| C
+    D -->|maybe| E["... more stages"]
+    E --> F["every stage said maybe:\nprobably present"]
+```
+
+A false positive now requires *every* stage to independently
+false-positive on the same item -- since each stage's false-positive
+rate is (roughly) independent, chaining multiplies them together, not
+adds them. `put/2` fans an insert out to every stage that supports
+writes (skipping static `XorFilter` stages); `delete/2` requires
+*every* stage to support deletion or it raises.
+
+**Use it for:** squeezing a much lower compound false-positive rate
+out of filters you'd use anyway, at the cost of a second lookup only
+for items that survive the first -- most non-members get rejected
+cheaply by the first stage and never reach the second. Also for
+attaching an `IBLT` stage alongside a query chain for reconciliation.
+
+**Don't use it for:** cases where a single filter already meets your
+accuracy target -- chaining adds real per-query overhead (another
+hash, another lookup) for items that pass the first stage, which buys
+you nothing if the first stage alone was already precise enough.
+Deletion across a chain that includes any non-deletable stage (`Bloom`,
+`XorFilter`) isn't possible either -- `delete/2` raises upfront rather
+than silently skipping that stage.
+
+**What it buys you:** chaining a `Bloom` (5% target FPR) with a
+`Cuckoo` stage measured __~0.14%__ observed false-positive rate against
+100,000 novel items -- versus `Bloom` alone's __~4.8%__ on the exact
+same input, roughly a __34x__ reduction, from filters you'd likely
+reach for individually anyway:
+
+| Approach                          | Observed FPR (100,000 novel items) |
+| ------------------------------------ | -------------------------------------- |
+| `ExDataSketch.Bloom` alone (5% target) | ~4.8%                                   |
+| `FilterChain` (Bloom + Cuckoo)        | ~0.14%                                  |
 
 ## Sample data (cached locally)
 
 ```elixir
-cache_path = Path.join(System.tmp_dir!(), "ex_data_sketch_livebook_cache/filter_chain_sample.bin")
-
-{inserted, novel} =
-  if File.exists?(cache_path) do
-    IO.puts("Loading cached sample data from #{cache_path}")
-    cache_path |> File.read!() |> :erlang.binary_to_term()
-  else
-    IO.puts("Generating sample data (this takes a few seconds)...")
-    inserted = for i <- 1..500_000, do: "user_#{i}"
-    novel = for i <- 500_001..1_000_000, do: "user_#{i}"
-    File.mkdir_p!(Path.dirname(cache_path))
-    File.write!(cache_path, :erlang.term_to_binary({inserted, novel}))
-    {inserted, novel}
-  end
-
+{inserted, novel} = ExDataSketch.SampleData.filter_chain_users()
 IO.puts("#{length(inserted)} inserted, #{length(novel)} novel users")
 ```
 

@@ -14,45 +14,59 @@ config: [
 
 ## Introduction
 
-`ExDataSketch.DDSketch` estimates quantiles like `ExDataSketch.KLL`, but
-with a different accuracy guarantee: **relative error on the *value*, not
-the rank**. A query for quantile `q` returns a value `v` such that the true
+`ExDataSketch.DDSketch` maps every value into a logarithmically-spaced
+bucket (`index = log(value) / log(gamma)`, where `gamma` is derived from
+`alpha`) and just counts how many values landed in each bucket. Because
+bucket boundaries are geometric rather than linear, every bucket
+represents the *same relative width* regardless of where it sits in the
+range -- which gives a guaranteed **relative error on the value, not the
+rank**. A query for quantile `q` returns a value `v` such that the true
 value `v'` satisfies `v' * (1 - alpha) <= v <= v' * (1 + alpha)` -- the
 same relative accuracy whether you're looking at a 2ms value or a
-20,000ms one. That makes it well suited to latency/telemetry data that
-spans several orders of magnitude, where "off by 1ms" matters a lot at
-the low end and not at all at the high end.
+20,000ms one:
+
+```mermaid
+flowchart LR
+    A[value] --> B["index =\nlog(value) / log(gamma)"]
+    B --> C["buckets[index] += 1"]
+    C --> D["quantile query:\nwalk buckets by rank"]
+    D --> E["value = geometric\nmidpoint of bucket"]
+```
+
+**Use it for:** latency/telemetry percentiles spanning several orders
+of magnitude, where "off by 1ms" matters a lot at the low end and not
+at all at the high end -- SLO/SLA tracking that needs the *same*
+accuracy promise at p50 and at p99.9, not just wherever most of the
+mass sits.
+
+**Don't use it for:** negative values (rejected outright -- zero is
+handled separately via a dedicated `zero_count`, but negative inputs
+aren't representable); data with a narrow, known range where
+`ExDataSketch.KLL`'s uniform *rank* error would use less memory for
+comparable effective precision; exact percentiles where correctness
+must be exact.
+
+**What it buys you:** at the library default `alpha: 0.01` (1%
+relative error), a real 1,000,000-value latency distribution spanning
+roughly 1ms-5000ms measured __~3.4 KB__ -- bucket count scales with the
+*range* of magnitudes observed, not the item count, so a wider dynamic
+range costs more buckets but more data at the same range costs nothing
+extra:
+
+| Approach                              | Memory (1M values, ~1-5000ms range) | Guarantee                  |
+| ---------------------------------------- | -------------------------------------- | ----------------------------- |
+| Exact (sorted array of `f64`)          | ~7.6 MB                                | Exact                          |
+| `ExDataSketch.DDSketch` (alpha=0.01)   | ~3.4 KB                                | +-1% relative value error, everywhere |
 
 ## Sample data (cached locally)
 
+1,000,000 operation durations (ms) spanning several orders of
+magnitude: fast API calls (~1-50ms), medium DB queries (~50-500ms),
+and rare slow batch jobs (~10,000-100,000ms). DDSketch only accepts
+non-negative values.
+
 ```elixir
-cache_path = Path.join(System.tmp_dir!(), "ex_data_sketch_livebook_cache/ddsketch_sample.bin")
-
-durations =
-  if File.exists?(cache_path) do
-    IO.puts("Loading cached sample data from #{cache_path}")
-    cache_path |> File.read!() |> :erlang.binary_to_term()
-  else
-    IO.puts("Generating sample data (this takes a few seconds)...")
-
-    # 1,000,000 operation durations (ms) spanning several orders of
-    # magnitude: fast API calls (~1-50ms), medium DB queries (~50-500ms),
-    # and rare slow batch jobs (~10,000-100,000ms). DDSketch only accepts
-    # non-negative values.
-    durations =
-      for _ <- 1..1_000_000 do
-        case :rand.uniform(1000) do
-          n when n <= 900 -> :rand.uniform() * 50
-          n when n <= 990 -> 50 + :rand.uniform() * 450
-          _ -> 10_000 + :rand.uniform() * 90_000
-        end
-      end
-
-    File.mkdir_p!(Path.dirname(cache_path))
-    File.write!(cache_path, :erlang.term_to_binary(durations))
-    durations
-  end
-
+durations = ExDataSketch.SampleData.ddsketch_durations()
 sorted = Enum.sort(durations)
 IO.puts("#{length(durations)} duration samples ready, spanning #{Float.round(List.first(sorted), 2)}ms to #{Float.round(List.last(sorted), 0)}ms")
 ```
